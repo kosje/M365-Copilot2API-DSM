@@ -80,6 +80,25 @@ func (s *usageLog) trim() {
 	}
 }
 
+// countForKey counts usage records attributed to an API key. Usage records
+// store the truncated key (first 8 chars + "..."), so prefix matching is used.
+// today counts records since local midnight; total counts all retained records.
+func (s *usageLog) countForKey(prefix8 string) (today, total int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	midnight := time.Now().Truncate(24 * time.Hour)
+	for _, r := range s.records {
+		if !strings.HasPrefix(r.APIKeyPrefix, prefix8) {
+			continue
+		}
+		total++
+		if !r.Time.Before(midnight) {
+			today++
+		}
+	}
+	return
+}
+
 func (s *usageLog) record(rec UsageRecord) {
 	s.mu.Lock()
 	s.records = append(s.records, rec)

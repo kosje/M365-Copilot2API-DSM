@@ -56,3 +56,18 @@ _wip_backup_*
 *.dll
 tmp_lab/
 tmp_dump/
+
+# Local fnOS debug scripts (contain credentials) & test artifacts — never commit
+fnos_*.py
+fnos-diag.sh
+fnos_running_bin
+audit_i18n.py
+testreset/
+testwiz/
+testwiz2/
+test_server.exe
+gocache/
+gopath/
+conversations.json
+sessions.json
+/data/

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -51,6 +53,15 @@ func adminPasswordPaths() (primary, legacy string) {
 func adminPasswordPath() string {
 	primary, _ := adminPasswordPaths()
 	return primary
+}
+
+// adminResetFlagPath returns the path of the operator-created reset flag file
+// (<data dir>/admin-reset), or "" when the data dir is unknown.
+func adminResetFlagPath() string {
+	if dir := strings.TrimSpace(os.Getenv("M365_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "admin-reset")
+	}
+	return ""
 }
 
 func isBcryptHash(s string) bool {
@@ -113,6 +124,58 @@ func readPersistedAdminData() (adminPasswordData, bool) {
 
 func loadAdminCredentials() (string, []string, bool, error) {
 	primary, legacy := adminPasswordPaths()
+
+	// Explicit reset path: operator drops an empty "admin-reset" file in the
+	// data dir and provides a password via M365_ADMIN_PASSWORD (e.g. from the
+	// fnOS install wizard). The file is consumed once; the password is
+	// replaced even if a (forgotten) password was persisted before.
+	if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" && envP != defaultAdminPassword {
+		if flag := adminResetFlagPath(); flag != "" {
+			if _, err := os.Stat(flag); err == nil {
+				h, herr := hashPassword(envP)
+				if herr == nil {
+					if err := saveAdminPasswordWithHistory(h, nil, ""); err == nil {
+						_ = os.Remove(flag)
+						auditLog(nil, "admin_password_reset", "admin-reset flag consumed; password replaced from env")
+						return h, nil, false, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Install-wizard / env password: whenever M365_ADMIN_PASSWORD differs from
+	// the last value applied from the environment (tracked in
+	// <data dir>/admin-envhash), reset the administrator password to it.
+	// Reinstalling or upgrading with a new wizard password therefore takes
+	// effect immediately with no extra steps. An unchanged value (e.g. a
+	// routine restart after the password was changed in the web UI) does NOT
+	// override the web-set password.
+	if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" && envP != defaultAdminPassword {
+		if dir := strings.TrimSpace(os.Getenv("M365_DATA_DIR")); dir != "" {
+			marker := filepath.Join(dir, "admin-envhash")
+			sum := sha256.Sum256([]byte(envP))
+			mark := hex.EncodeToString(sum[:])
+			changed := true
+			if b, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(b)) == mark {
+				changed = false
+			}
+			if changed {
+				var prev adminPasswordData
+				if bb, err := os.ReadFile(primary); err == nil {
+					_ = json.Unmarshal([]byte(strings.TrimSpace(string(bb))), &prev)
+				}
+				if h, herr := hashPassword(envP); herr == nil {
+					if err := saveAdminPasswordWithHistory(h, prev.History, prev.Hash); err == nil {
+						_ = os.WriteFile(marker, []byte(mark), 0600)
+						auditLog(nil, "admin_password_reset", "install wizard password applied (env value changed)")
+						log.Printf("[admin] password reset from M365_ADMIN_PASSWORD (wizard/env value changed)")
+						return h, prev.History, false, nil
+					}
+				}
+			}
+		}
+	}
 
 	if b, err := os.ReadFile(primary); err == nil && strings.TrimSpace(string(b)) != "" {
 		trimmed := strings.TrimSpace(string(b))

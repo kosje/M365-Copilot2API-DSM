@@ -31,6 +31,7 @@ func main() {
 	s.InitM365CloudClient()
 	s.StartAutoCleanup()
 	s.StartConvCacheGC()
+	s.StartChatJanitor()
 	s.RefreshExpiredTokens()
 	listen := "127.0.0.1:4141"
 	if v := os.Getenv("M365_LISTEN"); v != "" {

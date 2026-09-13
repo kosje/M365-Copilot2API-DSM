@@ -310,6 +310,8 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
       <button data-page="accounts" onclick="showPage('accounts')"><i data-lucide="users" style="width:16px;height:16px;flex-shrink:0"></i><span>Accounts</span></button>
       <button data-page="apikeys" onclick="showPage('apikeys')"><i data-lucide="key-round" style="width:16px;height:16px;flex-shrink:0"></i><span>API Keys</span></button>
       <button data-page="conversations" onclick="showPage('conversations')"><i data-lucide="message-square" style="width:16px;height:16px;flex-shrink:0"></i><span>Conversations</span></button>
+      <button data-page="chat" onclick="showPage('chat')"><i data-lucide="messages-square" style="width:16px;height:16px;flex-shrink:0"></i><span>Chat Users</span></button>
+      <button onclick="window.location.href='/import'"><i data-lucide="upload" style="width:16px;height:16px;flex-shrink:0"></i><span>导入账号</span></button>
     </nav>
     <div class="nav-label">System</div>
     <nav class="nav">
@@ -532,6 +534,19 @@ if (response.output_text) {
             <div id="authStatus" style="margin-top:12px"></div>
           </div>
         </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-head"><span class="card-title">Import / export accounts</span></div>
+          <div class="card-body">
+            <p class="page-sub" style="margin-top:0">Upload a previously exported accounts.json or a migration archive (tar.gz). Accounts are merged by ID or email; existing entries are updated.</p>
+            <p class="page-sub" style="margin-top:0;color:var(--red)">Account files contain plaintext tokens — transfer them only over trusted channels and delete them after use.</p>
+            <div class="copy-field">
+              <input class="form-input" id="importFile" type="file" accept=".json,.tar.gz,.tgz,application/json,application/gzip" style="padding:6px">
+              <button class="btn primary" id="importBtn" onclick="importAccountsFile()" style="min-width:96px"><i data-lucide="upload" style="width:14px;height:14px"></i> Import</button>
+              <button class="btn" id="exportBtn" onclick="exportAccountsFile()" style="min-width:96px"><i data-lucide="download" style="width:14px;height:14px"></i> Export</button>
+            </div>
+            <div id="importStatus" style="margin-top:12px"></div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <span class="card-title">Authorized accounts</span>
@@ -557,7 +572,7 @@ if (response.output_text) {
         </div>
         <div class="card">
           <div class="card-head"><span class="card-title">Key list</span><span style="font-size:11px;color:var(--muted)">The full key is shown only once after creation</span></div>
-          <table class="table"><thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Status</th><th>Last used</th><th style="text-align:right">Actions</th></tr></thead><tbody id="keyRows"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody></table>
+          <table class="table"><thead><tr><th>Name</th><th>Prefix</th><th>Created</th><th>Status</th><th>Last used</th><th>Quota</th><th style="text-align:right">Actions</th></tr></thead><tbody id="keyRows"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody></table>
         </div>
       </section>
 
@@ -580,6 +595,46 @@ if (response.output_text) {
         <div class="card">
           <div class="card-head"><span class="card-title">Conversation list</span></div>
           <table class="table"><thead><tr><th>Name</th><th>Messages</th><th>Account</th><th>Last updated</th><th>Actions</th></tr></thead><tbody id="convRows"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody></table>
+        </div>
+      </section>
+
+      <!-- Chat Users (/chat test frontend) -->
+      <section id="page-chat" style="display:none">
+        <div class="page-head">
+          <div><h2 class="page-title">Chat Users</h2><p class="page-sub">Accounts, quotas and storage for the /chat test frontend</p></div>
+          <div style="display:flex;gap:8px">
+            <a class="btn" href="/chat" target="_blank" rel="noopener">Open /chat ↗</a>
+            <button class="btn danger" onclick="chatCleanup('expired')">Clean expired</button>
+            <button class="btn danger" onclick="chatCleanup('all-images')">Clear image cache</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px" id="chatStorageCards"></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-head"><span class="card-title">Storage settings</span></div>
+          <div class="card-body">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Conversation retention (days, 0 = forever)</label><input class="form-input" id="chatCfgConvDays" type="number" min="0" style="width:150px"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Image cache TTL (hours, 0 = forever)</label><input class="form-input" id="chatCfgImgHours" type="number" min="0" style="width:150px"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Storage cap (MB, 0 = unlimited)</label><input class="form-input" id="chatCfgMaxMB" type="number" min="0" style="width:150px"></div>
+              <button class="btn primary" onclick="saveChatConfig()">Save</button>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-head"><span class="card-title">Create chat user</span></div>
+          <div class="card-body">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Username</label><input class="form-input" id="chatNewUser" style="width:140px"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Password (≥6 chars)</label><input class="form-input" id="chatNewPass" type="text" style="width:160px"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Chat / day (0 = ∞)</label><input class="form-input" id="chatNewDaily" type="number" min="0" value="0" style="width:110px"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Images / day (0 = ∞)</label><input class="form-input" id="chatNewImg" type="number" min="0" value="0" style="width:110px"></div>
+              <button class="btn primary" onclick="createChatUser()">Create</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">Chat users</span><span style="font-size:11px;color:var(--muted)">Each user gets a dedicated API key; usage is attributed in the Usage page</span></div>
+          <table class="table"><thead><tr><th>Username</th><th>Status</th><th>Quota</th><th>Today</th><th>Key prefix</th><th>Created</th><th style="text-align:right">Actions</th></tr></thead><tbody id="chatUserRows"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody></table>
         </div>
       </section>
 
@@ -653,10 +708,18 @@ if (response.output_text) {
 <div class="modal-overlay" id="editKeyModal">
   <div class="modal">
     <h3>Edit API key</h3>
-    <p class="subtitle">Change the key name</p>
+    <p class="subtitle">Change the key name and quotas</p>
     <div class="form-group">
       <label class="form-label">Name</label>
       <input class="form-input" id="editKeyName">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Daily quota (requests / day, 0 = unlimited)</label>
+      <input class="form-input" id="editKeyDaily" type="number" min="0" value="0">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Total quota (requests all-time, 0 = unlimited)</label>
+      <input class="form-input" id="editKeyTotal" type="number" min="0" value="0">
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeEditKeyModal()">Cancel</button>
@@ -689,7 +752,7 @@ if (response.output_text) {
 
 <script>
 const $=id=>document.getElementById(id);
-const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings'};
+const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',chat:'Chat Users',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings'};
 const localeStorageKey='m365_locale';
 const localeSelectionKey='m365_locale_selected';
 const SUPPORTED_LOCALES=['en','zh-CN','zh-TW','ja','ko','es','fr','de','pt-BR','ru','ar'];
@@ -842,6 +905,47 @@ const localeText={
   'The key is shown only once. Store it securely.': {'zh-CN':'密钥只显示一次，请妥善保存','zh-TW':'金鑰只顯示一次，請妥善保存','ja':'キーは一度だけ表示されます。安全に保管してください。','ko':'키는 한 번만 표시됩니다. 안전하게 보관하세요.','es':'La clave solo se muestra una vez. Guárdela de forma segura.','fr':'La clé n\'est affichée qu\'une fois. Conservez-la en lieu sûr.','de':'Der Schlüssel wird nur einmal angezeigt. Bewahren Sie ihn sicher auf.','pt-BR':'A chave só é mostrada uma vez. Guarde-a com segurança.','ru':'Ключ отображается только один раз. Храните его безопасно.','ar':'يظهر المفتاح مرة واحدة فقط. احفظه بأمان.'},
   'Cancel': {'zh-CN':'取消','zh-TW':'取消','ja':'キャンセル','ko':'취소','es':'Cancelar','fr':'Annuler','de':'Abbrechen','pt-BR':'Cancelar','ru':'Отмена','ar':'إلغاء'},
   'Create': {'zh-CN':'创建','zh-TW':'建立','ja':'作成','ko':'생성','es':'Crear','fr':'Créer','de':'Erstellen','pt-BR':'Criar','ru':'Создать','ar':'إنشاء'},
+  'Chat Users': {'zh-CN':'Chat 用户','zh-TW':'Chat 使用者','ja':'Chat ユーザー','ko':'Chat 사용자','es':'Usuarios de chat','fr':'Utilisateurs du chat','de':'Chat-Benutzer','pt-BR':'Usuários do chat','ru':'Пользователи чата','ar':'مستخدمو الدردشة'},
+  'Accounts, quotas and storage for the /chat test frontend': {'zh-CN':'/chat 测试前端的账号、额度与存储','zh-TW':'/chat 測試前端的帳號、額度與儲存'},
+  'Open /chat ↗': {'zh-CN':'打开 /chat ↗','zh-TW':'打開 /chat ↗'},
+  'Clean expired': {'zh-CN':'清理过期数据','zh-TW':'清理過期資料'},
+  'Clear image cache': {'zh-CN':'清空图片缓存','zh-TW':'清空圖片快取'},
+  'Storage settings': {'zh-CN':'存储设置','zh-TW':'儲存設定'},
+  'Conversation retention (days, 0 = forever)': {'zh-CN':'对话保留天数（0=永久）','zh-TW':'對話保留天數（0=永久）'},
+  'Image cache TTL (hours, 0 = forever)': {'zh-CN':'图片缓存时长（小时，0=永久）','zh-TW':'圖片快取時長（小時，0=永久）'},
+  'Storage cap (MB, 0 = unlimited)': {'zh-CN':'存储上限（MB，0=不限）','zh-TW':'儲存上限（MB，0=不限）'},
+  'Create chat user': {'zh-CN':'创建 Chat 用户','zh-TW':'建立 Chat 使用者'},
+  'Username': {'zh-CN':'用户名','zh-TW':'使用者名稱'},
+  'Password (≥6 chars)': {'zh-CN':'密码（≥6 位）','zh-TW':'密碼（≥6 位）'},
+  'Chat / day (0 = ∞)': {'zh-CN':'对话次数/日（0=不限）','zh-TW':'對話次數/日（0=不限）'},
+  'Images / day (0 = ∞)': {'zh-CN':'画图次数/日（0=不限）','zh-TW':'畫圖次數/日（0=不限）'},
+  'Chat users': {'zh-CN':'Chat 用户列表','zh-TW':'Chat 使用者列表'},
+  'Each user gets a dedicated API key; usage is attributed in the Usage page': {'zh-CN':'每个用户自动分配专属 API 密钥，用量可在「用量」页按用户查看','zh-TW':'每個使用者自動分配專屬 API 金鑰'},
+  'Quota': {'zh-CN':'额度','zh-TW':'額度'},
+  'Today': {'zh-CN':'今日','zh-TW':'今日'},
+  'Key prefix': {'zh-CN':'密钥前缀','zh-TW':'金鑰前綴'},
+  'Change the key name and quotas': {'zh-CN':'修改密钥名称与额度','zh-TW':'修改金鑰名稱與額度'},
+  'Daily quota (requests / day, 0 = unlimited)': {'zh-CN':'每日额度（次/日，0=不限）','zh-TW':'每日額度（次/日，0=不限）'},
+  'Total quota (requests all-time, 0 = unlimited)': {'zh-CN':'总额度（累计次数，0=不限）','zh-TW':'總額度（累計次數，0=不限）'},
+  'Domestic AI tools': {'zh-CN':'国内 AI 工具','zh-TW':'國內 AI 工具','ja':'国内 AI ツール','ko':'국내 AI 도구'},
+  'Import / export accounts': {'zh-CN':'导入 / 导出账号','zh-TW':'匯入 / 匯出帳號','ja':'アカウントのインポート / エクスポート','ko':'계정 가져오기 / 내보내기'},
+  'Upload a previously exported accounts.json or a migration archive (tar.gz). Accounts are merged by ID or email; existing entries are updated.': {'zh-CN':'上传之前导出的 accounts.json 或迁移归档（tar.gz）。账号按 ID 或邮箱合并，已存在的会被更新。','zh-TW':'上傳之前匯出的 accounts.json 或遷移封存（tar.gz）。帳號按 ID 或信箱合併，已存在的會被更新。'},
+  'Account files contain plaintext tokens — transfer them only over trusted channels and delete them after use.': {'zh-CN':'账号文件包含明文令牌——请仅在可信渠道传输，用完即删。','zh-TW':'帳號檔案包含明文權杖——請僅在可信渠道傳輸，用完即刪。'},
+  'Import': {'zh-CN':'导入','zh-TW':'匯入','ja':'インポート','ko':'가져오기'},
+  'Export': {'zh-CN':'导出','zh-TW':'匯出','ja':'エクスポート','ko':'내보내기'},
+  'Add account': {'zh-CN':'添加账号','zh-TW':'新增帳號','ja':'アカウント追加','ko':'계정 추가'},
+  'Add a Microsoft account': {'zh-CN':'添加 Microsoft 账号','zh-TW':'新增 Microsoft 帳號'},
+  'Sign in via Microsoft OAuth': {'zh-CN':'通过 Microsoft OAuth 登录','zh-TW':'透過 Microsoft OAuth 登入'},
+  'Sign in via browser OAuth and add the account to the pool': {'zh-CN':'在浏览器中完成 OAuth 登录，并将账号加入资源池','zh-TW':'在瀏覽器中完成 OAuth 登入，並將帳號加入資源池'},
+  'Account': {'zh-CN':'账号','zh-TW':'帳號','ja':'アカウント','ko':'계정'},
+  'Proxy': {'zh-CN':'代理','zh-TW':'代理'},
+  'Proxy pool': {'zh-CN':'代理池','zh-TW':'代理池'},
+  'Bind': {'zh-CN':'绑定','zh-TW':'綁定'},
+  '; usernames and passwords are supported': {'zh-CN':'；支持用户名与密码','zh-TW':'；支援使用者名稱與密碼'},
+  'Model test': {'zh-CN':'模型测试','zh-TW':'模型測試'},
+  'Edit': {'zh-CN':'编辑','zh-TW':'編輯','ja':'編集','ko':'편집'},
+  'Use key': {'zh-CN':'使用','zh-TW':'使用'},
+  'Generate a key for API access': {'zh-CN':'生成用于调用 API 的密钥','zh-TW':'產生用於呼叫 API 的金鑰'},
   'Copy and save this key now': {'zh-CN':'请立即复制保存此密钥','zh-TW':'請立即複製儲存此金鑰','ja':'今すぐこのキーをコピーして保存','ko':'지금 이 키를 복사하여 저장하세요','es':'Copie y guarde esta clave ahora','fr':'Copiez et enregistrez cette clé maintenant','de':'Kopieren und speichern Sie diesen Schlüssel jetzt','pt-BR':'Copie e salve esta chave agora','ru':'Скопируйте и сохраните этот ключ сейчас','ar':'انسخ واحفظ هذا المفتاح الآن'},
   'Edit API key': {'zh-CN':'编辑 API Key','zh-TW':'編輯 API Key','ja':'API キーを編集','ko':'API 키 편집','es':'Editar clave API','fr':'Modifier la clé API','de':'API-Schlüssel bearbeiten','pt-BR':'Editar chave API','ru':'Редактировать API-ключ','ar':'تحرير مفتاح API'},
   'Change the key name': {'zh-CN':'修改密钥名称','zh-TW':'修改金鑰名稱','ja':'キー名を変更','ko':'키 이름 변경','es':'Cambiar el nombre de la clave','fr':'Modifier le nom de la clé','de':'Schlüsselnamen ändern','pt-BR':'Alterar o nome da chave','ru':'Изменить имя ключа','ar':'تغيير اسم المفتاح'},
@@ -963,7 +1067,7 @@ function showNotice(msg,type='info'){
 }
 
 function showPage(p){
-  ['dashboard','usage','accounts','apikeys','conversations','proxies','modeltest','settings'].forEach(k=>{
+  ['dashboard','usage','accounts','apikeys','conversations','chat','proxies','modeltest','settings'].forEach(k=>{
     $('page-'+k).style.display=k===p?'block':'none';
     document.querySelector('[data-page="'+k+'"]')?.classList.toggle('active',k===p);
   });
@@ -973,6 +1077,7 @@ function showPage(p){
   if(p==='accounts')loadAccounts();
   if(p==='apikeys')loadKeys();
   if(p==='conversations')loadConversations();
+  if(p==='chat')loadChatAdmin();
   if(p==='proxies')loadProxies();
   if(p==='modeltest')loadModelTest();
   if(p==='settings')loadSettings();
@@ -1018,6 +1123,55 @@ async function api(path,opts={}){
   let d;try{d=t?JSON.parse(t):{}}catch{d={error:{message:t}}};
   if(!r.ok)throw Error(d?.error?.message||t||'Request failed');
   return d;
+}
+
+// Import accounts from an uploaded accounts.json or migration archive.
+// Uses a raw FormData POST (same-origin fetch auto-sends the admin cookie);
+// the target /api/admin/accounts/import shares the admin prefix with the
+// account list, so it works even when the standalone /import page is not
+// proxied by the host.
+async function importAccountsFile(){
+  const inp=$('importFile'),btn=$('importBtn'),status=$('importStatus');
+  if(!inp.files||!inp.files[0]){status.innerHTML='<span style="color:var(--red)">请先选择一个文件</span>';return;}
+  const fd=new FormData();
+  fd.append('file',inp.files[0]);
+  btn.disabled=true;btn.textContent='上传中…';status.innerHTML='';
+  try{
+    const r=await fetch('/api/admin/accounts/import',{method:'POST',body:fd});
+    const t=await r.text();
+    let d;try{d=JSON.parse(t)}catch{d={error:{message:t}}}
+    if(!r.ok){status.innerHTML='<span style="color:var(--red)">导入失败：'+(d&&d.error&&d.error.message?d.error.message:t)+'</span>';return;}
+    const lines=['收到 '+d.received+' 个，新增 '+d.imported+'，更新 '+d.updated];
+    if(d.errors&&d.errors.length)lines.push('错误 '+d.errors.length+'：'+d.errors.join('； '));
+    status.innerHTML='<span style="color:var(--green)">'+lines.join('<br>')+'</span>';
+    loadAccounts();
+  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+e.message+'</span>';}
+  finally{btn.disabled=false;btn.innerHTML='<i data-lucide="upload" style="width:14px;height:14px"></i> Import';inp.value='';}
+}
+
+// Export the full account list as a downloadable accounts.json. The endpoint
+// returns plaintext tokens, exactly the format /api/admin/accounts/import
+// accepts, so the same file round-trips between instances.
+async function exportAccountsFile(){
+  const btn=$('exportBtn'),status=$('importStatus');
+  btn.disabled=true;status.innerHTML='';
+  try{
+    const r=await fetch('/api/admin/accounts/export');
+    if(!r.ok){
+      const t=await r.text();let m=t;try{m=JSON.parse(t).error.message}catch(e){}
+      status.innerHTML='<span style="color:var(--red)">导出失败：'+m+'</span>';return;
+    }
+    const blob=await r.blob();
+    const m=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/);
+    const name=m?m[1]:'accounts-export.json';
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=name;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+    const n=(_accountsCache||[]).length;
+    status.innerHTML='<span style="color:var(--green)">已导出 '+n+' 个账号 → '+name+'（含明文令牌，请妥善保管）</span>';
+  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+e.message+'</span>';}
+  finally{btn.disabled=false;}
 }
 
 $('loginForm')?.addEventListener('submit',async e=>{
@@ -1256,30 +1410,31 @@ async function loadKeys(){
     const k=d.keys||[];
     const rows=$('keyRows');
     rows.replaceChildren();
-    if(!k.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent='No API keys';tr.append(td);rows.append(tr);return;}
+    if(!k.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='No API keys';tr.append(td);rows.append(tr);return;}
     k.forEach(x=>{
       const tr=document.createElement('tr');
-      tr.innerHTML=`<td><b></b></td><td><code></code></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'Disabled':'Active'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="use">Use key</button><button class="btn-sm btn" data-key-action="edit">Edit</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'Enable':'Disable'}</button><button class="btn-sm btn danger" data-key-action="delete">Delete</button></td>`;
+      tr.innerHTML=`<td><b></b></td><td><code></code></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'Disabled':'Active'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td class="key-quota" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="use">Use key</button><button class="btn-sm btn" data-key-action="edit">Edit</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'Enable':'Disable'}</button><button class="btn-sm btn danger" data-key-action="delete">Delete</button></td>`;
       tr.querySelector('b').textContent=x.name||'';
       tr.querySelector('code').textContent=x.prefix||'';
       tr.querySelector('.key-created').textContent=new Date(x.createdAt).toLocaleString();
       tr.querySelector('.key-last-used').textContent=x.lastUsedAt?new Date(x.lastUsedAt).toLocaleString():'-';
+      tr.querySelector('.key-quota').textContent=`${x.dailyQuota>0?'日 '+x.dailyQuota:'日∞'} · ${x.totalQuota>0?'总 '+x.totalQuota:'总∞'}`;
       tr.querySelector('[data-key-action="use"]').addEventListener('click',()=>openUseKey(x.id));
-      tr.querySelector('[data-key-action="edit"]').addEventListener('click',()=>editKey(x.id,x.name));
+      tr.querySelector('[data-key-action="edit"]').addEventListener('click',()=>editKey(x.id,x.name,x.dailyQuota||0,x.totalQuota||0));
       tr.querySelector('[data-key-action="toggle"]').addEventListener('click',()=>toggleKey(x.id,x.revoked));
       tr.querySelector('[data-key-action="delete"]').addEventListener('click',()=>revokeKey(x.id));
       rows.append(tr);
     });
-  }catch(e){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.className='empty';td.textContent=e.message;tr.append(td);$('keyRows').replaceChildren(tr);}
+  }catch(e){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent=e.message;tr.append(td);$('keyRows').replaceChildren(tr);}
 }
 
 let editKeyId=null;
-function editKey(id,name){editKeyId=id;$('editKeyName').value=name;$('editKeyModal').classList.add('open');setTimeout(()=>$('editKeyName').focus(),50);}
+function editKey(id,name,daily,total){editKeyId=id;$('editKeyName').value=name;$('editKeyDaily').value=daily||0;$('editKeyTotal').value=total||0;$('editKeyModal').classList.add('open');setTimeout(()=>$('editKeyName').focus(),50);}
 function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;}
 async function saveEditKey(){
   const name=$('editKeyName').value.trim();
   if(!name)return showNotice('名称不能为空','error');
-  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id:editKeyId,name})});closeEditKeyModal();showNotice('已更新','success');loadKeys();}
+  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id:editKeyId,name,dailyQuota:Math.max(0,parseInt($('editKeyDaily').value)||0),totalQuota:Math.max(0,parseInt($('editKeyTotal').value)||0)})});closeEditKeyModal();showNotice('已更新','success');loadKeys();}
   catch(e){showNotice(e.message,'error');}
 }
 async function toggleKey(id,revoked){
@@ -1298,6 +1453,82 @@ async function createKey(e){
   }catch(e){showNotice(e.message,'error');}
 }
 async function revokeKey(id){if(!confirm('确定删除此密钥？'))return;try{await api('/api/admin/keys?id='+id,{method:'DELETE'});loadKeys();}catch(e){showNotice(e.message,'error');}}
+
+// ===== Chat Users page (/chat) =====
+let chatAdminData=null;
+function fmtBytes(n){n=n||0;if(n>=1<<30)return (n/(1<<30)).toFixed(2)+' GB';if(n>=1<<20)return (n/(1<<20)).toFixed(1)+' MB';if(n>=1<<10)return (n/(1<<10)).toFixed(1)+' KB';return n+' B';}
+async function loadChatAdmin(){
+  try{
+    chatAdminData=await api('/api/chatui/admin');
+    renderChatAdmin();
+  }catch(e){$('chatUserRows').innerHTML='<tr><td colspan="7" class="empty">'+esc(e.message)+'</td></tr>';}
+}
+function renderChatAdmin(){
+  const d=chatAdminData;if(!d)return;
+  const s=d.storage||{};
+  $('chatStorageCards').innerHTML=`
+    <div class="card" style="margin:0"><div class="card-body"><div style="font-size:12px;color:var(--muted)">Conversations</div><div style="font-size:20px;font-weight:700;margin-top:2px">${fmtBytes(s.convsBytes)}</div><div style="font-size:11px;color:var(--muted)">${s.convsFiles||0} files</div></div></div>
+    <div class="card" style="margin:0"><div class="card-body"><div style="font-size:12px;color:var(--muted)">Image cache</div><div style="font-size:20px;font-weight:700;margin-top:2px">${fmtBytes(s.imageBytes)}</div><div style="font-size:11px;color:var(--muted)">${s.imageFiles||0} files</div></div></div>
+    <div class="card" style="margin:0"><div class="card-body"><div style="font-size:12px;color:var(--muted)">Chat users</div><div style="font-size:20px;font-weight:700;margin-top:2px">${(d.users||[]).length}</div><div style="font-size:11px;color:var(--muted)">${(d.users||[]).filter(u=>u.enabled).length} enabled</div></div></div>`;
+  const c=d.config||{};
+  $('chatCfgConvDays').value=c.convRetentionDays??7;
+  $('chatCfgImgHours').value=c.imageRetentionHours??72;
+  $('chatCfgMaxMB').value=c.maxStorageMB??512;
+  const rows=$('chatUserRows');rows.innerHTML='';
+  const users=d.users||[];
+  if(!users.length){rows.innerHTML='<tr><td colspan="7" class="empty">No chat users yet — create one above</td></tr>';return;}
+  users.forEach(u=>{
+    const tr=document.createElement('tr');
+    const q=u.quotaToday||{};
+    tr.innerHTML=`<td><b></b></td>
+      <td><span class="status ${u.enabled?'online':'offline'}"><i></i>${u.enabled?'Enabled':'Disabled'}</span></td>
+      <td style="font-size:12px"></td>
+      <td style="font-size:12px;color:var(--muted)"></td>
+      <td><code></code></td>
+      <td class="key-created" style="font-size:12px;color:var(--muted)"></td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn-sm btn" data-a="quota">Quota</button>
+        <button class="btn-sm btn" data-a="pass">Password</button>
+        <button class="btn-sm btn ${u.enabled?'danger':'success'}" data-a="toggle">${u.enabled?'Disable':'Enable'}</button>
+        <button class="btn-sm btn danger" data-a="del">Delete</button></td>`;
+    tr.querySelector('b').textContent=u.username;
+    tr.children[2].textContent=`${u.dailyChat>0?u.dailyChat+'/日':'不限'} · ${u.dailyImage>0?u.dailyImage+'/日':'不限'}`;
+    tr.children[3].textContent=`对话 ${q.chat||0} · 画图 ${q.image||0}`;
+    tr.querySelector('code').textContent=u.keyPrefix||'';
+    tr.querySelector('.key-created').textContent=new Date(u.createdAt).toLocaleDateString();
+    tr.querySelector('[data-a="quota"]').addEventListener('click',()=>{
+      const dc=prompt(`「${u.username}」每日对话次数（0=不限）`,u.dailyChat||0);if(dc===null)return;
+      const di=prompt(`「${u.username}」每日画图次数（0=不限）`,u.dailyImage||0);if(di===null)return;
+      chatUserAction({action:'update',id:u.id,dailyChat:+dc,dailyImage:+di});
+    });
+    tr.querySelector('[data-a="pass"]').addEventListener('click',()=>{
+      const p=prompt(`为「${u.username}」设置新密码（≥6 位，取消则不改）`);if(!p)return;
+      chatUserAction({action:'update',id:u.id,password:p});
+    });
+    tr.querySelector('[data-a="toggle"]').addEventListener('click',()=>chatUserAction({action:'update',id:u.id,enabled:!u.enabled}));
+    tr.querySelector('[data-a="del"]').addEventListener('click',()=>{if(confirm(`删除用户「${u.username}」？其对话与专属密钥将一并删除。`))chatUserAction({action:'delete',id:u.id});});
+    rows.appendChild(tr);
+  });
+}
+async function chatUserAction(body){
+  try{await api('/api/chatui/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});showNotice('已更新','success');loadChatAdmin();}
+  catch(e){showNotice(e.message,'error');}
+}
+async function createChatUser(){
+  const username=$('chatNewUser').value.trim(),password=$('chatNewPass').value;
+  if(!username)return showNotice('请输入用户名','error');
+  if(password.length<6)return showNotice('密码至少 6 位','error');
+  await chatUserAction({action:'create',username,password,dailyChat:+($('chatNewDaily').value||0),dailyImage:+($('chatNewImg').value||0)});
+  $('chatNewUser').value='';$('chatNewPass').value='';
+}
+async function saveChatConfig(){
+  await chatUserAction({action:'config',convRetentionDays:+($('chatCfgConvDays').value||0),imageRetentionHours:+($('chatCfgImgHours').value||0),maxStorageMB:+($('chatCfgMaxMB').value||0)});
+}
+async function chatCleanup(scope){
+  if(!confirm(scope==='all-images'?'清空全部图片缓存？':'立即清理过期数据？'))return;
+  try{const d=await api('/api/chatui/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cleanup',scope})});showNotice(`已清理 ${d.removed} 个文件，释放 ${fmtBytes(d.freedBytes)}`,'success');loadChatAdmin();}
+  catch(e){showNotice(e.message,'error');}
+}
 
 // ===== Usage page =====
 let usageDays=7, ugPageNo=0, ugTotal=0;
@@ -1428,13 +1659,14 @@ function ugPage(delta){
 
 // ===== Use API modal =====
 let useKeyId='',useKeyPrefix='',modelTestKey='';const ukeClients=[
+  {id:'domestic',label:'Domestic AI tools'},
   {id:'curl',label:'curl'},
   {id:'codex',label:'Codex CLI'},
   {id:'claude',label:'Claude Code'},
   {id:'opencode',label:'OpenCode'},
 ];
 const ukeOs=[{id:'unix',label:'macOS / Linux'},{id:'win',label:'Windows'}];
-let ukeClient='codex',ukeOsSel='unix';
+let ukeClient='domestic',ukeOsSel='unix';
 
 async function openUseKey(id){
   useKeyId=id;
@@ -1464,7 +1696,33 @@ function renderUkeFiles(){
   const base=location.origin;
   const key=$('useKeyVal').value||useKeyPrefix;
   let html='';
-  if(ukeClient==='curl'){
+  if(ukeClient==='domestic'){
+    const promptText=`请按以下 OpenAI 兼容配置接入 API，并记住配置：
+- API Base URL: ${base}/v1
+- API Key: ${key}
+- 模型名: auto
+调用方式（标准 OpenAI JSON 格式）：
+POST ${base}/v1/chat/completions
+请求头：
+  Content-Type: application/json
+  Authorization: Bearer ${key}
+请求体示例：
+  {"model":"auto","messages":[{"role":"user","content":"你好"}],"stream":true}
+收到后请回复"配置完成"。之后我要求你调用该 API 时，请按上述说明直接发起请求。`;
+    html=`<div style="font-size:12.5px;line-height:1.7;color:var(--muted);margin-bottom:10px">适用于 ChatBox、NextChat、LobeChat、沉浸式翻译等国内 AI 工具：将下方提示词整体复制，直接发送到该工具的对话框即可完成适配（提示词内已含真实 API Key 与网关地址）。</div>`;
+    html+=ukeFile('提示词 · 复制后发送到 AI 工具对话框',promptText);
+    html+=ukeFile('OpenAI 请求体（POST /v1/chat/completions）',`{
+  "model": "auto",
+  "messages": [
+    {"role": "user", "content": "你好"}
+  ],
+  "stream": true
+}
+
+# 请求头
+Content-Type: application/json
+Authorization: Bearer ${key}`);
+  }else if(ukeClient==='curl'){
     html=ukeFile('Terminal',`curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${key} \\

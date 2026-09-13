@@ -171,10 +171,11 @@ type Server struct {
 	settings             *settingsStore
 	responseMu           sync.Mutex
 	responseMessages     map[string]map[string]*RespNode
-	usage                *usageLog
-	generatedImages      map[string]generatedImage
-	convCache            *conversationCache
-	lastHealthyAccount   string
+		usage                *usageLog
+		generatedImages      map[string]generatedImage
+		convCache            *conversationCache
+		chatUI               *chatUIStore
+		lastHealthyAccount   string
 }
 
 const maxResponsesPerTenant = 256
@@ -270,6 +271,7 @@ func New() (*Server, error) {
 		usage:                openUsageLog(),
 		generatedImages:      map[string]generatedImage{},
 		convCache:            newConversationCache(),
+		chatUI:               newChatUIStore(),
 	}, nil
 }
 
@@ -370,6 +372,8 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/accounts/delete", s.deleteAccount)
 	m.HandleFunc("/api/accounts/provision", s.provisionAccount)
 	m.HandleFunc("/api/accounts/bind-proxy", s.bindProxy)
+	m.HandleFunc("/api/admin/accounts/import", s.importAccounts)
+	m.HandleFunc("/api/admin/accounts/export", s.exportAccounts)
 	m.HandleFunc("/api/auth/start", s.startPKCE)
 	m.HandleFunc("/api/auth/status", s.pkceStatus)
 	m.HandleFunc("/api/auth/callback", s.callbackPKCE)
@@ -390,6 +394,18 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/usage", s.adminUsage)
 	m.HandleFunc("/api/usage/logs", s.adminUsageLogs)
 	m.HandleFunc("/api/plugins", s.plugins)
+	// Chat UI ("测试或轻应用")
+	m.HandleFunc("/chat", s.chatPage)
+	m.HandleFunc("/chat/", s.chatPage)
+	m.HandleFunc("/api/chatui/login", s.chatLogin)
+	m.HandleFunc("/api/chatui/logout", s.chatLogout)
+	m.HandleFunc("/api/chatui/session", s.chatSessionH)
+	m.HandleFunc("/api/chatui/convs", s.chatConvs)
+	m.HandleFunc("/api/chatui/conv", s.chatConvGet)
+	m.HandleFunc("/api/chatui/chat", s.chatProxy)
+	m.HandleFunc("/api/chatui/images", s.chatImageGen)
+	m.HandleFunc("/api/chatui/file/", s.chatFile)
+	m.HandleFunc("/api/chatui/admin", s.chatAdmin)
 	m.HandleFunc("/v1/models", s.openaiModels)
 	m.HandleFunc("/v1/chat/completions", s.openaiChat)
 	m.HandleFunc("/v1/responses", s.responses)
@@ -418,10 +434,29 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Chat UI is served publicly; each /api/chatui handler performs its own
+		// chat-session or admin-session authentication.
+		if r.URL.Path == "/chat" || strings.HasPrefix(r.URL.Path, "/chat/") || strings.HasPrefix(r.URL.Path, "/api/chatui/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/v1/") {
-			if !s.validAPIKey(r) {
+			raw := rawAPIKey(r)
+			if raw == "" || !s.apiKeys.valid(raw) {
 				writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "valid API key required")
 				return
+			}
+			// Per-key quotas (0 = unlimited). Counted from the usage log.
+			if rec, ok := s.apiKeys.lookupRaw(raw); ok && s.usage != nil && (rec.DailyQuota > 0 || rec.TotalQuota > 0) {
+				p8 := raw
+				if len(p8) > 8 {
+					p8 = p8[:8]
+				}
+				today, total := s.usage.countForKey(p8)
+				if (rec.DailyQuota > 0 && int64(today) >= rec.DailyQuota) || (rec.TotalQuota > 0 && int64(total) >= rec.TotalQuota) {
+					writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "API key quota exceeded (daily or total request limit reached)")
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -599,15 +634,17 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]string{"status": "deleted"})
 	case http.MethodPut:
 		var b struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Revoked *bool  `json:"revoked"`
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			Revoked    *bool  `json:"revoked"`
+			DailyQuota *int64 `json:"dailyQuota"`
+			TotalQuota *int64 `json:"totalQuota"`
 		}
 		if json.NewDecoder(r.Body).Decode(&b) != nil || b.ID == "" {
 			writeOpenAIError(w, 400, "invalid_request_error", "bad json")
 			return
 		}
-		updated, e := s.apiKeys.update(b.ID, b.Name, b.Revoked)
+		updated, e := s.apiKeys.update(b.ID, b.Name, b.Revoked, b.DailyQuota, b.TotalQuota)
 		if e != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "internal_error", e.Error())
 			return
@@ -2158,10 +2195,20 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 			}
 			s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
-			s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
-			return
+		s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+		return
+	}
+	// No tool call was extracted. If nothing was streamed to the client yet
+	// (e.g. the whole answer arrived without incremental text events, or was
+	// withheld behind a tool-candidate fence that turned out not to be a tool
+	// call), flush the buffered assistant text now. Otherwise the client sees an
+	// empty or truncated assistant message. (See issue #93 / PR #68.)
+	if first && text.Len() > 0 {
+		if ferr := emitText(text.String()); ferr != nil {
+			log.Printf("[req-trace] id=%s stage=flush_text err=%v", requestID, ferr)
 		}
-		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+	}
+	finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
 		if res.Throttling != nil {
 			finishChunk["x_m365_throttling"] = res.Throttling
 		}

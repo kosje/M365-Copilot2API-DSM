@@ -21,6 +21,8 @@ type apiKeyRecord struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 	Revoked    bool       `json:"revoked"`
+	DailyQuota int64      `json:"dailyQuota,omitempty"` // max requests/day, 0 = unlimited
+	TotalQuota int64      `json:"totalQuota,omitempty"` // max requests all-time, 0 = unlimited
 }
 type apiKeyStore struct {
 	mu      sync.Mutex
@@ -145,22 +147,37 @@ func (s *apiKeyStore) delete(id string) (bool, error) {
 	return false, nil
 }
 
-func (s *apiKeyStore) update(id, name string, revoked *bool) (bool, error) {
+func (s *apiKeyStore) update(id, name string, revoked *bool, dailyQuota, totalQuota *int64) (bool, error) {
 	s.mu.Lock()
 	found := false
 	var oldName string
 	var oldRevoked bool
+	var oldDaily, oldTotal int64
 	for i := range s.Keys {
 		if s.Keys[i].ID != id {
 			continue
 		}
 		oldName = s.Keys[i].Name
 		oldRevoked = s.Keys[i].Revoked
+		oldDaily = s.Keys[i].DailyQuota
+		oldTotal = s.Keys[i].TotalQuota
 		if name != "" {
 			s.Keys[i].Name = name
 		}
 		if revoked != nil {
 			s.Keys[i].Revoked = *revoked
+		}
+		if dailyQuota != nil {
+			if *dailyQuota < 0 {
+				*dailyQuota = 0
+			}
+			s.Keys[i].DailyQuota = *dailyQuota
+		}
+		if totalQuota != nil {
+			if *totalQuota < 0 {
+				*totalQuota = 0
+			}
+			s.Keys[i].TotalQuota = *totalQuota
 		}
 		found = true
 		break
@@ -175,6 +192,8 @@ func (s *apiKeyStore) update(id, name string, revoked *bool) (bool, error) {
 			if s.Keys[i].ID == id {
 				s.Keys[i].Name = oldName
 				s.Keys[i].Revoked = oldRevoked
+				s.Keys[i].DailyQuota = oldDaily
+				s.Keys[i].TotalQuota = oldTotal
 				break
 			}
 		}
@@ -182,6 +201,19 @@ func (s *apiKeyStore) update(id, name string, revoked *bool) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// lookupRaw resolves a presented key to its record (after validity check).
+func (s *apiKeyStore) lookupRaw(raw string) (apiKeyRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := keyHash(raw)
+	for i := range s.Keys {
+		if s.Keys[i].Hash == h && !s.Keys[i].Revoked {
+			return s.Keys[i], true
+		}
+	}
+	return apiKeyRecord{}, false
 }
 func (s *apiKeyStore) valid(raw string) bool {
 	s.mu.Lock()

@@ -34,7 +34,7 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 func (s *Server) rootPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" && r.URL.Path != "/login" && r.URL.Path != "/conversation" {
+	if r.URL.Path != "/" && r.URL.Path != "/login" && r.URL.Path != "/conversation" && r.URL.Path != "/import" {
 		http.NotFound(w, r)
 		return
 	}
@@ -47,6 +47,8 @@ func (s *Server) rootPage(w http.ResponseWriter, r *http.Request) {
 		name = "login.html"
 	} else if r.URL.Path == "/conversation" {
 		name = "conversation.html"
+	} else if r.URL.Path == "/import" {
+		name = "import.html"
 	}
 	f, err := webContent.Open(name)
 	if err != nil {

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>M365 对话</title>
+<style>
+:root{
+  --bg:#ffffff;--side:#f9fbff;--border:#e6e9f0;--text:#26282d;--muted:#8a8f99;
+  --accent:#4d6bfe;--accent-weak:#eef2ff;--user-bubble:#f3f4f7;--ok:#16a34a;--err:#dc2626;
+  --radius:16px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1f2126;--side:#17181c;--border:#2c2e34;--text:#e8eaee;--muted:#8b909b;
+  --accent:#6b85ff;--accent-weak:#252a3d;--user-bubble:#2a2d33;
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,textarea{font:inherit;color:inherit}
+.hidden{display:none!important}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:rgba(127,127,127,.25);border-radius:3px}
+
+/* ===== login ===== */
+#login{display:flex;align-items:center;justify-content:center;height:100%;background:var(--side)}
+.login-card{background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:40px 36px;width:min(92vw,380px);box-shadow:0 8px 40px rgba(0,0,0,.06)}
+.logo-mark{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#4d6bfe,#9b7bff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;margin:0 auto 14px}
+.login-card h1{font-size:20px;text-align:center;margin-bottom:2px}
+.login-card .sub{color:var(--muted);font-size:12px;text-align:center;margin-bottom:24px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+.field input{width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:12px;background:var(--side);outline:none;transition:.15s}
+.field input:focus{border-color:var(--accent)}
+.btn-primary{width:100%;padding:11px;border-radius:12px;background:var(--accent);color:#fff;font-weight:600}
+.btn-primary:disabled{opacity:.6;cursor:default}
+#loginErr{color:var(--err);font-size:12px;text-align:center;min-height:16px;margin-top:10px}
+
+/* ===== layout ===== */
+#app{display:flex;height:100%}
+.side{width:260px;background:var(--side);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.brand{padding:18px 18px 10px;display:flex;align-items:center;gap:10px}
+.brand .logo-mark{width:32px;height:32px;font-size:14px;border-radius:9px;margin:0}
+.brand b{font-size:15px}
+.newchat{margin:10px 14px;padding:11px 14px;border-radius:12px;background:var(--accent);color:#fff;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 2px 10px rgba(77,107,254,.25)}
+.newchat:hover{filter:brightness(1.06)}
+.conv-scroll{flex:1;overflow-y:auto;padding:6px 10px}
+.conv-group{font-size:11px;color:var(--muted);padding:12px 8px 5px}
+.conv-item{padding:9px 11px;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:13px}
+.conv-item:hover{background:rgba(127,127,127,.09)}
+.conv-item.active{background:var(--accent-weak);color:var(--accent);font-weight:600}
+.conv-item .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-item .del{opacity:0;color:var(--muted);font-size:14px;padding:0 3px;border-radius:6px}
+.conv-item:hover .del{opacity:.85}
+.conv-item .del:hover{color:var(--err)}
+.side-foot{border-top:1px solid var(--border);padding:12px 14px}
+.foot-user{display:flex;align-items:center;gap:9px}
+.foot-user .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#4d6bfe,#9b7bff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+.foot-user .u{flex:1;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.foot-user .out{color:var(--muted);font-size:12px}
+.foot-user .out:hover{color:var(--err)}
+.quota-line{margin-top:9px;font-size:11px;color:var(--muted);background:var(--accent-weak);border-radius:9px;padding:6px 9px;line-height:1.6}
+.quota-line b{color:var(--accent)}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.mob-bar{display:none;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);background:var(--side)}
+.mob-bar button{font-size:18px;padding:2px 6px}
+
+/* ===== messages (DeepSeek style) ===== */
+.msgs{flex:1;overflow-y:auto;padding:26px 0}
+.msg-wrap{max-width:740px;margin:0 auto;padding:0 20px}
+.msg.user{display:flex;justify-content:flex-end;margin-bottom:22px}
+.msg.user .bubble{background:var(--user-bubble);border-radius:16px;padding:11px 16px;max-width:80%;line-height:1.7;word-break:break-word;white-space:pre-wrap}
+.msg.assistant{display:flex;gap:11px;margin-bottom:26px}
+.msg.assistant .avatar{width:30px;height:30px;border-radius:9px;flex-shrink:0;background:linear-gradient(135deg,#4d6bfe,#9b7bff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+.msg.assistant .body{flex:1;min-width:0;line-height:1.75}
+.msg.assistant .body pre{background:var(--side);border:1px solid var(--border);border-radius:10px;padding:12px;overflow-x:auto;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;margin:8px 0}
+.msg.assistant .body code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;background:rgba(127,127,127,.13);border-radius:4px;padding:1px 5px}
+.msg.assistant .body pre code{background:none;padding:0}
+.msg .tools{margin-top:8px;display:flex;gap:12px}
+.msg .tools button{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:4px}
+.msg .tools button:hover{color:var(--accent)}
+.msg .bubble img.att{max-width:240px;max-height:240px;border-radius:12px;display:block;margin-top:8px;cursor:zoom-in}
+.msg.user .bubble img.att{margin-top:8px}
+.typing{display:inline-flex;gap:4px;padding:6px 2px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+
+/* ===== welcome ===== */
+.welcome{padding-top:12vh;text-align:center}
+.welcome h1{font-size:30px;background:linear-gradient(90deg,#4d6bfe,#9b7bff);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:10px}
+.welcome p{color:var(--muted);font-size:13px}
+.welcome .tips{margin-top:34px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap;padding:0 20px}
+.welcome .tip{border:1px solid var(--border);border-radius:14px;padding:13px 16px;font-size:13px;cursor:pointer;min-width:150px;text-align:left;transition:.15s}
+.welcome .tip:hover{border-color:var(--accent);color:var(--accent)}
+.welcome .tip small{display:block;color:var(--muted);margin-top:3px}
+
+/* ===== composer ===== */
+.composer-wrap{padding:0 0 18px}
+.composer{max-width:740px;margin:0 auto;padding:0 20px}
+.input-box{border:1px solid var(--border);border-radius:20px;background:var(--side);padding:12px 14px 10px;transition:.15s}
+.input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(77,107,254,.1)}
+.attach-row{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.attach-row:empty{display:none}
+.attach-row .thumb{position:relative}
+.attach-row img{width:52px;height:52px;object-fit:cover;border-radius:10px;border:1px solid var(--border)}
+.attach-row .rm{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--err);color:#fff;font-size:11px;line-height:18px;text-align:center}
+#input{width:100%;border:none;background:none;outline:none;resize:none;max-height:150px;line-height:1.6;font-size:14px}
+.input-foot{display:flex;align-items:center;gap:8px;margin-top:8px}
+.mode-btn{padding:6px 11px;border:1px solid var(--border);border-radius:999px;color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:5px;background:var(--bg)}
+.mode-btn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-weak)}
+.mode-btn.pic{padding:6px 9px}
+.send{margin-left:auto;width:34px;height:34px;border-radius:11px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
+.send:disabled{opacity:.45;cursor:default}
+.hint{font-size:11px;color:var(--muted);margin-top:8px;text-align:center}
+
+#toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:50}
+#toast.show{opacity:.95}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:60;cursor:zoom-out}
+#lightbox img{max-width:94vw;max-height:94vh;border-radius:10px}
+@media(max-width:720px){
+  .side{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:.25s;box-shadow:0 0 30px rgba(0,0,0,.3)}
+  .side.open{transform:none}
+  .mob-bar{display:flex}
+}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="login-card">
+    <div class="logo-mark">M</div>
+    <h1>M365 对话</h1>
+    <div class="sub">轻量对话测试端 · 网关直连</div>
+    <div class="field"><label>用户名</label><input id="liUser" autocomplete="username"></div>
+    <div class="field"><label>密码</label><input id="liPass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="btn-primary" id="liBtn" onclick="doLogin()">登 录</button>
+    <div id="loginErr"></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="side" id="side">
+    <div class="brand"><div class="logo-mark">M</div><b>M365 对话</b></div>
+    <button class="newchat" onclick="newChat()">✏️ 开启新对话</button>
+    <div class="conv-scroll" id="convList"></div>
+    <div class="side-foot">
+      <div class="foot-user">
+        <div class="avatar" id="uAvatar">·</div>
+        <span class="u" id="whoami">—</span>
+        <button class="out" onclick="logout()">退出</button>
+      </div>
+      <div class="quota-line" id="quotaLine">今日额度加载中…</div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="mob-bar"><button onclick="document.getElementById('side').classList.toggle('open')">☰</button><b id="mobTitle">M365 对话</b></div>
+    <div class="msgs" id="msgs"><div class="msg-wrap" id="msgWrap"></div></div>
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="input-box">
+          <div class="attach-row" id="attachRow"></div>
+          <textarea id="input" rows="1" placeholder="给 M365 发送消息"></textarea>
+          <div class="input-foot">
+            <button class="mode-btn" id="imgModeBtn" onclick="toggleImgMode()" title="画图模式：发送的描述将生成图片">🎨 画图</button>
+            <button class="mode-btn pic" onclick="pickImage()" title="添加图片">🖼️</button>
+            <input type="file" id="fileInput" accept="image/*" multiple style="display:none" onchange="addFiles(this.files)">
+            <button class="send" id="sendBtn" onclick="send()">↑</button>
+          </div>
+        </div>
+        <div class="hint" id="quotaHint"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="lightbox" class="hidden" onclick="this.classList.add('hidden')"><img id="lightboxImg"></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+let me=null,quota=null,convs=[],curConv=null,imgMode=false,attachments=[],busy=false;
+
+function toast(t){const el=$('toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2200);}
+async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){showLogin();throw new Error('未登录');}const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error&&(d.error.message||d.error)||'请求失败');return d;}
+
+/* ---------- auth ---------- */
+async function boot(){
+  try{const d=await api('/api/chatui/session');if(d.authenticated){me=d.username;quota=d.quota;showApp();return;}}catch(e){}
+  showLogin();
+}
+function showLogin(){$('login').classList.remove('hidden');$('app').classList.add('hidden');}
+function showApp(){
+  $('login').classList.add('hidden');$('app').classList.remove('hidden');
+  $('whoami').textContent=me;$('uAvatar').textContent=(me||'?').slice(0,1).toUpperCase();
+  renderQuota();loadConvs();newChat(true);
+}
+async function doLogin(){
+  $('liBtn').disabled=true;$('loginErr').textContent='';
+  try{
+    const r=await fetch('/api/chatui/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('liUser').value.trim(),password:$('liPass').value})});
+    const d=await r.json();
+    if(!r.ok){$('loginErr').textContent=(d.error&&d.error.message)||'登录失败';return;}
+    const s=await api('/api/chatui/session');me=s.username;quota=s.quota;showApp();
+  }catch(e){$('loginErr').textContent='网络错误';}
+  finally{$('liBtn').disabled=false;}
+}
+async function logout(){try{await fetch('/api/chatui/logout',{method:'POST'});}catch(e){}location.reload();}
+async function refreshQuota(){try{const d=await api('/api/chatui/session');if(d.authenticated){quota=d.quota;renderQuota();}}catch(e){}}
+function renderQuota(){
+  if(!quota)return;
+  const lim=v=>v<=0?'∞':v;
+  const t=`对话 <b>${quota.chat.used}/${lim(quota.chat.limit)}</b> · 画图 <b>${quota.image.used}/${lim(quota.image.limit)}</b>（今日）`;
+  $('quotaLine').innerHTML='今日额度：'+t;$('quotaHint').textContent=`今日已用 ${quota.chat.used} 次对话、${quota.image.used} 次画图`;
+}
+
+/* ---------- conversations ---------- */
+function groupOf(ts){
+  const d=new Date(ts),now=new Date();
+  const day=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()).getTime();
+  const diff=(day(now)-day(d))/86400000;
+  if(diff<1)return '今天';
+  if(diff<2)return '昨天';
+  if(diff<7)return '7 天内';
+  if(diff<30)return '30 天内';
+  return '更早';
+}
+async function loadConvs(){
+  const d=await api('/api/chatui/convs');convs=d.conversations||[];renderConvList();
+}
+function renderConvList(){
+  const el=$('convList');el.innerHTML='';
+  const groups={};
+  for(const c of convs){const g=groupOf(c.updatedAt);(groups[g]=groups[g]||[]).push(c);}
+  const order=['今天','昨天','7 天内','30 天内','更早'];
+  for(const g of order){
+    if(!groups[g])continue;
+    const gh=document.createElement('div');gh.className='conv-group';gh.textContent=g;el.appendChild(gh);
+    for(const c of groups[g])el.appendChild(convEl(c));
+  }
+}
+function convEl(c){
+  const div=document.createElement('div');div.className='conv-item'+(c.id===curConv?' active':'');
+  div.innerHTML=`<span class="t"></span><button class="del" title="删除对话">✕</button>`;
+  div.querySelector('.t').textContent=c.title||'新对话';
+  div.onclick=e=>{if(e.target.classList.contains('del'))return;openConv(c.id);document.getElementById('side').classList.remove('open');};
+  div.querySelector('.del').onclick=async e=>{e.stopPropagation();if(!confirm('删除该对话？'))return;await api('/api/chatui/convs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:c.id})});if(curConv===c.id)newChat(true);loadConvs();};
+  return div;
+}
+function newChat(silent){
+  curConv=null;attachments=[];renderAttach();$('msgWrap').innerHTML='';$('mobTitle').textContent='M365 对话';
+  renderConvList();renderWelcome();
+  if(!silent)$('input').focus();
+}
+function renderWelcome(){
+  const w=document.createElement('div');w.className='welcome';
+  w.innerHTML=`<h1>Hi，我是 M365 Copilot</h1><p>网关直连 · 支持文字对话、图片理解与 AI 画图</p>
+  <div class="tips">
+    <div class="tip" onclick="tipFill('用一句话介绍你自己')">📝<b>自我介绍</b><small>一句话介绍你自己</small></div>
+    <div class="tip" onclick="tipFill('画一只在月球上骑自行车的宇航猫')">🎨<b>AI 画图</b><small>画一只月球宇航猫</small></div>
+    <div class="tip" onclick="document.getElementById('fileInput').click()">🖼️<b>图片理解</b><small>添加图片让我分析</small></div>
+  </div>`;
+  $('msgWrap').appendChild(w);
+}
+function tipFill(t){$('input').value=t;autoGrow();$('input').focus();}
+
+async function openConv(id){
+  curConv=id;renderConvList();$('msgWrap').innerHTML='';
+  try{
+    const c=await api('/api/chatui/conv?id='+encodeURIComponent(id));
+    $('mobTitle').textContent=c.title||'对话';
+    const ms=c.messages||[];
+    if(!ms.length)renderWelcome();
+    for(const m of ms)renderMsg(m,false);
+  }catch(e){toast(e.message);}
+  scrollBottom();
+}
+
+/* ---------- rendering ---------- */
+function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function mdLite(s){
+  let h=esc(s);
+  const blocks=[];
+  h=h.replace(/```([\s\S]*?)```/g,(m,code)=>{blocks.push('<pre><code>'+code.replace(/^\n/,'')+'</code></pre>');return '\u0000'+(blocks.length-1)+'\u0000';});
+  h=h.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  h=h.replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
+  h=h.replace(/\n/g,'<br>');
+  return h.replace(/\u0000(\d+)\u0000/g,(m,i)=>blocks[+i]);
+}
+function addImgs(b,ids){for(const fid of (ids||[])){const img=document.createElement('img');img.className='att';img.src='/api/chatui/file/'+fid;img.onclick=()=>zoom(img.src);b.appendChild(img);}}
+function renderMsg(m,streaming){
+  const wrap=$('msgWrap');
+  const w=document.querySelector('.welcome');if(w)w.remove();
+  const div=document.createElement('div');div.className='msg '+m.role;
+  if(m.role==='user'){
+    const b=document.createElement('div');b.className='bubble';
+    b.textContent=m.content||'';
+    addImgs(b,m.images);
+    div.appendChild(b);
+  }else{
+    const av=document.createElement('div');av.className='avatar';av.textContent='M';
+    const body=document.createElement('div');body.className='body';
+    body.innerHTML=m.content?mdLite(m.content):(streaming?'<span class="typing"><i></i><i></i><i></i></span>':'<span style="color:var(--muted)">（空回复）</span>');
+    addImgs(body,m.gen);
+    if(!streaming&&m.content){
+      const tools=document.createElement('div');tools.className='tools';
+      const cp=document.createElement('button');cp.textContent='⧉ 复制';
+      cp.onclick=()=>{navigator.clipboard.writeText(m.content).then(()=>toast('已复制'),()=>toast('复制失败'));};
+      tools.appendChild(cp);body.appendChild(tools);
+    }
+    div.append(av,body);
+  }
+  wrap.appendChild(div);
+  return div.querySelector('.body')||div.querySelector('.bubble');
+}
+function zoom(src){$('lightboxImg').src=src;$('lightbox').classList.remove('hidden');}
+function scrollBottom(){const el=$('msgs');el.scrollTop=el.scrollHeight;}
+
+/* ---------- attachments ---------- */
+function pickImage(){$('fileInput').click();}
+function addFiles(files){
+  for(const f of files){
+    if(!f.type.startsWith('image/'))continue;
+    compressImage(f).then(d=>{attachments.push(d);renderAttach();}).catch(()=>toast('图片读取失败'));
+  }
+  $('fileInput').value='';
+}
+function compressImage(file){
+  return new Promise((res,rej)=>{
+    const img=new Image();const url=URL.createObjectURL(file);
+    img.onload=()=>{
+      const MAX=1568;let{width:w,height:h}=img;
+      if(w>MAX||h>MAX){const k=MAX/Math.max(w,h);w=Math.round(w*k);h=Math.round(h*k);}
+      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);res(cv.toDataURL('image/jpeg',.85));
+    };
+    img.onerror=rej;img.src=url;
+  });
+}
+function renderAttach(){
+  const el=$('attachRow');el.innerHTML='';
+  attachments.forEach((d,i)=>{
+    const t=document.createElement('div');t.className='thumb';
+    t.innerHTML=`<img><span class="rm">✕</span>`;
+    t.querySelector('img').src=d;
+    t.querySelector('.rm').onclick=()=>{attachments.splice(i,1);renderAttach();};
+    el.appendChild(t);
+  });
+}
+function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('input').placeholder=imgMode?'描述想生成的图片…':'给 M365 发送消息';}
+
+/* ---------- send ---------- */
+async function send(){
+  if(busy)return;
+  const text=$('input').value.trim();
+  if(imgMode){
+    if(!text)return;
+    $('input').value='';autoGrow();
+    await genImage(text);return;
+  }
+  if(!text&&attachments.length===0)return;
+  const parts=[];
+  if(text)parts.push({type:'text',text});
+  for(const a of attachments)parts.push({type:'image_url',image_url:{url:a}});
+  const hasImgs=attachments.length>0;
+  attachments=[];renderAttach();
+  $('input').value='';autoGrow();
+  renderMsg({role:'user',content:text||'（图片）',images:[]},false);
+  // render local previews for freshly attached images
+  if(hasImgs){
+    const b=$('msgWrap').querySelector('.msg.user:last-child .bubble');
+    // previews were consumed; re-add from the parts payload
+    for(const p of parts)if(p.type==='image_url'){const img=document.createElement('img');img.className='att';img.src=p.image_url.url;b.appendChild(img);}
+  }
+  scrollBottom();
+  await streamChat({role:'user',content:parts.length===1&&text?text:parts});
+}
+function autoGrow(){const el=$('input');el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px';}
+$('input').addEventListener('input',autoGrow);
+$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+
+async function streamChat(userMsg){
+  busy=true;$('sendBtn').disabled=true;
+  const body=renderMsg({role:'assistant',content:''},true);scrollBottom();
+  let acc='';
+  const paint=()=>{body.innerHTML=mdLite(acc)||'<span class="typing"><i></i><i></i><i></i></span>';scrollBottom();};
+  try{
+    const hist=[];
+    if(curConv){
+      try{const c=await api('/api/chatui/conv?id='+encodeURIComponent(curConv));
+        for(const m of (c.messages||[]).slice(-16)){
+          if(m.role==='assistant'&&m.content)hist.push({role:'assistant',content:m.content});
+          else if(m.role==='user'&&m.content)hist.push({role:'user',content:m.content});
+        }
+      }catch(e){}
+    }
+    const r=await fetch('/api/chatui/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({conversationId:curConv,model:'auto',stream:true,messages:hist.concat([userMsg])})});
+    if(!r.ok){
+      const d=await r.json().catch(()=>({}));throw new Error((d.error&&(d.error.message||d.error))||('HTTP '+r.status));
+    }
+    const reader=r.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop();
+      for(const line of lines){
+        const t=line.trim();if(!t.startsWith('data:'))continue;
+        const p=t.slice(5).trim();if(!p||p==='[DONE]')continue;
+        try{const j=JSON.parse(p);
+          if(j.error)throw new Error(j.error.message||JSON.stringify(j.error));
+          const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;
+          if(d){acc+=d;paint();}
+        }catch(e){if(e instanceof SyntaxError)continue;throw e;}
+      }
+    }
+    if(!acc){acc='（空回复，请重试）';paint();}
+    renderTools(body,acc);
+  }catch(e){
+    body.innerHTML=mdLite(acc)+(acc?'<br>':'')+'<span style="color:var(--err)">⚠ '+esc(e.message)+'</span>';
+  }finally{
+    busy=false;$('sendBtn').disabled=false;refreshQuota();loadConvs();scrollBottom();
+  }
+}
+function renderTools(body,content){
+  const tools=document.createElement('div');tools.className='tools';
+  const cp=document.createElement('button');cp.textContent='⧉ 复制';
+  cp.onclick=()=>{navigator.clipboard.writeText(content).then(()=>toast('已复制'),()=>toast('复制失败'));};
+  tools.appendChild(cp);body.appendChild(tools);
+}
+
+async function genImage(prompt){
+  busy=true;$('sendBtn').disabled=true;
+  renderMsg({role:'user',content:'🎨 '+prompt},false);scrollBottom();
+  const body=renderMsg({role:'assistant',content:''},true);scrollBottom();
+  try{
+    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt})});
+    curConv=d.conversationId;
+    body.innerHTML='';const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
+    renderTools(body,prompt);
+    loadConvs();
+  }catch(e){body.innerHTML='<span style="color:var(--err)">⚠ '+esc(e.message)+'</span>';}
+  finally{busy=false;$('sendBtn').disabled=false;refreshQuota();scrollBottom();}
+}
+boot();
+</script>
+</body>
+</html>
