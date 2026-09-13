@@ -586,8 +586,13 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 			}
 			continue
 		}
-		// 带上游 token 下载图片字节
+		// 带上游 token 下载图片字节；失败再用 Designer 专用 token 重试
 		b64, ct, err := downloadImageAsBase64WithToken(u, acc.AccessToken)
+		if err != nil {
+			if dt, dterr := s.designerAccessToken(acc); dterr == nil {
+				b64, ct, err = downloadImageAsBase64WithToken(u, dt)
+			}
+		}
 		if err == nil {
 			if data, derr := base64.StdEncoding.DecodeString(b64); derr == nil && len(data) > 0 {
 				if id, serr := s.chatUI.saveImage(data, ct); serr == nil {
