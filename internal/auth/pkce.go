@@ -31,5 +31,7 @@ func AuthorizationURL(endpoint, clientID, redirect, state, challenge, scope stri
 	q.Set("state", state)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	// 强制全新登录：避免浏览器复用上次登录会话，弹窗直接显示已登录状态
+	q.Set("prompt", "login")
 	return fmt.Sprintf("%s?%s", endpoint, q.Encode())
 }

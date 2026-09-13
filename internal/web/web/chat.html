@@ -286,6 +286,7 @@ function mdLite(s){
   h=h.replace(/```([\s\S]*?)```/g,(m,code)=>{blocks.push('<pre><code>'+code.replace(/^\n/,'')+'</code></pre>');return '\u0000'+(blocks.length-1)+'\u0000';});
   h=h.replace(/`([^`\n]+)`/g,'<code>$1</code>');
   h=h.replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
+  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="word-break:break-all">$1</a>');
   h=h.replace(/\n/g,'<br>');
   return h.replace(/\u0000(\d+)\u0000/g,(m,i)=>blocks[+i]);
 }
@@ -439,9 +440,18 @@ async function genImage(prompt){
   try{
     const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt})});
     curConv=d.conversationId;
-    body.innerHTML='';const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
+    body.innerHTML='';
+    if(d.warning&&d.urls&&d.urls.length){
+      const tip=document.createElement('div');tip.className='warn';tip.style.color='var(--err)';tip.style.marginBottom='6px';
+      tip.textContent='⚠ 图片已生成，但服务器下载失败（设备可能没有代理）。请自行点击下面的地址下载：';
+      body.appendChild(tip);
+      for(const u of d.urls){const a=document.createElement('a');a.href=u;a.target='_blank';a.rel='noopener';a.textContent=u;a.style.wordBreak='break-all';a.style.display='block';body.appendChild(a);}
+      loadConvs();
+    }else{
+      const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
+      loadConvs();
+    }
     renderTools(body,prompt);
-    loadConvs();
   }catch(e){body.innerHTML='<span style="color:var(--err)">⚠ '+esc(e.message)+'</span>';}
   finally{busy=false;$('sendBtn').disabled=false;refreshQuota();scrollBottom();}
 }

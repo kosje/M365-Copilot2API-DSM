@@ -153,6 +153,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	if dlTimeout < 90*time.Second {
 		dlTimeout = 90 * time.Second
 	}
+	downloadFailed := false
 	data := make([]map[string]string, 0, len(images))
 	for _, sourceURL := range images {
 		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
@@ -187,9 +188,12 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		imageData, contentType, err := downloadDesignerImage(dlCtx, sourceURL, designerToken)
 		dlCancel()
 		if err != nil {
-			log.Printf("[image-gen-download] err=%v", err)
-			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(err))
-			return
+			// 图片已在上游生成成功，仅本机下载失败（设备可能无代理直连图片 CDN）。
+			// 不再整体失败：回退返回上游 URL，由前端提示用户自行下载。
+			log.Printf("[image-gen-download] err=%v (fallback to upstream URL)", err)
+			downloadFailed = true
+			data = append(data, map[string]string{"url": sourceURL})
+			continue
 		}
 		if format == "b64_json" {
 			data = append(data, map[string]string{"b64_json": base64.StdEncoding.EncodeToString(imageData)})
@@ -209,7 +213,11 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		DurationMs:   time.Since(startedAt).Milliseconds(),
 		Status:       200,
 	})
-	jsonOut(w, map[string]any{"created": time.Now().Unix(), "data": data, "m365": map[string]any{"conversationId": res.ConversationID, "sessionId": res.SessionID, "images": images}})
+	out := map[string]any{"created": time.Now().Unix(), "data": data, "m365": map[string]any{"conversationId": res.ConversationID, "sessionId": res.SessionID, "images": images}}
+	if downloadFailed {
+		out["warning"] = "image(s) generated upstream, but server-side download failed; the device may have no direct access to the image CDN — open the URL(s) in data to download manually"
+	}
+	jsonOut(w, out)
 }
 
 func (s *Server) imageEdits(w http.ResponseWriter, r *http.Request) {

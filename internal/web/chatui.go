@@ -884,9 +884,39 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 	var out struct {
 		Data []struct {
 			B64 string `json:"b64_json"`
+			URL string `json:"url"`
 		} `json:"data"`
+		Warning string `json:"warning"`
 	}
-	if json.Unmarshal(cw.buf.Bytes(), &out) != nil || len(out.Data) == 0 || out.Data[0].B64 == "" {
+	if json.Unmarshal(cw.buf.Bytes(), &out) != nil || len(out.Data) == 0 {
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
+		return
+	}
+	// 兜底：图片已在上游生成，但服务器下载失败（设备可能无代理直连图片 CDN）。
+	// 把上游地址直接给用户，提示自行下载。
+	if out.Data[0].B64 == "" && out.Data[0].URL != "" {
+		urls := make([]string, 0, len(out.Data))
+		for _, d := range out.Data {
+			if d.URL != "" {
+				urls = append(urls, d.URL)
+			}
+		}
+		var sb strings.Builder
+		sb.WriteString("⚠️ 图片已生成，但服务器下载图片失败（设备可能无法直连图片 CDN，需要代理）。请自行点击下面的链接下载：\n")
+		for i, u := range urls {
+			sb.WriteString(fmt.Sprintf("\n[下载图片 %d](%s)", i+1, u))
+		}
+		s.chatUI.mu.Lock()
+		if c := s.chatUI.loadConv(u.ID, convID); c != nil {
+			c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: sb.String(), Time: time.Now()})
+			c.UpdatedAt = time.Now()
+			s.chatUI.saveConv(c)
+		}
+		s.chatUI.mu.Unlock()
+		jsonOut(w, map[string]any{"status": "ok", "conversationId": convID, "warning": "download_failed", "urls": urls})
+		return
+	}
+	if out.Data[0].B64 == "" {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
 		return
 	}

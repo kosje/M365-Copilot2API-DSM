@@ -14,7 +14,7 @@ func TestChallengeIsDeterministic(t *testing.T) {
 
 func TestAuthorizationURL(t *testing.T) {
 	u := AuthorizationURL("https://login.example/authorize", "client", "http://127.0.0.1/callback", "state", "challenge", "openid offline_access")
-	for _, want := range []string{"client_id=client", "state=state", "code_challenge=challenge", "code_challenge_method=S256", "scope=openid"} {
+	for _, want := range []string{"client_id=client", "state=state", "code_challenge=challenge", "code_challenge_method=S256", "scope=openid", "prompt=login"} {
 		if !contains(u, want) {
 			t.Fatalf("URL missing %q: %s", want, u)
 		}
