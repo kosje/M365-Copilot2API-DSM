@@ -215,5 +215,5 @@ curl http://<飞牛IP>:8080/v1/chat/completions \
 ## 相关链接
 
 - 上游原版：https://github.com/HEXUXIU/M365-Copilot2API
-- 本仓库 Release（下载最新 fpk）：https://github.com/my788525/M365-Copilot2API/releases
+- 本仓库 Release（下载最新 fpk）：https://github.com/my788525/M365-Copilot2API-FNOS/releases
 - 主文档（网关本体）：[README.md](../README.md)
