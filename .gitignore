@@ -71,3 +71,6 @@ gopath/
 conversations.json
 sessions.json
 /data/
+fnos_*.py
+*_resp.json
+*_body.json
