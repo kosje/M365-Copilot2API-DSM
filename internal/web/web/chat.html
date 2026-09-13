@@ -177,6 +177,22 @@ input,textarea{font:inherit;color:inherit}
 </div>
 <div id="toast"></div>
 <div id="lightbox" class="hidden" onclick="this.classList.add('hidden')"><img id="lightboxImg"></div>
+<div id="imgModal" class="hidden" onclick="if(event.target===this)closeImgModal()" style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:70">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:20px;width:min(92vw,430px);max-height:88vh;overflow:auto">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px">🎨 生成图片</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">画幅尺寸</div>
+    <div id="szRow" class="opt-row"></div>
+    <div style="font-size:12px;color:var(--muted);margin:12px 0 6px">画面风格</div>
+    <div id="styleRow" class="opt-row"></div>
+    <div style="font-size:12px;color:var(--muted);margin:12px 0 6px">色彩倾向</div>
+    <div id="toneRow" class="opt-row"></div>
+    <textarea id="imgPrompt" rows="3" placeholder="描述想生成的图片…" style="width:100%;margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--side);resize:vertical"></textarea>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button onclick="closeImgModal()" style="padding:8px 16px;border-radius:10px;border:1px solid var(--border)">取消</button>
+      <button onclick="startGen()" style="padding:8px 18px;border-radius:10px;background:var(--accent);color:#fff">生成</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -352,17 +368,48 @@ function renderAttach(){
     el.appendChild(t);
   });
 }
-function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('input').placeholder=imgMode?'描述想生成的图片…':'给 M365 发送消息';}
+function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);}
+
+/* ---------- image generation modal ---------- */
+const IMG_SIZES=[['1024x1024','方形 1:1'],['1536x1024','横版 3:2'],['1024x1536','竖版 2:3']];
+const IMG_STYLES=[['','自动'],['realistic photo','写实照片'],['anime','动漫'],['oil painting','油画'],['watercolor','水彩'],['flat illustration','扁平插画'],['3D render','3D 渲染'],['Chinese ink painting','国风水墨'],['cyberpunk','赛博朋克']];
+const IMG_TONES=[['','自然色彩'],['warm color palette','暖色调'],['cool color palette','冷色调'],['soft fresh colors','清新淡雅'],['dark moody colors','暗黑'],['black and white','黑白']];
+let imgSel={size:'1024x1024',style:'',tone:''};
+function pillRow(rowId,opts,key){
+  const row=$(rowId);row.innerHTML='';
+  row.style.cssText='display:flex;flex-wrap:wrap;gap:6px';
+  for(const [val,label] of opts){
+    const b=document.createElement('button');
+    b.type='button';b.textContent=label;
+    b.style.cssText='padding:5px 12px;border-radius:999px;border:1px solid var(--border);font-size:12px;background:'+(imgSel[key]===val?'var(--accent-weak)':'transparent')+';color:'+(imgSel[key]===val?'var(--accent)':'inherit')+';border-color:'+(imgSel[key]===val?'var(--accent)':'var(--border)');
+    b.onclick=()=>{imgSel[key]=val;pillRow(rowId,opts,key);};
+    row.appendChild(b);
+  }
+}
+function openImgModal(){
+  imgSel={size:'1024x1024',style:'',tone:''};
+  $('imgPrompt').value='';
+  pillRow('szRow',IMG_SIZES,'size');
+  pillRow('styleRow',IMG_STYLES,'style');
+  pillRow('toneRow',IMG_TONES,'tone');
+  $('imgModal').classList.remove('hidden');
+  setTimeout(()=>$('imgPrompt').focus(),50);
+}
+function closeImgModal(){$('imgModal').classList.add('hidden');}
+function startGen(){
+  const p=$('imgPrompt').value.trim();
+  if(!p){toast('请先描述想生成的图片');return;}
+  closeImgModal();
+  let full=p;
+  if(imgSel.style)full+=', '+imgSel.style+' style';
+  if(imgSel.tone)full+=', '+imgSel.tone;
+  genImage(full,imgSel.size);
+}
 
 /* ---------- send ---------- */
 async function send(){
   if(busy)return;
   const text=$('input').value.trim();
-  if(imgMode){
-    if(!text)return;
-    $('input').value='';autoGrow();
-    await genImage(text);return;
-  }
   if(!text&&attachments.length===0)return;
   // 画图意图自动路由：聊天里直接打字要求画图时，走专用图像生成管线
   // （/api/chatui/images → /v1/images/generations），而非聊天流
@@ -449,12 +496,12 @@ function renderTools(body,content){
   tools.appendChild(cp);body.appendChild(tools);
 }
 
-async function genImage(prompt){
+async function genImage(prompt,size){
   busy=true;$('sendBtn').disabled=true;
   renderMsg({role:'user',content:'🎨 '+prompt},false);scrollBottom();
   const body=renderMsg({role:'assistant',content:''},true);scrollBottom();
   try{
-    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt})});
+    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt,size:size||'1024x1024'})});
     curConv=d.conversationId;
     body.innerHTML='';
     if(d.warning&&d.urls&&d.urls.length){
@@ -463,8 +510,13 @@ async function genImage(prompt){
       body.appendChild(tip);
       for(const u of d.urls){const a=document.createElement('a');a.href=u;a.target='_blank';a.rel='noopener';a.textContent=u;a.style.wordBreak='break-all';a.style.display='block';body.appendChild(a);}
       loadConvs();
-    }else{
+    }else if(d.url){
       const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
+      loadConvs();
+    }else{
+      const tip=document.createElement('div');tip.style.color='var(--err)';
+      tip.textContent='⚠ 图片生成失败：服务未返回图片数据，请重试或更换描述。';
+      body.appendChild(tip);
       loadConvs();
     }
     renderTools(body,prompt);

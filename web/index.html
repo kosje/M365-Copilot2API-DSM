@@ -311,7 +311,6 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
       <button data-page="apikeys" onclick="showPage('apikeys')"><i data-lucide="key-round" style="width:16px;height:16px;flex-shrink:0"></i><span>API Keys</span></button>
       <button data-page="conversations" onclick="showPage('conversations')"><i data-lucide="message-square" style="width:16px;height:16px;flex-shrink:0"></i><span>Conversations</span></button>
       <button data-page="chat" onclick="showPage('chat')"><i data-lucide="messages-square" style="width:16px;height:16px;flex-shrink:0"></i><span>Chat Users</span></button>
-      <button onclick="window.location.href='/import'"><i data-lucide="upload" style="width:16px;height:16px;flex-shrink:0"></i><span>导入账号</span></button>
     </nav>
     <div class="nav-label">System</div>
     <nav class="nav">
@@ -319,7 +318,7 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
       <button data-page="modeltest" onclick="showPage('modeltest')"><i data-lucide="flask-conical" style="width:16px;height:16px;flex-shrink:0"></i><span>Model Test</span></button>
       <button data-page="settings" onclick="showPage('settings')"><i data-lucide="settings" style="width:16px;height:16px;flex-shrink:0"></i><span>Settings</span></button>
     </nav>
-    <div class="sidebar-foot">v0.4.0</div>
+    <div class="sidebar-foot" id="verFoot">…</div>
   </aside>
 
   <main class="main">
@@ -676,7 +675,7 @@ if (response.output_text) {
       <!-- Settings -->
       <section id="page-settings" style="display:none">
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
-        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Listen address</label><input class="form-input" id="setListen" placeholder="127.0.0.1:4141"></div><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
+        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
     </div>
   </main>
@@ -1348,6 +1347,41 @@ function startAccountsPolling(){
 }
 function stopAccountsPolling(){ if(_accountsTimer){ clearInterval(_accountsTimer); _accountsTimer=null; } }
 document.addEventListener('DOMContentLoaded', startAccountsPolling);
+
+/* ---------- update check (GitHub releases, browser-side: NAS may have no proxy) ---------- */
+function cmpVer(a,b){
+  const p=s=>String(s).split(/[.\-+]/).map(x=>parseInt(x,10)||0);
+  const pa=p(a),pb=p(b);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const d=(pa[i]||0)-(pb[i]||0);
+    if(d)return d>0?1:-1;
+  }
+  return 0;
+}
+async function checkUpdate(){
+  const el=document.getElementById('verFoot');
+  if(!el)return;
+  let cur='';
+  try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
+  el.textContent=cur?('v'+cur):'';
+  if(!cur||cur==='dev')return;
+  try{
+    const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
+    const latest=String(rel.tag_name||'').replace(/^v/,'');
+    if(latest&&cmpVer(latest,cur)>0){
+      el.innerHTML='';
+      const a=document.createElement('a');
+      a.href=(rel.html_url)||('https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest);
+      a.target='_blank';a.rel='noopener';
+      a.textContent='v'+cur+' → v'+latest+' 可更新，点击下载';
+      a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';
+      a.title='打开 GitHub Release 下载最新 fpk';
+      el.textContent='';
+      el.appendChild(a);
+    }
+  }catch(e){/* GitHub 不可达：仅显示当前版本 */}
+}
+document.addEventListener('DOMContentLoaded', checkUpdate);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') loadAccounts(); });
 
 async function toggleAccountSchedule(id,enabled){
@@ -1960,16 +1994,13 @@ async function loadSettings(){
   try{
     const d=await api('/api/admin/settings');
     const v=d.settings||{};
-    $('setListen').value=v.listenAddress||'';
     $('setTimeout').value=v.chatTimeoutSeconds||120;
   }catch(e){showNotice(e.message,'error');}
 }
 async function saveSettings(){
   try{
-    const listen=$('setListen').value.trim();
     const timeout=$('setTimeout').value.trim();
     const body={};
-    if(listen)body.listenAddress=listen;
     if(timeout)body.chatTimeoutSeconds=parseInt(timeout);
     await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
     showNotice('设置已保存','success');

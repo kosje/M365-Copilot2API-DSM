@@ -16,5 +16,8 @@ echo "=== sync web/ -> internal/web/web/ (go:embed reads internal/web/web/) ==="
 cp -f web/index.html web/import.html web/login.html web/conversation.html web/debug.html internal/web/web/
 echo "=== build linux/amd64 -> FPK app dir ==="
 # -a forces full rebuild (incl. //go:embed web assets) so frontend changes are actually baked in.
-"C:/Users/pguoy/go/bin/go.exe" build -a -trimpath -ldflags="-s -w" -o "D:/work/M365-fpk/m365-copilot2api/app/m365-copilot2api" ./cmd/server
+# Version injected from the FPK manifest (single source of truth) for /api/version & update check.
+APP_VERSION=$(grep -m1 '^version=' /d/work/M365-fpk/m365-copilot2api/manifest | cut -d= -f2 | tr -d ' \r')
+echo "APP_VERSION=${APP_VERSION}"
+"C:/Users/pguoy/go/bin/go.exe" build -a -trimpath -ldflags="-s -w -X m365-copilot2api/internal/web.Version=${APP_VERSION}" -o "D:/work/M365-fpk/m365-copilot2api/app/m365-copilot2api" ./cmd/server
 echo "BUILD_EXIT=$?"

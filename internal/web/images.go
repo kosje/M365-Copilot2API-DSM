@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,6 +47,29 @@ type imageGenerationRequest struct {
 	Attachments    []chathub.Attachment `json:"attachments,omitempty"`
 }
 
+// nextImageGenAccount 返回下一个「健康且画图配额未耗尽」的轮询账号（跳过 avoidID）。
+// 与 nextHealthyAccount 的区别：额外检查 ImageGenAvailable（画图每日上限冷却），
+// 避免把请求反复打到已耗尽画图配额的账号上。
+func (s *Server) nextImageGenAccount(avoidID string) (auth.AccountToken, error) {
+	for i := 0; i < maxAccountProbe; i++ {
+		acc, ok := s.tokens.Next()
+		if !ok {
+			return auth.AccountToken{}, fmt.Errorf("no accounts; login first")
+		}
+		if avoidID != "" && acc.ID == avoidID {
+			continue
+		}
+		if !s.accountAvailable(acc.ID) {
+			continue
+		}
+		if !s.accountPool.ImageGenAvailable(acc.ID) {
+			continue
+		}
+		return s.tokens.EnsureValid(acc.ID)
+	}
+	return auth.AccountToken{}, fmt.Errorf("no account with image quota available for failover")
+}
+
 func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	if r.Method != http.MethodPost {
@@ -73,20 +97,6 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "response_format must be url or b64_json")
 		return
 	}
-	acc, err := s.resolveAccount(firstNonEmpty(b.AccountID, b.User))
-	if err != nil {
-		writeUpstreamError(w, err)
-		return
-	}
-	if acc.OID == "" || acc.TID == "" {
-		acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
-	}
-	if acc.OID == "" || acc.TID == "" {
-		writeOpenAIError(w, 400, "invalid_request_error", "account missing oid/tid — re-login with PKCE")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
-	defer cancel()
 	size := b.Size
 	if size == "" {
 		size = "1024x1024"
@@ -101,22 +111,102 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		endpoint = "/v1/images/edits"
 		prompt = fmt.Sprintf("Edit the first attached image with GPT Image 2. Size: %s. Instructions: %s. Preserve everything not requested to change. Return the edited image URL directly.", size, b.Prompt)
 	}
-	res, err := s.chatWithAccount(ctx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: b.Attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
-	if err != nil {
-		writeUpstreamError(w, err)
+	// 画图配额是账号级限制：命中每日上限时轮换到下一个有配额的账号重试，
+	// 而不是直接把错误抛给客户端（客户端显式指定账号时除外）。
+	explicit := firstNonEmpty(b.AccountID, b.User) != ""
+	var res chathub.Result
+	found := false
+	prevID := ""
+	var successAcc auth.AccountToken
+	var lastErr error
+	for attempt := 0; attempt < maxAccountProbe; attempt++ {
+		var acc auth.AccountToken
+		var err error
+		if attempt == 0 {
+			acc, err = s.resolveAccount(firstNonEmpty(b.AccountID, b.User))
+			if err == nil && !explicit && !s.accountPool.ImageGenAvailable(acc.ID) {
+				// 首选账号的画图配额仍在冷却期，直接跳到下一个
+				if next, nerr := s.nextImageGenAccount(acc.ID); nerr == nil {
+					log.Printf("[image-gen] account=%s image quota cooling down; rotating", acc.ID)
+					acc = next
+				}
+			}
+		} else {
+			acc, err = s.nextImageGenAccount(prevID)
+		}
+		if err != nil {
+			if attempt == 0 {
+				writeUpstreamError(w, err)
+				return
+			}
+			if lastErr == nil {
+				lastErr = err
+			}
+			break
+		}
+		prevID = acc.ID
+		if acc.OID == "" || acc.TID == "" {
+			acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
+		}
+		if acc.OID == "" || acc.TID == "" {
+			if attempt == 0 {
+				writeOpenAIError(w, 400, "invalid_request_error", "account missing oid/tid — re-login with PKCE")
+				return
+			}
+			continue
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
+		res, err = s.chatWithAccount(ctx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: b.Attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
+		cancel()
+		if err != nil {
+			lastErr = err
+			if errors.Is(err, chathub.ErrImageLimit) {
+				// 标记该账号画图配额耗尽（冷却到 UTC 明日零点），
+				// 后续画图请求选号时直接跳过它。
+				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			}
+			limited := errors.Is(err, chathub.ErrImageLimit) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests
+			if explicit || !limited {
+				writeUpstreamError(w, err)
+				return
+			}
+			log.Printf("[image-gen] account=%s hit image limit; rotating to next account", acc.ID)
+			continue
+		}
+		if len(res.Images) == 0 {
+			if urls := extractImageURLs(res.RawResult); len(urls) > 0 {
+				res.Images = urls
+			}
+		}
+		if len(res.Images) == 0 {
+			if urls := extractImageURLs(res.Text); len(urls) > 0 {
+				res.Images = urls
+			}
+		}
+		if len(res.Images) == 0 && !explicit && isImageQuotaRefusal(strings.Join([]string{res.Text, res.RawResult}, "\n")) {
+			// 上游以文本拒绝（配额耗尽）而非 429 状态码，同样轮换
+			s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			log.Printf("[image-gen] account=%s quota refusal in text; rotating to next account", acc.ID)
+			continue
+		}
+		found = true
+		successAcc = acc
+		break
+	}
+	if !found {
+		if lastErr == nil {
+			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
+			return
+		}
+		if errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr) {
+			w.Header().Set("Retry-After", "86400")
+			writeOpenAIError(w, http.StatusTooManyRequests, "image_limit_error", "image generation daily limit reached; try again tomorrow")
+			return
+		}
+		writeUpstreamError(w, lastErr)
 		return
 	}
 	log.Printf("[image-gen] conversation=%s images=%d text_len=%d events=%d raw_len=%d", res.ConversationID, len(res.Images), len(res.Text), len(res.Events), len(res.RawResult))
-	if len(res.Images) == 0 {
-		if urls := extractImageURLs(res.RawResult); len(urls) > 0 {
-			res.Images = urls
-		}
-	}
-	if len(res.Images) == 0 {
-		if urls := extractImageURLs(res.Text); len(urls) > 0 {
-			res.Images = urls
-		}
-	}
 	if len(res.Images) == 0 {
 		refusalText := strings.Join([]string{res.Text, res.RawResult}, "\n")
 		if isImageQuotaRefusal(refusalText) {
@@ -136,8 +226,8 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		debug := map[string]any{"text": textPreview, "raw_len": len(res.RawResult), "events": len(res.Events), "images": res.Images, "raw_preview": rawPreview}
-		b, _ := json.Marshal(debug)
-		log.Printf("[image-gen-debug] %s", string(b))
+		dbg, _ := json.Marshal(debug)
+		log.Printf("[image-gen-debug] %s", string(dbg))
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "upstream returned no image resource")
 		return
 	}
@@ -178,9 +268,10 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if designerToken == "" {
-			designerToken, err = s.designerAccessToken(acc)
-			if err != nil {
-				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(err))
+			var derr error
+			designerToken, derr = s.designerAccessToken(successAcc)
+			if derr != nil {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(derr))
 				return
 			}
 		}
@@ -206,7 +297,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	s.usage.record(UsageRecord{
 		Time:         time.Now(),
 		APIKeyPrefix: extractAPIKey(r),
-		AccountEmail: acc.Email,
+		AccountEmail: successAcc.Email,
 		Model:        firstNonEmpty(b.Model, "gpt-image-2"),
 		Endpoint:     endpoint,
 		InputTokens:  EstimateTokens(prompt),
