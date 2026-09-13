@@ -147,6 +147,12 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var designerToken string
+	// 下载阶段使用独立超时：生成可能耗尽大半总预算，若复用同一 ctx，
+	// 慢生成后下载只剩几秒必然超时（对齐 chatui 实测：生成 135s + 下载 15s 失败）。
+	dlTimeout := time.Duration(s.settings.get().ImageTimeoutSeconds) * time.Second
+	if dlTimeout < 90*time.Second {
+		dlTimeout = 90 * time.Second
+	}
 	data := make([]map[string]string, 0, len(images))
 	for _, sourceURL := range images {
 		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
@@ -177,7 +183,9 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		imageData, contentType, err := downloadDesignerImage(ctx, sourceURL, designerToken)
+		dlCtx, dlCancel := context.WithTimeout(r.Context(), dlTimeout)
+		imageData, contentType, err := downloadDesignerImage(dlCtx, sourceURL, designerToken)
+		dlCancel()
 		if err != nil {
 			log.Printf("[image-gen-download] err=%v", err)
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", upstreamError(err))
