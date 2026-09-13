@@ -364,6 +364,13 @@ async function send(){
     await genImage(text);return;
   }
   if(!text&&attachments.length===0)return;
+  // 画图意图自动路由：聊天里直接打字要求画图时，走专用图像生成管线
+  // （/api/chatui/images → /v1/images/generations），而非聊天流
+  if(!attachments.length&&looksLikeImageIntent(text)){
+    $('input').value='';autoGrow();
+    toast('检测到画图请求，已使用图像生成');
+    await genImage(text);return;
+  }
   const parts=[];
   if(text)parts.push({type:'text',text});
   for(const a of attachments)parts.push({type:'image_url',image_url:{url:a}});
@@ -381,6 +388,14 @@ async function send(){
   await streamChat({role:'user',content:parts.length===1&&text?text:parts});
 }
 function autoGrow(){const el=$('input');el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px';}
+function looksLikeImageIntent(t){
+  if(!t||t.length>120)return false;
+  if(/^(画|绘|帮我画|给我画|画一|画个|画只|画张|画幅|来张|来一幅|生成(一)?(张|个|幅)?(图片|图像|插画))/.test(t))return true;
+  if(/(生成|制作|来)(一)?(张|个|幅)?(图片|图像|插画)/.test(t))return true;
+  if(/\b(draw|painting|paint)\b/i.test(t)&&/\b(image|picture|photo|drawing|illustration|of)\b/i.test(t))return true;
+  if(/\b(generate|create|make)\b/i.test(t)&&/\b(image|picture|photo|illustration)\b/i.test(t))return true;
+  return false;
+}
 $('input').addEventListener('input',autoGrow);
 $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 
