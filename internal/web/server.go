@@ -2689,6 +2689,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			}
 		}()
 		// one-shot "stream" — emit full content then done
+		if md := s.upstreamImagesToMarkdown("http://"+r.Host, res.Images, acc); md != "" {
+			res.Text += "\n\n" + md
+		}
 		chunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",
@@ -2723,12 +2726,10 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	content := any(res.Text)
 	if len(res.Images) > 0 {
-		parts := []any{map[string]any{"type": "text", "text": res.Text}}
-		for _, u := range res.Images {
-			du, _ := downloadImageAsDataURIWithToken(u, acc.AccessToken)
-			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": du}})
+		if md := s.upstreamImagesToMarkdown("http://"+r.Host, res.Images, acc); md != "" {
+			res.Text += "\n\n" + md
 		}
-		content = parts
+		content = res.Text
 	}
 	assistant := map[string]any{
 		"role":    "assistant",

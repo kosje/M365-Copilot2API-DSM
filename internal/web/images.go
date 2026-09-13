@@ -559,3 +559,45 @@ func downloadImageAsDataURIWithToken(url, token string) (string, error) {
 	log.Printf("[image-download] ok url=%s ct=%s size=%d", urlPreview, ct, len(b64))
 	return "data:" + ct + ";base64," + b64, nil
 }
+
+// upstreamImagesToMarkdown 把聊天回复里上游生成的图片转成 markdown 追加到回复文本：
+//   - 下载成功：落盘为本地缓存文件，返回 ![生成图片 N](baseURL/api/chatui/file/{id})
+//   - 下载失败（设备可能无代理直连图片 CDN）：返回可点击的上游下载链接，由用户自行下载
+//
+// 与 /v1/images/generations 的兜底语义一致，但以 markdown 形式随聊天流返回。
+func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc auth.AccountToken) string {
+	var b strings.Builder
+	idx := 0
+	for _, raw := range urls {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			continue
+		}
+		idx++
+		// data URI：直接解码落盘
+		if strings.HasPrefix(strings.ToLower(u), "data:image/") {
+			if _, payload, ok := strings.Cut(u, ","); ok {
+				if data, err := base64.StdEncoding.DecodeString(payload); err == nil && len(data) > 0 {
+					if id, serr := s.chatUI.saveImage(data, "image/png"); serr == nil {
+						b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
+						continue
+					}
+				}
+			}
+			continue
+		}
+		// 带上游 token 下载图片字节
+		b64, ct, err := downloadImageAsBase64WithToken(u, acc.AccessToken)
+		if err == nil {
+			if data, derr := base64.StdEncoding.DecodeString(b64); derr == nil && len(data) > 0 {
+				if id, serr := s.chatUI.saveImage(data, ct); serr == nil {
+					b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
+					continue
+				}
+			}
+		}
+		log.Printf("[chat-image-download] err=%v (fallback to upstream URL)", err)
+		b.WriteString(fmt.Sprintf("\n⚠️ 图片 %d 已生成，但服务器下载图片失败（设备可能无法直连图片 CDN，需要代理）。请自行点击链接下载：[下载图片 %d](%s)", idx, idx, u))
+	}
+	return strings.TrimSpace(b.String())
+}
