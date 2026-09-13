@@ -72,7 +72,7 @@ M365_LISTEN=0.0.0.0:8080 M365_DATA_DIR=./data M365_ADMIN_PASSWORD='your-password
 
 ## 3. 桌面图标入口
 
-安装后在飞牛桌面出现 **M365 Copilot2API** 图标（如未出现，重启一次 App Center 服务或重新安装应用）。
+安装后在飞牛桌面出现 **Copilot2API** 图标（微软 Copilot 官方图标；如未出现，重启一次 App Center 服务或重新安装应用）。
 
 点击图标的行为：飞牛按 `{协议}://{你当前浏览器访问飞牛所用的域名或 IP}:{8080}/` 拼接跳转，因此：
 
