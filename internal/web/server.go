@@ -34,6 +34,18 @@ type pendingPKCE struct {
 	RedirectURI string
 }
 
+type pendingDeviceCode struct {
+	DeviceCode string
+	UserCode   string
+	URI        string
+	Message    string
+	Interval   int
+	Created    time.Time
+	Status     string
+	Account    any
+	Error      string
+}
+
 func (s *Server) getRateLimitCooldown() time.Duration {
 	secs := s.settings.get().RateLimitCooldownSeconds
 	if secs < 5 {
@@ -155,6 +167,7 @@ type Server struct {
 	accountPool          *accountHealth
 	accountConcurrency   *accountConcurrency
 	pkce                 map[string]pendingPKCE
+	deviceCodes          map[string]pendingDeviceCode
 	chat                 *chathub.Client
 	proxyClients         sync.Map
 	sessions             *sessionStore
@@ -250,6 +263,7 @@ func New() (*Server, error) {
 		accountPool:        newAccountHealth(),
 		accountConcurrency: newAccountConcurrency(),
 		pkce:               map[string]pendingPKCE{},
+		deviceCodes:        map[string]pendingDeviceCode{},
 		chat: func() *chathub.Client {
 			c := chathub.NewClient()
 			c.Trace = func(meta map[string]any) { fmt.Printf("[multimodal-trace] %s\\n", mustJSON(meta)) }
@@ -452,6 +466,8 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/auth/start", s.startPKCE)
 	m.HandleFunc("/api/auth/status", s.pkceStatus)
 	m.HandleFunc("/api/auth/callback", s.callbackPKCE)
+	m.HandleFunc("/api/auth/device/start", s.startDeviceCode)
+	m.HandleFunc("/api/auth/device/status", s.statusDeviceCode)
 	m.HandleFunc("/api/chat", s.chatOnce)
 	m.HandleFunc("/api/chat/stream", s.chatStream)
 	m.HandleFunc("/api/conversations", s.conversations)
@@ -505,7 +521,7 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" {
+		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/auth/device/start" || r.URL.Path == "/api/auth/device/status" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1047,12 +1063,12 @@ func (s *Server) startPKCE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := hex.EncodeToString(b)
-	// Resolve the redirect URI. When the admin UI is reached via loopback
-	// (or an explicit M365_BROWSER_REDIRECT_URI points at our /api/auth/callback),
-	// Microsoft redirects straight back to this server and the code is captured
-	// automatically — no manual copy/paste of the callback URL. Otherwise we
-	// keep the nativeclient flow (manual paste) so LAN access still works.
-	redirectURI, auto := resolvePKCERedirectURI(r)
+	// Resolve the redirect URI. Default mode auto-captures the code by redirecting
+	// Microsoft straight back to this server's /api/auth/callback. The caller can
+	// force the legacy nativeclient/manual-paste flow with ?mode=manual (useful when
+	// the Entra app cannot register a custom Web redirect URI).
+	forceManual := r.URL.Query().Get("mode") == "manual"
+	redirectURI, auto := resolvePKCERedirectURI(r, forceManual)
 	s.mu.Lock()
 	s.pkce[state] = pendingPKCE{Verifier: v, Created: time.Now(), Status: "pending", RedirectURI: redirectURI}
 	s.mu.Unlock()
@@ -1060,7 +1076,7 @@ func (s *Server) startPKCE(w http.ResponseWriter, r *http.Request) {
 	if auto {
 		note = "Automatic capture enabled: Microsoft redirects the code to " + redirectURI +
 			". Register this exact URI as a Web redirect URI in your Microsoft Entra app registration. " +
-			"Set M365_FORCE_NATIVECLIENT=1 to fall back to manual paste."
+			"Use ?mode=manual to fall back to nativeclient paste."
 	} else {
 		note = "Manual flow: after login, copy the final URL/code from the address bar into /api/auth/callback."
 	}
@@ -1083,7 +1099,10 @@ func (s *Server) startPKCE(w http.ResponseWriter, r *http.Request) {
 
 // resolvePKCERedirectURI returns the OAuth redirect URI and whether the flow can
 // complete automatically (code captured by our own /api/auth/callback).
-func resolvePKCERedirectURI(r *http.Request) (string, bool) {
+func resolvePKCERedirectURI(r *http.Request, forceManual bool) (string, bool) {
+	if forceManual {
+		return auth.DefaultRedirectURI, false
+	}
 	// Explicit override (env) wins; any redirect that lands on our own
 	// callback endpoint is treated as auto-captured.
 	cfg := auth.RedirectURI()
@@ -1151,6 +1170,100 @@ func (s *Server) pkceStatus(w http.ResponseWriter, r *http.Request) {
 		out["error"] = p.Error
 	}
 	jsonOut(w, out)
+}
+
+/* ---------- device-code flow (no redirect URI registration required) ---------- */
+
+func (s *Server) startDeviceCode(w http.ResponseWriter, r *http.Request) {
+	dev, err := auth.StartDeviceCode()
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "auth_error", err.Error())
+		return
+	}
+	id := uuid.New().String()
+	s.mu.Lock()
+	s.deviceCodes[id] = pendingDeviceCode{
+		DeviceCode: dev.DeviceCode,
+		UserCode:   dev.UserCode,
+		URI:        dev.VerificationURI,
+		Message:    dev.Message,
+		Interval:   dev.Interval,
+		Created:    time.Now(),
+		Status:     "pending",
+	}
+	s.mu.Unlock()
+	jsonOut(w, map[string]any{
+		"status":           "device_code_ready",
+		"id":               id,
+		"user_code":        dev.UserCode,
+		"verification_uri": dev.VerificationURI,
+		"message":          dev.Message,
+		"interval":         dev.Interval,
+		"expires_in":       dev.ExpiresIn,
+	})
+}
+
+func (s *Server) statusDeviceCode(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "missing id")
+		return
+	}
+	s.mu.Lock()
+	p, ok := s.deviceCodes[id]
+	if ok && time.Since(p.Created) > 15*time.Minute {
+		delete(s.deviceCodes, id)
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		jsonOut(w, map[string]any{"status": "expired"})
+		return
+	}
+	if p.Status == "authenticated" {
+		jsonOut(w, map[string]any{"status": "authenticated", "account": p.Account})
+		return
+	}
+	if p.Status == "error" {
+		jsonOut(w, map[string]any{"status": "error", "error": p.Error})
+		return
+	}
+	// still pending: poll Microsoft once per frontend call
+	tok, done, err := auth.PollDeviceCode(p.DeviceCode)
+	if err != nil {
+		s.mu.Lock()
+		p.Status = "error"
+		p.Error = err.Error()
+		s.deviceCodes[id] = p
+		s.mu.Unlock()
+		jsonOut(w, map[string]any{"status": "error", "error": err.Error()})
+		return
+	}
+	if !done {
+		jsonOut(w, map[string]any{"status": "pending", "user_code": p.UserCode, "verification_uri": p.URI, "interval": p.Interval})
+		return
+	}
+	acc, err := s.tokens.Upsert(tok)
+	if err != nil {
+		s.mu.Lock()
+		p.Status = "error"
+		p.Error = err.Error()
+		s.deviceCodes[id] = p
+		s.mu.Unlock()
+		jsonOut(w, map[string]any{"status": "error", "error": err.Error()})
+		return
+	}
+	s.mu.Lock()
+	p.Status = "authenticated"
+	p.Account = map[string]any{"id": acc.ID, "email": acc.Email, "displayName": acc.DisplayName, "status": acc.Status, "oid": acc.OID, "tid": acc.TID}
+	s.deviceCodes[id] = p
+	s.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		s.refreshAllMetering(ctx)
+	}()
+	jsonOut(w, map[string]any{"status": "authenticated", "account": p.Account})
 }
 
 func (s *Server) callbackPKCE(w http.ResponseWriter, r *http.Request) {

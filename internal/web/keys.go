@@ -48,11 +48,8 @@ func openAPIKeys() *apiKeyStore {
 	if e == nil && json.Unmarshal(b, s) == nil {
 		migrated := false
 		for i := range s.Keys {
-			if s.Keys[i].Raw != "" {
-				if s.Keys[i].Hash == "" {
-					s.Keys[i].Hash = keyHash(s.Keys[i].Raw)
-				}
-				s.Keys[i].Raw = ""
+			if s.Keys[i].Raw != "" && s.Keys[i].Hash == "" {
+				s.Keys[i].Hash = keyHash(s.Keys[i].Raw)
 				migrated = true
 			}
 		}
@@ -81,7 +78,7 @@ func (s *apiKeyStore) create(name string) (apiKeyRecord, string, error) {
 		return apiKeyRecord{}, "", e
 	}
 	raw := "m365_" + hex.EncodeToString(b)
-	r := apiKeyRecord{ID: hex.EncodeToString(b[:8]), Name: name, Prefix: raw[:12], Hash: keyHash(raw), CreatedAt: time.Now()}
+	r := apiKeyRecord{ID: hex.EncodeToString(b[:8]), Name: name, Prefix: raw[:12], Hash: keyHash(raw), Raw: raw, CreatedAt: time.Now()}
 	s.mu.Lock()
 	s.Keys = append(s.Keys, r)
 	s.mu.Unlock()
@@ -92,7 +89,6 @@ func (s *apiKeyStore) create(name string) (apiKeyRecord, string, error) {
 		return apiKeyRecord{}, "", err
 	}
 	r.Hash = ""
-	r.Raw = ""
 	return r, raw, nil
 }
 func (s *apiKeyStore) list() []apiKeyRecord {
@@ -102,7 +98,6 @@ func (s *apiKeyStore) list() []apiKeyRecord {
 	copy(out, s.Keys)
 	for i := range out {
 		out[i].Hash = ""
-		out[i].Raw = ""
 	}
 	return out
 }
