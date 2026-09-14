@@ -74,3 +74,11 @@ sessions.json
 fnos_*.py
 *_resp.json
 *_body.json
+
+# gh-pages 分支的 worktree（套件来源 feed），内容属于另一个分支
+/.gh-pages/
+# 打包中间产物
+/.spkbuild/
+/.spkbin/
+/*.spk
+/checksums.txt
