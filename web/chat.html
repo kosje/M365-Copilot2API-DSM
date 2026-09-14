@@ -930,6 +930,11 @@ $('input').addEventListener('paste',e=>{
   }
   if(files.length){e.preventDefault();addFiles(files);}
 });
+// 📎 文件选择：change 事件绑定（v1.5.0 起缺失导致选完文件无反应，仅粘贴路径生效）
+$('fileInput').addEventListener('change',e=>{
+  const files=e.target.files;
+  if(files&&files.length)addFiles(files);
+});
 
 async function streamChat(opts){
   opts=opts||{};
