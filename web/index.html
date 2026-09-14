@@ -1419,20 +1419,29 @@ async function checkUpdate(){
   }
   if(!cur||cur==='dev')return;
   try{
-    const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
-    const latest=String(rel.tag_name||'').replace(/^v/,'');
-    if(latest&&cmpVer(latest,cur)>0){
+    // server-side check (/api/update): mirror fallback + cache, works without
+    // browser access to api.github.com (the old browser-direct probe silently
+    // failed behind the GFW and the banner never showed).
+    const u=await fetch('/api/update',{cache:'no-store'}).then(r=>r.json());
+    const latest=String(u.latest||'').replace(/^v/,'');
+    if(u.updateAvailable&&latest&&cmpVer(latest,cur)>0){
       el.textContent='';
       const a=document.createElement('a');
-      a.href=(rel.html_url)||('https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest);
+      a.href='https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest;
       a.target='_blank';a.rel='noopener';
       a.textContent='v'+cur+' → v'+latest+' 可更新';
-      a.title='打开 GitHub Release 下载最新 fpk';
+      a.title='查看 GitHub Release 更新说明';
       a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';
       el.appendChild(a);
+      el.appendChild(document.createTextNode(' · '));
+      const btn=document.createElement('button');
+      btn.className='btn-sm btn primary';btn.textContent='⚡ 一键更新';
+      btn.title='服务端下载官方二进制并原地重启（数据与端口保留）';
+      btn.onclick=()=>applySelfUpdate(latest,btn);
+      el.appendChild(btn);
       el.appendChild(document.createTextNode(' · '));el.appendChild(ghLink());
     }
-  }catch(e){/* GitHub 不可达：仅显示当前版本 + GitHub 链接 */}
+  }catch(e){/* 检测失败：仅显示当前版本 + GitHub 链接 */}
 }
 document.addEventListener('DOMContentLoaded', checkUpdate);
 

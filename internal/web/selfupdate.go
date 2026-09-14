@@ -391,10 +391,10 @@ func downloadToFile(url, dest string) error {
 func (s *Server) StartUpdateChecker() {
 	go func() {
 		// initial check shortly after boot so the UI banner is fresh
-		time.Sleep(2 * time.Minute)
+		time.Sleep(45 * time.Second)
 		s.periodicUpdateCheck()
 		for {
-			time.Sleep(6 * time.Hour)
+			time.Sleep(2 * time.Hour)
 			s.periodicUpdateCheck()
 		}
 	}()
