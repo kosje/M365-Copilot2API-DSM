@@ -14,19 +14,40 @@ func TestCompactToolResultKeepsHeadTailAndError(t *testing.T) {
 	}
 }
 
-func TestAgentLedgerDetectsRepeatedFailure(t *testing.T) {
-	msgs := []oaiMsg{
-		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c1", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
-		{Role: "tool", ToolCallID: "c1", Content: "exit code 1: failed"},
-		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c2", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
-		{Role: "tool", ToolCallID: "c2", Content: "exit code 1: failed"},
+// failedCallPair builds one assistant tool call plus its failing result.
+func failedCallPair(id string) []oaiMsg {
+	return []oaiMsg{
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": id, "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: id, Content: "exit code 1: failed"},
 	}
-	l := buildAgentLedger(msgs)
+}
+
+func TestAgentLedgerDetectsRepeatedFailure(t *testing.T) {
+	// Two identical failures are ordinary: an agent narrowing something down
+	// re-runs the same probe, and the second identical error is often what
+	// proves the approach is dead rather than a sign of a runaway loop.
+	// Ending the turn there is what made long tasks stop halfway and need a
+	// nudge to resume, so the limit now trips on the third.
+	two := append(failedCallPair("c1"), failedCallPair("c2")...)
+	if l := buildAgentLedger(two); l.RepeatedFailure {
+		t.Fatalf("two identical failures must not end the turn: %+v", l)
+	}
+
+	three := append(two, failedCallPair("c3")...)
+	l := buildAgentLedger(three)
 	if !l.RepeatedFailure {
-		t.Fatalf("expected repeated failure: %+v", l)
+		t.Fatalf("expected repeated failure at three: %+v", l)
 	}
 	if !strings.Contains(l.RouterContext(), "change strategy") {
 		t.Fatal(l.RouterContext())
+	}
+}
+
+func TestAgentLedgerLoopThresholdsAreConfigurable(t *testing.T) {
+	t.Setenv("M365_LOOP_FAILURE_LIMIT", "2")
+	two := append(failedCallPair("c1"), failedCallPair("c2")...)
+	if l := buildAgentLedger(two); !l.RepeatedFailure {
+		t.Fatalf("env override back to 2 should trip on two failures: %+v", l)
 	}
 }
 
