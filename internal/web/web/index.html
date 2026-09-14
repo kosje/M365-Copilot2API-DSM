@@ -694,7 +694,7 @@ if (response.output_text) {
       <!-- Settings -->
       <section id="page-settings" style="display:none">
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
-        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label">Quota refresh interval (seconds, 0=off)</label><input class="form-input" id="setQuotaRefresh" type="number" placeholder="300"><p class="form-hint">自动探测并刷新所有账号的 M365 额度（剩余用量）。默认 300 秒；设为 0 关闭定时刷新。账号新增时也会立即刷新一次。</p></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
+        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label">Quota refresh interval (seconds, 0=off)</label><input class="form-input" id="setQuotaRefresh" type="number" placeholder="300"><p class="form-hint">自动探测并刷新所有账号的 M365 额度（剩余用量）。默认 300 秒；设为 0 关闭定时刷新。账号新增时也会立即刷新一次。</p></div><div class="form-group"><label class="form-label">Token 主动刷新间隔（秒，0=off）</label><input class="form-input" id="setTokenRefresh" type="number" placeholder="21600"><p class="form-hint">Token 即将到期前主动刷新（默认 21600 秒 = 6 小时），避免高峰期集中失效。刷新失败会触发告警通知。</p></div><div class="form-group"><label class="form-label"><input type="checkbox" id="setAutoCompact" style="margin-right:6px">启用 Auto-Compact（上下文自动压缩）</label><p class="form-hint">请求超过上下文预算时，把被挤掉的历史用一次上游调用压缩成摘要并注入回上下文（而不是静默丢弃），适合整站审计等超长任务。响应头 <code>X-M365-Context-Compacted: 1</code> 标识生效。</p></div><div class="form-group"><label class="form-label">Auto-Compact 最小压缩 token 数</label><input class="form-input" id="setCompactMin" type="number" placeholder="4000"><p class="form-hint">被丢弃历史低于该值时直接截断，不消耗一次上游调用做摘要。默认 4000。</p></div><div class="form-group"><label class="form-label">模型别名映射（每行一条：别名=目标模型）</label><textarea class="form-input" id="setAliases" rows="4" placeholder="gpt-4o=gpt-5.6-sol&#10;claude-sonnet-4=gpt-5.6-luna"></textarea><p class="form-hint">客户端写死 gpt-4o / claude-sonnet-4 等模型名时自动映射到已配置的公开模型，无需改客户端。目标必须是「模型管理」里已存在的公开模型。</p></div><div class="form-group"><label class="form-label">告警 Webhook URL（留空 = 关闭）</label><input class="form-input" id="setAlertUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hint/... 或 https://api.day.app/你的key 或 https://api.telegram.org/bot&lt;token&gt;/sendMessage"><p class="form-hint">支持飞书 bot / Bark / Telegram / 通用 JSON。触发事件：账号鉴权失败、Token 刷新失败、密钥配额耗尽、错误率超阈值。同类告警 1 小时内只发一次。</p></div><div class="form-group"><label class="form-label">Telegram Chat ID（仅 Telegram webhook 需要）</label><input class="form-input" id="setAlertChatId" placeholder="-1001234567890"></div><div class="form-group"><label class="form-label">错误率告警阈值（%，0=off）</label><input class="form-input" id="setAlertRate" type="number" min="0" max="100" placeholder="30"><p class="form-hint">最近 60 分钟错误率超过该值（且样本 ≥ 20）时告警。每 10 分钟检查一次。</p></div><div class="form-group"><button class="btn" onclick="testAlertWebhook()">发送测试通知</button></div><div class="form-group"><label class="form-label">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
     </div>
   </main>
@@ -726,7 +726,7 @@ if (response.output_text) {
 <div class="modal-overlay" id="editKeyModal">
   <div class="modal">
     <h3>编辑 API Key</h3>
-    <p class="subtitle">修改密钥名称与额度限制</p>
+    <p class="subtitle">修改密钥名称、额度、限速与访问限制</p>
     <div class="form-group">
       <label class="form-label">名称</label>
       <input class="form-input" id="editKeyName">
@@ -738,6 +738,22 @@ if (response.output_text) {
     <div class="form-group">
       <label class="form-label">总额度（累计请求数，0 = 不限）</label>
       <input class="form-input" id="editKeyTotal" type="number" min="0" value="0">
+    </div>
+    <div class="form-group">
+      <label class="form-label">每分钟限速（请求数 / 分钟，0 = 不限）</label>
+      <input class="form-input" id="editKeyRate" type="number" min="0" value="0">
+    </div>
+    <div class="form-group">
+      <label class="form-label">过期时间（留空 = 永不过期）</label>
+      <input class="form-input" id="editKeyExpires" type="datetime-local">
+    </div>
+    <div class="form-group">
+      <label class="form-label">模型白名单（逗号分隔，留空 = 全部模型）</label>
+      <input class="form-input" id="editKeyModels" placeholder="gpt-5.6-sol, gpt-5.6-luna">
+    </div>
+    <div class="form-group">
+      <label class="form-label">IP 白名单（逗号分隔，支持 CIDR，留空 = 不限制）</label>
+      <input class="form-input" id="editKeyIPs" placeholder="192.168.1.10, 10.0.0.0/8">
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeEditKeyModal()">取消</button>
@@ -1553,7 +1569,7 @@ async function loadKeys(){
       tr.querySelector('b').textContent=x.name||'';
       tr.querySelector('.key-created').textContent=new Date(x.createdAt).toLocaleString();
       tr.querySelector('.key-last-used').textContent=x.lastUsedAt?new Date(x.lastUsedAt).toLocaleString():'-';
-      tr.querySelector('.key-quota').textContent=`${x.dailyQuota>0?'日 '+x.dailyQuota:'日∞'} · ${x.totalQuota>0?'总 '+x.totalQuota:'总∞'}`;
+      tr.querySelector('.key-quota').textContent=`${x.dailyQuota>0?'日 '+x.dailyQuota:'日∞'} · ${x.totalQuota>0?'总 '+x.totalQuota:'总∞'}${x.perMinuteRate>0?' · '+x.perMinuteRate+'/分':''}${x.expiresAt?' · 至 '+new Date(x.expiresAt).toLocaleDateString():''}${(x.modelWhitelist&&x.modelWhitelist.length)?' · 限定模型':''}${(x.ipWhitelist&&x.ipWhitelist.length)?' · IP白名单':''}`;
       const codeEl=tr.querySelector('.key-raw');
       const revBtn=tr.querySelector('[data-key-action="reveal"]');
       let shown=false;
@@ -1568,7 +1584,7 @@ async function loadKeys(){
       });
       tr.querySelector('[data-key-action="copy"]').addEventListener('click',()=>safeCopyText(raw,'API Key 已复制'));
       tr.querySelector('[data-key-action="use"]').addEventListener('click',()=>openUseKey(x.id));
-      tr.querySelector('[data-key-action="edit"]').addEventListener('click',()=>editKey(x.id,x.name,x.dailyQuota||0,x.totalQuota||0));
+      tr.querySelector('[data-key-action="edit"]').addEventListener('click',()=>editKey(x));
       tr.querySelector('[data-key-action="toggle"]').addEventListener('click',()=>toggleKey(x.id,x.revoked));
       tr.querySelector('[data-key-action="delete"]').addEventListener('click',()=>revokeKey(x.id));
       rows.append(tr);
@@ -1587,12 +1603,38 @@ function safeCopyText(text,msg){
 }
 
 let editKeyId=null;
-function editKey(id,name,daily,total){editKeyId=id;$('editKeyName').value=name;$('editKeyDaily').value=daily||0;$('editKeyTotal').value=total||0;$('editKeyModal').classList.add('open');setTimeout(()=>$('editKeyName').focus(),50);}
-function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;}
+function editKey(rec){
+  rec=rec||{};
+  editKeyId=rec.id;
+  $('editKeyName').value=rec.name||'';
+  $('editKeyDaily').value=rec.dailyQuota||0;
+  $('editKeyTotal').value=rec.totalQuota||0;
+  $('editKeyRate').value=rec.perMinuteRate||0;
+  $('editKeyExpires').value=rec.expiresAt?new Date(rec.expiresAt).toISOString().slice(0,16):'';
+  $('editKeyModels').value=(rec.modelWhitelist||[]).join(', ');
+  $('editKeyIPs').value=(rec.ipWhitelist||[]).join(', ');
+  editKeyRecord=rec;
+  $('editKeyModal').classList.add('open');
+  setTimeout(()=>$('editKeyName').focus(),50);
+}
+function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;editKeyRecord=null;}
+let editKeyRecord=null;
 async function saveEditKey(){
   const name=$('editKeyName').value.trim();
   if(!name)return showNotice('名称不能为空','error');
-  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id:editKeyId,name,dailyQuota:Math.max(0,parseInt($('editKeyDaily').value)||0),totalQuota:Math.max(0,parseInt($('editKeyTotal').value)||0)})});closeEditKeyModal();showNotice('已更新','success');loadKeys();}
+  const payload={
+    id:editKeyId,
+    name,
+    dailyQuota:Math.max(0,parseInt($('editKeyDaily').value)||0),
+    totalQuota:Math.max(0,parseInt($('editKeyTotal').value)||0),
+    perMinuteRate:Math.max(0,parseInt($('editKeyRate').value)||0),
+    modelWhitelist:$('editKeyModels').value.split(',').map(s=>s.trim()).filter(Boolean),
+    ipWhitelist:$('editKeyIPs').value.split(',').map(s=>s.trim()).filter(Boolean)
+  };
+  const expVal=$('editKeyExpires').value;
+  if(expVal){payload.expiresAt=new Date(expVal).toISOString();}
+  else{payload.clearExpires=true;}
+  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify(payload)});closeEditKeyModal();showNotice('已更新','success');loadKeys();}
   catch(e){showNotice(e.message,'error');}
 }
 async function toggleKey(id,revoked){
@@ -1822,6 +1864,7 @@ let useKeyId='',useKeyPrefix='',modelTestKey='';const ukeClients=[
   {id:'codex',label:'Codex CLI'},
   {id:'claude',label:'Claude Code'},
   {id:'opencode',label:'OpenCode'},
+  {id:'cline',label:'Cline / Roo Code'},
 ];
 const ukeOs=[{id:'unix',label:'macOS / Linux'},{id:'win',label:'Windows'}];
 let ukeClient='domestic',ukeOsSel='unix';
@@ -1926,6 +1969,20 @@ goals = true`;
   }
 }`;
     html=ukeFile('opencode.json',cfg);
+  }else if(ukeClient==='cline'){
+    const steps=`在 VS Code 中打开 Cline（或 Roo Code）扩展设置面板，按以下值填写：
+Provider: OpenAI Compatible
+Base URL: ${base}/v1
+API Key: ${key}
+Model ID: auto
+勾选 "Use POST" 与流式输出即可。`;
+    html=`<div style="font-size:12.5px;line-height:1.7;color:var(--muted);margin-bottom:10px">Cline / Roo Code 为 VS Code 扩展，无独立配置文件，直接在扩展设置界面填入：</div>`;
+    html+=ukeFile('Cline 设置界面填写项',steps);
+    html+=ukeFile('settings.json（可选 · 手动方式）',`{
+  "cline.apiProvider": "openai-compatible",
+  "cline.openAiBaseUrl": "${base}/v1",
+  "cline.openAiModelId": "auto"
+}`);
   }
   $('useKeyFiles').innerHTML=html;
 }
@@ -2109,6 +2166,13 @@ async function loadSettings(){
     const v=d.settings||{};
     $('setTimeout').value=v.chatTimeoutSeconds||120;
     $('setQuotaRefresh').value=v.quotaRefreshIntervalSeconds||300;
+    $('setTokenRefresh').value=v.tokenRefreshIntervalSeconds||0;
+    $('setAutoCompact').checked=!!v.enableAutoCompact;
+    $('setCompactMin').value=v.autoCompactMinTokens||4000;
+    $('setAliases').value=Object.entries(v.modelAliases||{}).map(([k,t])=>k+'='+t).join('\n');
+    $('setAlertUrl').value=v.alertWebhookUrl||'';
+    $('setAlertChatId').value=v.alertTelegramChatId||'';
+    $('setAlertRate').value=v.alertErrorRatePercent||0;
   }catch(e){showNotice(e.message,'error');}
 }
 async function saveSettings(){
@@ -2118,9 +2182,27 @@ async function saveSettings(){
     const body={};
     if(timeout)body.chatTimeoutSeconds=parseInt(timeout);
     if(qr!=='')body.quotaRefreshIntervalSeconds=parseInt(qr);
+    const tr=$('setTokenRefresh').value.trim();
+    if(tr!=='')body.tokenRefreshIntervalSeconds=parseInt(tr)||0;
+    body.enableAutoCompact=$('setAutoCompact').checked;
+    const cm=$('setCompactMin').value.trim();
+    if(cm!=='')body.autoCompactMinTokens=parseInt(cm)||0;
+    const aliases={};
+    $('setAliases').value.split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>{
+      const i=l.indexOf('=');if(i>0){const k=l.slice(0,i).trim().toLowerCase();const t=l.slice(i+1).trim();if(k&&t)aliases[k]=t;}
+    });
+    body.modelAliases=aliases;
+    body.alertWebhookUrl=$('setAlertUrl').value.trim();
+    body.alertWebhookType='auto';
+    body.alertTelegramChatId=$('setAlertChatId').value.trim();
+    body.alertErrorRatePercent=Math.min(100,Math.max(0,parseInt($('setAlertRate').value)||0));
     await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
     showNotice('设置已保存','success');
   }catch(e){showNotice(e.message,'error');}
+}
+async function testAlertWebhook(){
+  try{await api('/api/admin/alerts/test',{method:'POST'});showNotice('测试通知已发送，请查收','success');}
+  catch(e){showNotice(e.message,'error');}
 }
 
 setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);

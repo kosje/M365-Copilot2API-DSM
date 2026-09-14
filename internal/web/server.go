@@ -55,7 +55,10 @@ func (s *Server) getRateLimitCooldown() time.Duration {
 }
 
 func (s *Server) featureFlags() chathub.FeatureFlags {
-	cfg := s.settings.get()
+	var cfg runtimeSettings
+	if s.settings != nil {
+		cfg = s.settings.get()
+	}
 	return chathub.FeatureFlags{
 		MemoryV2:             cfg.EnableMemoryV2,
 		DeepWork:             cfg.EnableDeepWork,
@@ -180,6 +183,7 @@ type Server struct {
 	mustChangePassword   bool
 	loginAttempts        map[string]loginAttempt
 	apiKeys              *apiKeyStore
+	keyRate              *keyRateWindow
 	debug                *debugStore
 	settings             *settingsStore
 	responseMu           sync.Mutex
@@ -279,6 +283,7 @@ func New() (*Server, error) {
 		mustChangePassword:   mustChange,
 		loginAttempts:        map[string]loginAttempt{},
 		apiKeys:              openAPIKeys(),
+		keyRate:              newKeyRateWindow(),
 		debug:                openDebugStore(),
 		settings:             openSettingsStore(),
 		responseMessages:     map[string]map[string]*RespNode{},
@@ -369,7 +374,11 @@ func (s *Server) refreshAccountMetering(ctx context.Context, accountID string) {
 	if !s.accountAvailable(accountID) {
 		return
 	}
-	cfg := s.settings.get()
+	// Nil-safe: a bare test Server may not carry a settings store.
+	var cfg runtimeSettings
+	if s.settings != nil {
+		cfg = s.settings.get()
+	}
 	req := chathub.Request{
 		Text:         rateLimitProbePrompt,
 		Tone:         "magic",
@@ -484,6 +493,9 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/stats/reset", s.handleCacheStatsReset)
 	m.HandleFunc("/api/usage", s.adminUsage)
 	m.HandleFunc("/api/usage/logs", s.adminUsageLogs)
+	m.HandleFunc("/api/admin/alerts/test", s.adminAlertTest)
+	m.HandleFunc("/api/admin/audit", s.adminAudit)
+	m.HandleFunc("/metrics", s.metricsHandler)
 	m.HandleFunc("/api/plugins", s.plugins)
 	// Chat UI ("测试或轻应用")
 	m.HandleFunc("/chat", s.chatPage)
@@ -504,6 +516,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/v1/mcp/message", mcp.HandleMessage)
 	m.HandleFunc("/v1/mcp/tools", mcp.HandleToolsList)
 	m.HandleFunc("/v1/messages", s.anthropicMessages)
+	m.HandleFunc("/v1/messages/count_tokens", s.anthropicCountTokens)
 	m.HandleFunc("/v1/images/generations", s.imageGenerations)
 	m.HandleFunc("/v1/images/edits", s.imageEdits)
 	m.HandleFunc("/v1/images/files/", s.generatedImageFile)
@@ -521,7 +534,7 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/auth/device/start" || r.URL.Path == "/api/auth/device/status" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" {
+		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/auth/device/start" || r.URL.Path == "/api/auth/device/status" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -537,17 +550,40 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 				writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "valid API key required")
 				return
 			}
-			// Per-key quotas (0 = unlimited). Counted from the usage log.
-			if rec, ok := s.apiKeys.lookupRaw(raw); ok && s.usage != nil && (rec.DailyQuota > 0 || rec.TotalQuota > 0) {
-				p8 := raw
-				if len(p8) > 8 {
-					p8 = p8[:8]
-				}
-				today, total := s.usage.countForKey(p8)
-				if (rec.DailyQuota > 0 && int64(today) >= rec.DailyQuota) || (rec.TotalQuota > 0 && int64(total) >= rec.TotalQuota) {
-					writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "API key quota exceeded (daily or total request limit reached)")
+			rec, recOK := s.apiKeys.lookupRaw(raw)
+			if recOK {
+				// Key expiry.
+				if rec.ExpiresAt != nil && time.Now().After(*rec.ExpiresAt) {
+					writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "API key expired")
 					return
 				}
+				// Per-key IP whitelist (exact IPs or CIDR ranges).
+				if len(rec.IPWhitelist) > 0 && !ipAllowed(clientIP(r), rec.IPWhitelist) {
+					writeOpenAIError(w, http.StatusForbidden, "auth_error", "client IP is not whitelisted for this API key")
+					return
+				}
+				// Per-minute rate limit.
+				if rec.PerMinuteRate > 0 && s.keyRate != nil && !s.keyRate.allow(rec.ID, rec.PerMinuteRate) {
+					w.Header().Set("Retry-After", "60")
+					writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "per-minute rate limit exceeded for this API key")
+					return
+				}
+				// Per-key quotas (0 = unlimited). Counted from the usage log.
+				if s.usage != nil && (rec.DailyQuota > 0 || rec.TotalQuota > 0) {
+					p8 := raw
+					if len(p8) > 8 {
+						p8 = p8[:8]
+					}
+					today, total := s.usage.countForKey(p8)
+					if (rec.DailyQuota > 0 && int64(today) >= rec.DailyQuota) || (rec.TotalQuota > 0 && int64(total) >= rec.TotalQuota) {
+						notifyWebhookAlert(alertEventKeyQuota, fmt.Sprintf("API key %s (…%s) hit its quota limit", rec.Name, rec.Prefix), "")
+						writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "API key quota exceeded (daily or total request limit reached)")
+						return
+					}
+				}
+				r2 := r.WithContext(withAPIKeyRecord(r.Context(), rec))
+				next.ServeHTTP(w, r2)
+				return
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -710,6 +746,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 500, "internal_error", e.Error())
 			return
 		}
+		auditLog(r, "key_create", "key id="+rec.ID+" name="+b.Name)
 		jsonOut(w, map[string]any{"key": raw, "record": rec})
 	case http.MethodDelete:
 		id := r.URL.Query().Get("id")
@@ -722,20 +759,45 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 404, "not_found", "key not found")
 			return
 		}
+		auditLog(r, "key_delete", "key id="+id)
 		jsonOut(w, map[string]string{"status": "deleted"})
 	case http.MethodPut:
 		var b struct {
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Revoked    *bool  `json:"revoked"`
-			DailyQuota *int64 `json:"dailyQuota"`
-			TotalQuota *int64 `json:"totalQuota"`
+			ID             string     `json:"id"`
+			Name           string     `json:"name"`
+			Revoked        *bool      `json:"revoked"`
+			DailyQuota     *int64     `json:"dailyQuota"`
+			TotalQuota     *int64     `json:"totalQuota"`
+			PerMinuteRate  *int64     `json:"perMinuteRate"`
+			ExpiresAt      *time.Time `json:"expiresAt"`
+			ClearExpires   bool       `json:"clearExpires"`
+			ModelWhitelist []string   `json:"modelWhitelist"`
+			IPWhitelist    []string   `json:"ipWhitelist"`
 		}
 		if json.NewDecoder(r.Body).Decode(&b) != nil || b.ID == "" {
 			writeOpenAIError(w, 400, "invalid_request_error", "bad json")
 			return
 		}
-		updated, e := s.apiKeys.update(b.ID, b.Name, b.Revoked, b.DailyQuota, b.TotalQuota)
+		opts := keyUpdateOpts{
+			Name:          &b.Name,
+			Revoked:       b.Revoked,
+			DailyQuota:    b.DailyQuota,
+			TotalQuota:    b.TotalQuota,
+			PerMinuteRate: b.PerMinuteRate,
+		}
+		if b.ClearExpires {
+			var nilExpires *time.Time
+			opts.ExpiresAt = &nilExpires
+		} else if b.ExpiresAt != nil {
+			opts.ExpiresAt = &b.ExpiresAt
+		}
+		if b.ModelWhitelist != nil {
+			opts.ModelWhitelist = &b.ModelWhitelist
+		}
+		if b.IPWhitelist != nil {
+			opts.IPWhitelist = &b.IPWhitelist
+		}
+		updated, e := s.apiKeys.update(b.ID, opts)
 		if e != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "internal_error", e.Error())
 			return
@@ -744,6 +806,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 404, "not_found", "key not found")
 			return
 		}
+		auditLog(r, "key_update", "key id="+b.ID)
 		jsonOut(w, map[string]string{"status": "updated"})
 	default:
 		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
@@ -976,6 +1039,7 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	auditLog(r, "account_delete", "account id="+body.ID)
 	jsonOut(w, map[string]string{"status": "deleted"})
 }
 
@@ -1959,6 +2023,16 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if body.Reasoning != nil && strings.TrimSpace(body.Reasoning.Effort) != "" {
 		effort = body.Reasoning.Effort
 	}
+	// Resolve configured model aliases (e.g. gpt-4o -> gpt-5.6-sol) before
+	// tone resolution, and enforce the per-key model whitelist.
+	if resolved := s.settings.resolveModelAlias(body.Model); resolved != body.Model {
+		log.Printf("[model-alias] %s -> %s", body.Model, resolved)
+		body.Model = resolved
+	}
+	if !requestModelAllowed(r, body.Model) {
+		writeOpenAIError(w, http.StatusForbidden, "auth_error", "model is not allowed for this API key")
+		return
+	}
 	tone, toneErr := reasoningTone(body.Model, effort)
 	if toneErr != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", toneErr.Error())
@@ -1983,20 +2057,24 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Context budget sliding window: B = ContextWindow - MaxOutput - 512, atom-aware.
+	// When auto-compact is enabled the dropped middle history is summarized
+	// upstream and injected back as a pinned summary instead of being lost.
 	cfgBudget := s.settings.get()
 	budget := cfgBudget.ContextWindow - cfgBudget.MaxOutputTokens - 512
 	if budget < 1024 {
 		budget = 1024
 	}
-	if truncatedMsgs, truncated, budgetErr := slidingWindow(body.Messages, budget); budgetErr != nil {
+	compactedMsgs, compacted, budgetErr := s.maybeCompactContext(r, body.Messages, budget)
+	if budgetErr != nil {
 		w.Header().Set("X-M365-Context-Truncated", "1")
 		writeOpenAIError(w, 400, "context_length_exceeded", budgetErr.Error())
 		return
-	} else if truncated {
-		w.Header().Set("X-M365-Context-Truncated", "1")
-		log.Printf("[context-budget] id=%s truncated original=%d budget=%d truncated_msgs=%d", requestID, len(body.Messages), budget, len(truncatedMsgs))
-		body.Messages = truncatedMsgs
 	}
+	if compacted {
+		w.Header().Set("X-M365-Context-Compacted", "1")
+		log.Printf("[context-budget] id=%s auto-compact applied, messages=%d", requestID, len(compactedMsgs))
+	}
+	body.Messages = compactedMsgs
 	// Preserve role boundaries when adapting OpenAI messages to ChatHub's
 	// single message.text field. This keeps system/developer instructions,
 	// history, and the current user turn distinguishable.

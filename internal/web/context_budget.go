@@ -152,12 +152,21 @@ func flattenPromptMessagesWithBudget(messages []oaiMsg, attachments []chathub.At
 
 // budget for slidingWindow: B = ContextWindow - MaxOutput - 512
 func slidingWindow(messages []oaiMsg, budget int) ([]oaiMsg, bool, error) {
+	kept, _, _, truncated, err := slidingWindowDetailed(messages, budget)
+	return kept, truncated, err
+}
+
+// slidingWindowDetailed is slidingWindow plus the dropped middle history so
+// callers can compact (summarize) it instead of silently losing it. Returns
+// kept messages, dropped messages, the estimated dropped token count, whether
+// any truncation happened, and an error when even the pinned context overflows.
+func slidingWindowDetailed(messages []oaiMsg, budget int) (kept []oaiMsg, dropped []oaiMsg, droppedTokens int, truncated bool, err error) {
 	if budget <= 0 {
 		budget = 1024
 	}
 	atoms := buildAtomsFast(messages)
 	if len(atoms) == 0 {
-		return messages, false, nil
+		return messages, nil, 0, false, nil
 	}
 	total := 0
 	for _, a := range atoms {
@@ -165,7 +174,7 @@ func slidingWindow(messages []oaiMsg, budget int) ([]oaiMsg, bool, error) {
 	}
 	total += requestProtocolTokens + replyPrimingTokens
 	if total <= budget {
-		return messages, false, nil
+		return messages, nil, 0, false, nil
 	}
 	var p0Indices []int
 	anchorIdx := -1
@@ -199,7 +208,7 @@ func slidingWindow(messages []oaiMsg, budget int) ([]oaiMsg, bool, error) {
 		sumP0P1 += atoms[anchorIdx].Tokens
 	}
 	if sumP0P1 > budget {
-		return nil, false, fmt.Errorf("context_length_exceeded: pinned context (system+current task+anchor) %d tokens exceed budget %d; reduce tool results or start a new session", sumP0P1, budget)
+		return nil, nil, 0, false, fmt.Errorf("context_length_exceeded: pinned context (system+current task+anchor) %d tokens exceed budget %d; reduce tool results or start a new session", sumP0P1, budget)
 	}
 	remaining := budget - sumP0P1
 	selected := make(map[int]bool)
@@ -220,6 +229,9 @@ func slidingWindow(messages []oaiMsg, budget int) ([]oaiMsg, bool, error) {
 		if tok <= remaining {
 			selected[idx] = true
 			remaining -= tok
+		} else {
+			dropped = append(dropped, atoms[idx].Msgs...)
+			droppedTokens += tok
 		}
 	}
 	var out []oaiMsg
@@ -228,11 +240,11 @@ func slidingWindow(messages []oaiMsg, budget int) ([]oaiMsg, bool, error) {
 			out = append(out, a.Msgs...)
 		}
 	}
-	truncated := len(selected) < len(atoms)
+	truncated = len(selected) < len(atoms) || len(dropped) > 0
 	if len(out) == 0 && len(atoms) > 0 {
 		last := atoms[len(atoms)-1]
 		out = append(out, last.Msgs...)
 		truncated = true
 	}
-	return out, truncated, nil
+	return out, dropped, droppedTokens, truncated, nil
 }

@@ -40,7 +40,10 @@ func TestStartPKCEUsesBrowserClientDefaults(t *testing.T) {
 	if response.State == "" {
 		t.Fatal("response omitted state")
 	}
-	if got, want := response.RedirectURI, "https://login.microsoftonline.com/common/oauth2/nativeclient"; got != want {
+	// Since v1.0.19 the gateway derives an auto-captured redirect URI from the
+	// request host (the "Web" redirect URI registered in Entra), so an
+	// X-Forwarded-Host request yields the auto callback, not nativeclient.
+	if got, want := response.RedirectURI, "https://unregistered.example/api/auth/callback"; got != want {
 		t.Fatalf("redirect URI = %q, want %q", got, want)
 	}
 	u, err := url.Parse(response.URL)

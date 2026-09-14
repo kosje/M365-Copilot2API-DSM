@@ -99,6 +99,27 @@ func (s *usageLog) countForKey(prefix8 string) (today, total int) {
 	return
 }
 
+// recentStats returns (total, failed, failurePct) for records within the lookback
+// window. Failed = HTTP status >= 400.
+func (s *usageLog) recentStats(window time.Duration) (total, failed int, pct float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-window)
+	for _, r := range s.records {
+		if r.Time.Before(cutoff) {
+			continue
+		}
+		total++
+		if r.Status >= 400 {
+			failed++
+		}
+	}
+	if total > 0 {
+		pct = float64(failed) / float64(total) * 100
+	}
+	return
+}
+
 func (s *usageLog) record(rec UsageRecord) {
 	s.mu.Lock()
 	s.records = append(s.records, rec)

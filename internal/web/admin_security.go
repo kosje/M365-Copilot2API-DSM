@@ -350,6 +350,8 @@ func auditLog(r *http.Request, event, detail string) {
 	} else {
 		log.Printf("[audit] event=%s ip=%s", event, ip)
 	}
+	// Persist to audit.jsonl (bounded in memory) for the console.
+	globalAudit.append(auditEntry{Time: time.Now(), Event: event, IP: ip, Detail: detail})
 }
 
 func clientIP(r *http.Request) string {

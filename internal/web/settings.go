@@ -76,6 +76,25 @@ type runtimeSettings struct {
 	EnableCodeCanvas           bool           `json:"enableCodeCanvas"`
 	EnableSydneyReconnect      bool           `json:"enableSydneyReconnect"`
 	QuotaRefreshIntervalSeconds int          `json:"quotaRefreshIntervalSeconds"`
+	// ModelAliases maps arbitrary client-requested model names (e.g. "gpt-4o",
+	// "claude-sonnet-4") to configured public models. Keys are matched
+	// case-insensitively; values must be existing public model IDs.
+	ModelAliases map[string]string `json:"modelAliases,omitempty"`
+	// Webhook alerts. URL empty = disabled. Type: auto|feishu|telegram|bark|generic.
+	AlertWebhookURL         string   `json:"alertWebhookUrl,omitempty"`
+	AlertWebhookType        string   `json:"alertWebhookType,omitempty"`
+	AlertTelegramChatID     string   `json:"alertTelegramChatId,omitempty"`
+	AlertEvents             []string `json:"alertEvents,omitempty"`             // empty = all
+	AlertErrorRatePercent   int      `json:"alertErrorRatePercent,omitempty"`   // 0 = disabled, 1-100
+	// Predictive token refresh: refresh tokens nearing expiry every N seconds
+	// (0 = disabled, default 6h).
+	TokenRefreshIntervalSeconds int `json:"tokenRefreshIntervalSeconds,omitempty"`
+	// Metrics endpoint token; empty allows loopback scrapers only.
+	MetricsToken string `json:"metricsToken,omitempty"`
+	// AutoCompact: when the context budget overflows, summarize dropped
+	// history via an upstream call instead of silently truncating.
+	EnableAutoCompact       bool `json:"enableAutoCompact"`
+	AutoCompactMinTokens    int  `json:"autoCompactMinTokens,omitempty"`    // only compact when dropped history >= this many tokens (default 4000)
 }
 
 type settingsStore struct {
@@ -115,6 +134,10 @@ func defaultRuntimeSettings() runtimeSettings {
 		EnableCodeCanvas:           os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
 		EnableSydneyReconnect:      os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
 		QuotaRefreshIntervalSeconds: envInt("M365_QUOTA_REFRESH_INTERVAL_SECONDS", 300),
+		ModelAliases:               map[string]string{},
+		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
+		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
+		AutoCompactMinTokens:       envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
 	}
 }
 func settingsPath() string {
@@ -220,6 +243,35 @@ func validateSettings(v runtimeSettings) error {
 	if v.QuotaRefreshIntervalSeconds != 0 && (v.QuotaRefreshIntervalSeconds < 30 || v.QuotaRefreshIntervalSeconds > 86400) {
 		return fmt.Errorf("额度刷新间隔必须为 0（关闭）或 30-86400 秒")
 	}
+	if v.AlertErrorRatePercent < 0 || v.AlertErrorRatePercent > 100 {
+		return fmt.Errorf("错误率告警阈值必须为 0（关闭）或 1-100")
+	}
+	switch v.AlertWebhookType {
+	case "", "auto", "feishu", "telegram", "bark", "generic":
+	default:
+		return fmt.Errorf("告警 webhook 类型必须为 auto、feishu、telegram、bark 或 generic")
+	}
+	if v.TokenRefreshIntervalSeconds != 0 && (v.TokenRefreshIntervalSeconds < 60 || v.TokenRefreshIntervalSeconds > 86400) {
+		return fmt.Errorf("Token 主动刷新间隔必须为 0（关闭）或 60-86400 秒")
+	}
+	publicModels := map[string]bool{}
+	for _, m := range v.ModelMappings {
+		publicModels[strings.ToLower(m.PublicModel)] = true
+	}
+	if len(v.ModelAliases) > 32 {
+		return fmt.Errorf("模型别名数量不能超过 32")
+	}
+	for alias, target := range v.ModelAliases {
+		if !publicModelID.MatchString(alias) {
+			return fmt.Errorf("模型别名 %q 无效", alias)
+		}
+		if !publicModels[strings.ToLower(strings.TrimSpace(target))] {
+			return fmt.Errorf("模型别名 %q 的目标 %q 不是已配置的公开模型", alias, target)
+		}
+	}
+	if v.AutoCompactMinTokens < 0 || v.AutoCompactMinTokens > 100000 {
+		return fmt.Errorf("自动压缩最小 token 数必须为 0-100000")
+	}
 	if strings.TrimSpace(v.Scenario) == "" {
 		return fmt.Errorf("场景标识不能为空")
 	}
@@ -274,6 +326,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 400, "invalid_request_error", e.Error())
 			return
 		}
+		auditLog(r, "settings_update", "")
 		if e := outbound.ConfigurePool(v.ProxyPool); e != nil {
 			writeOpenAIError(w, 400, "invalid_request_error", e.Error())
 			return
@@ -338,6 +391,28 @@ func limitToolCalls(c []detectedToolCall, n int) []detectedToolCall {
 }
 
 func currentSettings() runtimeSettings { return openSettingsStore().get() }
+
+// currentSettingsSafe returns the persisted settings without panicking when a
+// test-constructed Server has no settings store.
+func currentSettingsSafe() runtimeSettings { return openSettingsStore().get() }
+
+// resolveModelAlias maps a client-requested model name through the configured
+// alias table (case-insensitive). Unmatched models are returned unchanged, so
+// existing behaviour for known public models and legacy tones is preserved.
+// Nil-safe: a Server without a settings store resolves nothing.
+func (s *settingsStore) resolveModelAlias(model string) string {
+	if s == nil || model == "" {
+		return model
+	}
+	cfg := s.get()
+	if len(cfg.ModelAliases) == 0 {
+		return model
+	}
+	if target, ok := cfg.ModelAliases[strings.ToLower(strings.TrimSpace(model))]; ok {
+		return strings.TrimSpace(target)
+	}
+	return model
+}
 
 // ApplyStartupSettingsEnv loads persisted restart-required fields before the
 // rest of the application initializes. Explicit process environment variables

@@ -512,6 +512,31 @@ func responsesOutputHasContent(src map[string]any) bool {
 	return strings.TrimSpace(text) != ""
 }
 
+// anthropicCountTokens implements POST /v1/messages/count_tokens using the
+// same token estimator that backs usage accounting. Anthropic clients (e.g.
+// Claude Code) call this before long requests to plan their context.
+func (s *Server) anthropicCountTokens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAnthropicError(w, 405, "invalid_request_error", "method not allowed")
+		return
+	}
+	var body anthropicRequest
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		writeAnthropicError(w, 400, "invalid_request_error", "bad json")
+		return
+	}
+	o, err := body.openAI()
+	if err != nil {
+		writeAnthropicError(w, 400, "invalid_request_error", err.Error())
+		return
+	}
+	model := firstNonEmpty(body.Model, "m365-copilot")
+	estimate := estimateResponsesUsage(model, o.Messages, o.Tools, o.ToolChoice, "")
+	inputTokens, _ := estimate.Values["input_tokens"].(int)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"input_tokens": inputTokens})
+}
+
 func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	if r.Method != http.MethodPost {

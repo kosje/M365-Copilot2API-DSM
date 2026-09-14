@@ -34,6 +34,9 @@ func main() {
 	s.StartChatJanitor()
 	s.RefreshExpiredTokens()
 	s.StartQuotaRefresh()
+	s.StartTokenRefresh()
+	s.StartAlertMonitor()
+	web.OpenAuditStore()
 	listen := "127.0.0.1:4141"
 	if v := os.Getenv("M365_LISTEN"); v != "" {
 		listen = v

@@ -98,6 +98,13 @@ func (s *Server) accountAvailable(accountID string) bool {
 	if s.tokens != nil && !s.tokens.ScheduleEnabled(accountID) {
 		return false
 	}
+	// Nil-safe: tests may construct a bare Server without a health pool.
+	if s.accountPool == nil {
+		return true
+	}
+	if s.accountConcurrency == nil {
+		return s.accountPool.Available(accountID)
+	}
 	return s.accountPool.Available(accountID) && s.accountConcurrency.Available(accountID)
 }
 

@@ -648,6 +648,10 @@ func (h *accountHealth) MarkFailure(accountID string, err error, window time.Dur
 	if cat == CategoryClientCanceled {
 		return
 	}
+	// Alert on auth failures (token revoked, account disabled) via webhook.
+	if cat == CategoryAuthExpired401 || cat == CategoryForbidden403 {
+		notifyWebhookAlert(alertEventAccountAuth, fmt.Sprintf("账号鉴权失败（%s），已进入冷却：error=%v", accountID, err), accountID)
+	}
 	if cat == CategoryGlobalUnavailable {
 		h.mu.Lock()
 		h.cooldown[accountID] = time.Now().Add(CooldownForCategory(cat, 0, 1))
