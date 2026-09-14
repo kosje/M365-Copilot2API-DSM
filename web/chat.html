@@ -439,6 +439,17 @@ async function send(){
 function autoGrow(){const el=$('input');el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px';}
 $('input').addEventListener('input',autoGrow);
 $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+$('input').addEventListener('paste',e=>{
+  const items=e.clipboardData&&e.clipboardData.items;
+  if(!items)return;
+  const files=[];
+  for(const it of items){
+    if(it.kind==='file'&&it.type.startsWith('image/')){
+      const f=it.getAsFile();if(f)files.push(f);
+    }
+  }
+  if(files.length){e.preventDefault();addFiles(files);}
+});
 
 async function streamChat(userMsg){
   busy=true;$('sendBtn').disabled=true;

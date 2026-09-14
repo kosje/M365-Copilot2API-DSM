@@ -521,7 +521,14 @@ if (response.output_text) {
               </div>
             </div>
             <button class="btn primary" onclick="startPKCE()" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> Start authorization</button>
-            <p class="page-sub" style="margin:0 0 12px">默认<strong>自动模式</strong>：登录后 Microsoft 会把授权码直接回传本服务的 <code>/api/auth/callback</code>，<b>无需复制地址栏</b>。若弹出页报“重定向 URI”错误，请点下方「手动模式」，并在 Microsoft Entra 应用注册的<strong>重定向 URI</strong>中添加本服务回调地址。</p>
+            <p class="page-sub" style="margin:0 0 12px">默认<strong>自动模式</strong>：登录后 Microsoft 会把授权码直接回传本服务的 <code>/api/auth/callback</code>，<b>无需复制地址栏</b>。若弹出页报“重定向 URI”错误，请点下方「手动模式」改为手动粘贴，或把下面的回调地址加到 Microsoft Entra 应用注册的重定向 URI 中。</p>
+            <div id="redirectUriBox" class="hidden" style="margin-bottom:12px">
+              <label class="form-label">本次授权使用的回调地址（供 Entra 注册 / 复制）</label>
+              <div class="copy-field">
+                <input class="form-input" id="redirectUriInput" readonly autocomplete="off">
+                <button class="btn primary" onclick="copyRedirectUri()" style="min-width:80px">复制</button>
+              </div>
+            </div>
             <button class="btn btn-sm" onclick="toggleManualAuth()" id="manualToggle" style="margin-bottom:12px">手动模式（复制地址栏）</button>
             <div id="callbackManual" class="hidden">
             <div class="highlight-box warning" style="margin-top:0;margin-bottom:16px">
@@ -1409,10 +1416,16 @@ function bindAccountProxy(id,current){
   api('/api/accounts/bind-proxy',{method:'POST',body:JSON.stringify({id,proxyUrl:url.trim()})}).then(()=>{showNotice(url.trim()?'Proxy bound':'Proxy unbound','success');loadAccounts();}).catch(e=>showNotice(e.message,'error'));
 }
 
+let lastRedirectUri='';
+
 async function startPKCE(){
   try{
     const d=await api('/api/auth/start');
+    lastRedirectUri=d.redirectUri||'';
     $('callbackInput').dataset.state=d.state;
+    const ruBox=$('redirectUriBox');
+    const ruIn=$('redirectUriInput');
+    if(ruBox&&ruIn){ruBox.classList.remove('hidden');ruIn.value=lastRedirectUri;}
     const popup=window.open(d.url,'pkce','width=600,height=800');
     if(!popup){$('authStatus').innerHTML='<div class="highlight-box warning"><div class="highlight-box-title"><i data-lucide="alert-circle" style="width:14px;height:14px"></i>弹出窗口被浏览器拦截</div><p>请允许此网站的弹出窗口，然后重新点击"开始授权"。</p></div>';lucide.createIcons();return;}
     let onMsg=null;
@@ -1460,7 +1473,20 @@ function toggleManualAuth(){
   const box=document.getElementById('callbackManual');
   if(!box)return;
   const hidden=box.classList.toggle('hidden');
-  if(!hidden){const i=$('callbackInput');if(i)i.focus();}
+  if(!hidden){
+    const i=$('callbackInput');if(i){i.focus();if(lastRedirectUri&&!i.value)i.placeholder='粘贴 '+lastRedirectUri+'?code=...&state=... 形式的完整回调地址';}
+  }
+}
+
+async function copyRedirectUri(){
+  const el=$('redirectUriInput');
+  if(!el||!el.value)return;
+  try{
+    await navigator.clipboard.writeText(el.value);
+    showNotice('回调地址已复制','success');
+  }catch(e){
+    el.select();document.execCommand('copy');showNotice('回调地址已复制','success');
+  }
 }
 
 async function loadKeys(){
