@@ -4,12 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"m365-copilot2api/internal/auth"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // maxImportBytes caps the uploaded payload (16 MB is far beyond any realistic
@@ -105,6 +107,13 @@ func (s *Server) importAccounts(w http.ResponseWriter, r *http.Request) {
 			res.Imported++
 		}
 	}
+	// Refresh metering for the whole pool so newly imported accounts show
+	// up-to-date quotas on the dashboard.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		s.refreshAllMetering(ctx)
+	}()
 	jsonOut(w, res)
 }
 

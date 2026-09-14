@@ -54,7 +54,7 @@ input,textarea{font:inherit;color:inherit}
 .conv-item .del{opacity:0;color:var(--muted);font-size:14px;padding:0 3px;border-radius:6px}
 .conv-item:hover .del{opacity:.85}
 .conv-item .del:hover{color:var(--err)}
-.side-foot{border-top:1px solid var(--border);padding:12px 14px}
+.side-foot{border-top:1px solid var(--border);padding:12px 14px 26px}
 .foot-user{display:flex;align-items:center;gap:9px}
 .foot-user .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#4d6bfe,#9b7bff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
 .foot-user .u{flex:1;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -118,6 +118,8 @@ input,textarea{font:inherit;color:inherit}
 
 #toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:50}
 #toast.show{opacity:.95}
+#verFoot{position:fixed;left:10px;bottom:5px;font-size:11px;color:var(--muted);background:rgba(127,127,127,.13);padding:2px 8px;border-radius:8px;z-index:55;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#verFoot a{color:var(--ok);text-decoration:underline;cursor:pointer}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:60;cursor:zoom-out}
 #lightbox img{max-width:94vw;max-height:94vh;border-radius:10px}
 @media(max-width:720px){
@@ -176,23 +178,8 @@ input,textarea{font:inherit;color:inherit}
   </div>
 </div>
 <div id="toast"></div>
+<div id="verFoot"></div>
 <div id="lightbox" class="hidden" onclick="this.classList.add('hidden')"><img id="lightboxImg"></div>
-<div id="imgModal" class="hidden" onclick="if(event.target===this)closeImgModal()" style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:70">
-  <div style="background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:20px;width:min(92vw,430px);max-height:88vh;overflow:auto">
-    <div style="font-weight:600;font-size:15px;margin-bottom:12px">🎨 生成图片</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">画幅尺寸</div>
-    <div id="szRow" class="opt-row"></div>
-    <div style="font-size:12px;color:var(--muted);margin:12px 0 6px">画面风格</div>
-    <div id="styleRow" class="opt-row"></div>
-    <div style="font-size:12px;color:var(--muted);margin:12px 0 6px">色彩倾向</div>
-    <div id="toneRow" class="opt-row"></div>
-    <textarea id="imgPrompt" rows="3" placeholder="描述想生成的图片…" style="width:100%;margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--side);resize:vertical"></textarea>
-    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
-      <button onclick="closeImgModal()" style="padding:8px 16px;border-radius:10px;border:1px solid var(--border)">取消</button>
-      <button onclick="startGen()" style="padding:8px 18px;border-radius:10px;background:var(--accent);color:#fff">生成</button>
-    </div>
-  </div>
-</div>
 
 <script>
 "use strict";
@@ -202,8 +189,41 @@ let me=null,quota=null,convs=[],curConv=null,imgMode=false,attachments=[],busy=f
 function toast(t){const el=$('toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2200);}
 async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){showLogin();throw new Error('未登录');}const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error&&(d.error.message||d.error)||'请求失败');return d;}
 
+/* ---------- version / update check (GitHub releases, browser-side) ---------- */
+function cmpVer(a,b){
+  const p=s=>String(s).split(/[.\-+]/).map(x=>parseInt(x,10)||0);
+  const pa=p(a),pb=p(b);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const d=(pa[i]||0)-(pb[i]||0);
+    if(d)return d>0?1:-1;
+  }
+  return 0;
+}
+async function checkUpdate(){
+  const el=document.getElementById('verFoot');
+  if(!el)return;
+  let cur='';
+  try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
+  el.textContent=cur?('v'+cur):'';
+  if(!cur||cur==='dev')return;
+  try{
+    const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
+    const latest=String(rel.tag_name||'').replace(/^v/,'');
+    if(latest&&cmpVer(latest,cur)>0){
+      el.textContent='';
+      const a=document.createElement('a');
+      a.href=(rel.html_url)||('https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest);
+      a.target='_blank';a.rel='noopener';
+      a.textContent='v'+cur+' → v'+latest+' 可更新';
+      a.title='打开 GitHub Release 下载最新 fpk';
+      el.appendChild(a);
+    }
+  }catch(e){/* GitHub 不可达：仅显示当前版本 */}
+}
+
 /* ---------- auth ---------- */
 async function boot(){
+  checkUpdate();
   try{const d=await api('/api/chatui/session');if(d.authenticated){me=d.username;quota=d.quota;showApp();return;}}catch(e){}
   showLogin();
 }
@@ -302,8 +322,6 @@ function mdLite(s){
   h=h.replace(/```([\s\S]*?)```/g,(m,code)=>{blocks.push('<pre><code>'+code.replace(/^\n/,'')+'</code></pre>');return '\u0000'+(blocks.length-1)+'\u0000';});
   h=h.replace(/`([^`\n]+)`/g,'<code>$1</code>');
   h=h.replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
-  h=h.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|\/api\/[^\s)]+)\)/g,'<img src="$2" class="att" style="max-width:min(100%,360px);cursor:zoom-in" onclick="zoom(this.src)">');
-  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="word-break:break-all">$1</a>');
   h=h.replace(/\n/g,'<br>');
   return h.replace(/\u0000(\d+)\u0000/g,(m,i)=>blocks[+i]);
 }
@@ -321,7 +339,7 @@ function renderMsg(m,streaming){
     const av=document.createElement('div');av.className='avatar';av.textContent='M';
     const body=document.createElement('div');body.className='body';
     body.innerHTML=m.content?mdLite(m.content):(streaming?'<span class="typing"><i></i><i></i><i></i></span>':'<span style="color:var(--muted)">（空回复）</span>');
-    addImgs(body,m.gen||m.gen_images);
+    addImgs(body,m.gen);
     if(!streaming&&m.content){
       const tools=document.createElement('div');tools.className='tools';
       const cp=document.createElement('button');cp.textContent='⧉ 复制';
@@ -345,17 +363,39 @@ function addFiles(files){
   }
   $('fileInput').value='';
 }
+function readFileAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=()=>res(fr.result);
+    fr.onerror=()=>rej(new Error('read failed'));
+    fr.readAsDataURL(file);
+  });
+}
 function compressImage(file){
   return new Promise((res,rej)=>{
-    const img=new Image();const url=URL.createObjectURL(file);
+    // Very large files: skip canvas (avoids OOM) and forward raw bytes as a data URL.
+    if(file.size>12*1024*1024){
+      readFileAsDataURL(file).then(res).catch(rej);
+      return;
+    }
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    let settled=false;
+    const fallback=()=>{ if(settled)return; settled=true; URL.revokeObjectURL(url); readFileAsDataURL(file).then(res).catch(rej); };
+    const timer=setTimeout(fallback,8000); // safety net if onload/onerror never fire
     img.onload=()=>{
-      const MAX=1568;let{width:w,height:h}=img;
-      if(w>MAX||h>MAX){const k=MAX/Math.max(w,h);w=Math.round(w*k);h=Math.round(h*k);}
-      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
-      cv.getContext('2d').drawImage(img,0,0,w,h);
-      URL.revokeObjectURL(url);res(cv.toDataURL('image/jpeg',.85));
+      if(settled)return; settled=true; clearTimeout(timer);
+      try{
+        const MAX=1568;let{width:w,height:h}=img;
+        if(w>MAX||h>MAX){const k=MAX/Math.max(w,h);w=Math.round(w*k);h=Math.round(h*k);}
+        const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        URL.revokeObjectURL(url);
+        res(cv.toDataURL('image/jpeg',.85));
+      }catch(e){ URL.revokeObjectURL(url); readFileAsDataURL(file).then(res).catch(rej); }
     };
-    img.onerror=rej;img.src=url;
+    img.onerror=fallback;
+    img.src=url;
   });
 }
 function renderAttach(){
@@ -368,56 +408,18 @@ function renderAttach(){
     el.appendChild(t);
   });
 }
-function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);}
-
-/* ---------- image generation modal ---------- */
-const IMG_SIZES=[['1024x1024','方形 1:1'],['1536x1024','横版 3:2'],['1024x1536','竖版 2:3']];
-const IMG_STYLES=[['','自动'],['realistic photo','写实照片'],['anime','动漫'],['oil painting','油画'],['watercolor','水彩'],['flat illustration','扁平插画'],['3D render','3D 渲染'],['Chinese ink painting','国风水墨'],['cyberpunk','赛博朋克']];
-const IMG_TONES=[['','自然色彩'],['warm color palette','暖色调'],['cool color palette','冷色调'],['soft fresh colors','清新淡雅'],['dark moody colors','暗黑'],['black and white','黑白']];
-let imgSel={size:'1024x1024',style:'',tone:''};
-function pillRow(rowId,opts,key){
-  const row=$(rowId);row.innerHTML='';
-  row.style.cssText='display:flex;flex-wrap:wrap;gap:6px';
-  for(const [val,label] of opts){
-    const b=document.createElement('button');
-    b.type='button';b.textContent=label;
-    b.style.cssText='padding:5px 12px;border-radius:999px;border:1px solid var(--border);font-size:12px;background:'+(imgSel[key]===val?'var(--accent-weak)':'transparent')+';color:'+(imgSel[key]===val?'var(--accent)':'inherit')+';border-color:'+(imgSel[key]===val?'var(--accent)':'var(--border)');
-    b.onclick=()=>{imgSel[key]=val;pillRow(rowId,opts,key);};
-    row.appendChild(b);
-  }
-}
-function openImgModal(){
-  imgSel={size:'1024x1024',style:'',tone:''};
-  $('imgPrompt').value='';
-  pillRow('szRow',IMG_SIZES,'size');
-  pillRow('styleRow',IMG_STYLES,'style');
-  pillRow('toneRow',IMG_TONES,'tone');
-  $('imgModal').classList.remove('hidden');
-  setTimeout(()=>$('imgPrompt').focus(),50);
-}
-function closeImgModal(){$('imgModal').classList.add('hidden');}
-function startGen(){
-  const p=$('imgPrompt').value.trim();
-  if(!p){toast('请先描述想生成的图片');return;}
-  closeImgModal();
-  let full=p;
-  if(imgSel.style)full+=', '+imgSel.style+' style';
-  if(imgSel.tone)full+=', '+imgSel.tone;
-  genImage(full,imgSel.size);
-}
+function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('input').placeholder=imgMode?'描述想生成的图片…':'给 M365 发送消息';}
 
 /* ---------- send ---------- */
 async function send(){
   if(busy)return;
   const text=$('input').value.trim();
-  if(!text&&attachments.length===0)return;
-  // 画图意图自动路由：聊天里直接打字要求画图时，走专用图像生成管线
-  // （/api/chatui/images → /v1/images/generations），而非聊天流
-  if(!attachments.length&&looksLikeImageIntent(text)){
+  if(imgMode){
+    if(!text)return;
     $('input').value='';autoGrow();
-    toast('检测到画图请求，已使用图像生成');
     await genImage(text);return;
   }
+  if(!text&&attachments.length===0)return;
   const parts=[];
   if(text)parts.push({type:'text',text});
   for(const a of attachments)parts.push({type:'image_url',image_url:{url:a}});
@@ -435,14 +437,6 @@ async function send(){
   await streamChat({role:'user',content:parts.length===1&&text?text:parts});
 }
 function autoGrow(){const el=$('input');el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px';}
-function looksLikeImageIntent(t){
-  if(!t||t.length>120)return false;
-  if(/^(画|绘|帮我画|给我画|画一|画个|画只|画张|画幅|来张|来一幅|生成(一)?(张|个|幅)?(图片|图像|插画))/.test(t))return true;
-  if(/(生成|制作|来)(一)?(张|个|幅)?(图片|图像|插画)/.test(t))return true;
-  if(/\b(draw|painting|paint)\b/i.test(t)&&/\b(image|picture|photo|drawing|illustration|of)\b/i.test(t))return true;
-  if(/\b(generate|create|make)\b/i.test(t)&&/\b(image|picture|photo|illustration)\b/i.test(t))return true;
-  return false;
-}
 $('input').addEventListener('input',autoGrow);
 $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 
@@ -496,30 +490,16 @@ function renderTools(body,content){
   tools.appendChild(cp);body.appendChild(tools);
 }
 
-async function genImage(prompt,size){
+async function genImage(prompt){
   busy=true;$('sendBtn').disabled=true;
   renderMsg({role:'user',content:'🎨 '+prompt},false);scrollBottom();
   const body=renderMsg({role:'assistant',content:''},true);scrollBottom();
   try{
-    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt,size:size||'1024x1024'})});
+    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt})});
     curConv=d.conversationId;
-    body.innerHTML='';
-    if(d.warning&&d.urls&&d.urls.length){
-      const tip=document.createElement('div');tip.className='warn';tip.style.color='var(--err)';tip.style.marginBottom='6px';
-      tip.textContent='⚠ 图片已生成，但服务器下载失败（设备可能没有代理）。请自行点击下面的地址下载：';
-      body.appendChild(tip);
-      for(const u of d.urls){const a=document.createElement('a');a.href=u;a.target='_blank';a.rel='noopener';a.textContent=u;a.style.wordBreak='break-all';a.style.display='block';body.appendChild(a);}
-      loadConvs();
-    }else if(d.url){
-      const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
-      loadConvs();
-    }else{
-      const tip=document.createElement('div');tip.style.color='var(--err)';
-      tip.textContent='⚠ 图片生成失败：服务未返回图片数据，请重试或更换描述。';
-      body.appendChild(tip);
-      loadConvs();
-    }
+    body.innerHTML='';const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
     renderTools(body,prompt);
+    loadConvs();
   }catch(e){body.innerHTML='<span style="color:var(--err)">⚠ '+esc(e.message)+'</span>';}
   finally{busy=false;$('sendBtn').disabled=false;refreshQuota();scrollBottom();}
 }

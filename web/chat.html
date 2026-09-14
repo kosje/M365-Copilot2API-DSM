@@ -54,7 +54,7 @@ input,textarea{font:inherit;color:inherit}
 .conv-item .del{opacity:0;color:var(--muted);font-size:14px;padding:0 3px;border-radius:6px}
 .conv-item:hover .del{opacity:.85}
 .conv-item .del:hover{color:var(--err)}
-.side-foot{border-top:1px solid var(--border);padding:12px 14px}
+.side-foot{border-top:1px solid var(--border);padding:12px 14px 26px}
 .foot-user{display:flex;align-items:center;gap:9px}
 .foot-user .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#4d6bfe,#9b7bff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
 .foot-user .u{flex:1;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -118,6 +118,8 @@ input,textarea{font:inherit;color:inherit}
 
 #toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:50}
 #toast.show{opacity:.95}
+#verFoot{position:fixed;left:10px;bottom:5px;font-size:11px;color:var(--muted);background:rgba(127,127,127,.13);padding:2px 8px;border-radius:8px;z-index:55;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#verFoot a{color:var(--ok);text-decoration:underline;cursor:pointer}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:60;cursor:zoom-out}
 #lightbox img{max-width:94vw;max-height:94vh;border-radius:10px}
 @media(max-width:720px){
@@ -176,6 +178,7 @@ input,textarea{font:inherit;color:inherit}
   </div>
 </div>
 <div id="toast"></div>
+<div id="verFoot"></div>
 <div id="lightbox" class="hidden" onclick="this.classList.add('hidden')"><img id="lightboxImg"></div>
 
 <script>
@@ -186,8 +189,41 @@ let me=null,quota=null,convs=[],curConv=null,imgMode=false,attachments=[],busy=f
 function toast(t){const el=$('toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2200);}
 async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){showLogin();throw new Error('未登录');}const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error&&(d.error.message||d.error)||'请求失败');return d;}
 
+/* ---------- version / update check (GitHub releases, browser-side) ---------- */
+function cmpVer(a,b){
+  const p=s=>String(s).split(/[.\-+]/).map(x=>parseInt(x,10)||0);
+  const pa=p(a),pb=p(b);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const d=(pa[i]||0)-(pb[i]||0);
+    if(d)return d>0?1:-1;
+  }
+  return 0;
+}
+async function checkUpdate(){
+  const el=document.getElementById('verFoot');
+  if(!el)return;
+  let cur='';
+  try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
+  el.textContent=cur?('v'+cur):'';
+  if(!cur||cur==='dev')return;
+  try{
+    const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
+    const latest=String(rel.tag_name||'').replace(/^v/,'');
+    if(latest&&cmpVer(latest,cur)>0){
+      el.textContent='';
+      const a=document.createElement('a');
+      a.href=(rel.html_url)||('https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest);
+      a.target='_blank';a.rel='noopener';
+      a.textContent='v'+cur+' → v'+latest+' 可更新';
+      a.title='打开 GitHub Release 下载最新 fpk';
+      el.appendChild(a);
+    }
+  }catch(e){/* GitHub 不可达：仅显示当前版本 */}
+}
+
 /* ---------- auth ---------- */
 async function boot(){
+  checkUpdate();
   try{const d=await api('/api/chatui/session');if(d.authenticated){me=d.username;quota=d.quota;showApp();return;}}catch(e){}
   showLogin();
 }
@@ -327,17 +363,39 @@ function addFiles(files){
   }
   $('fileInput').value='';
 }
+function readFileAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=()=>res(fr.result);
+    fr.onerror=()=>rej(new Error('read failed'));
+    fr.readAsDataURL(file);
+  });
+}
 function compressImage(file){
   return new Promise((res,rej)=>{
-    const img=new Image();const url=URL.createObjectURL(file);
+    // Very large files: skip canvas (avoids OOM) and forward raw bytes as a data URL.
+    if(file.size>12*1024*1024){
+      readFileAsDataURL(file).then(res).catch(rej);
+      return;
+    }
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    let settled=false;
+    const fallback=()=>{ if(settled)return; settled=true; URL.revokeObjectURL(url); readFileAsDataURL(file).then(res).catch(rej); };
+    const timer=setTimeout(fallback,8000); // safety net if onload/onerror never fire
     img.onload=()=>{
-      const MAX=1568;let{width:w,height:h}=img;
-      if(w>MAX||h>MAX){const k=MAX/Math.max(w,h);w=Math.round(w*k);h=Math.round(h*k);}
-      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
-      cv.getContext('2d').drawImage(img,0,0,w,h);
-      URL.revokeObjectURL(url);res(cv.toDataURL('image/jpeg',.85));
+      if(settled)return; settled=true; clearTimeout(timer);
+      try{
+        const MAX=1568;let{width:w,height:h}=img;
+        if(w>MAX||h>MAX){const k=MAX/Math.max(w,h);w=Math.round(w*k);h=Math.round(h*k);}
+        const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        URL.revokeObjectURL(url);
+        res(cv.toDataURL('image/jpeg',.85));
+      }catch(e){ URL.revokeObjectURL(url); readFileAsDataURL(file).then(res).catch(rej); }
     };
-    img.onerror=rej;img.src=url;
+    img.onerror=fallback;
+    img.src=url;
   });
 }
 function renderAttach(){

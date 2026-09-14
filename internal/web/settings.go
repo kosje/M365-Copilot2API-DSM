@@ -75,6 +75,7 @@ type runtimeSettings struct {
 	EnableDesignerImageGen4o   bool           `json:"enableDesignerImageGen4o"`
 	EnableCodeCanvas           bool           `json:"enableCodeCanvas"`
 	EnableSydneyReconnect      bool           `json:"enableSydneyReconnect"`
+	QuotaRefreshIntervalSeconds int          `json:"quotaRefreshIntervalSeconds"`
 }
 
 type settingsStore struct {
@@ -113,6 +114,7 @@ func defaultRuntimeSettings() runtimeSettings {
 		EnableDesignerImageGen4o:   os.Getenv("M365_ENABLE_DESIGNER_IMAGE_GEN_4O") == "true",
 		EnableCodeCanvas:           os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
 		EnableSydneyReconnect:      os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
+		QuotaRefreshIntervalSeconds: envInt("M365_QUOTA_REFRESH_INTERVAL_SECONDS", 300),
 	}
 }
 func settingsPath() string {
@@ -213,6 +215,10 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.AccountConcurrencyLimit < 1 || v.AccountConcurrencyLimit > 64 {
 		return fmt.Errorf("账号并发上限必须为 1-64")
+	}
+	// 0 disables the periodic quota refresh; otherwise 30-86400 seconds.
+	if v.QuotaRefreshIntervalSeconds != 0 && (v.QuotaRefreshIntervalSeconds < 30 || v.QuotaRefreshIntervalSeconds > 86400) {
+		return fmt.Errorf("额度刷新间隔必须为 0（关闭）或 30-86400 秒")
 	}
 	if strings.TrimSpace(v.Scenario) == "" {
 		return fmt.Errorf("场景标识不能为空")

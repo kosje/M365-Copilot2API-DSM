@@ -521,6 +521,9 @@ if (response.output_text) {
               </div>
             </div>
             <button class="btn primary" onclick="startPKCE()" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> Start authorization</button>
+            <p class="page-sub" style="margin:0 0 12px">默认<strong>自动模式</strong>：登录后 Microsoft 会把授权码直接回传本服务的 <code>/api/auth/callback</code>，<b>无需复制地址栏</b>。若弹出页报“重定向 URI”错误，请点下方「手动模式」，并在 Microsoft Entra 应用注册的<strong>重定向 URI</strong>中添加本服务回调地址。</p>
+            <button class="btn btn-sm" onclick="toggleManualAuth()" id="manualToggle" style="margin-bottom:12px">手动模式（复制地址栏）</button>
+            <div id="callbackManual" class="hidden">
             <div class="highlight-box warning" style="margin-top:0;margin-bottom:16px">
               <div class="highlight-box-title"><i data-lucide="alert-circle" style="width:14px;height:14px"></i> 必须手动粘贴回调地址以完成授权</div>
               <p>在弹出窗口中登录后，页面会显示空白或错误——<strong>这是正常的</strong>，因为回调端点不是真正的网站。授权<strong>尚未</strong>完成。复制弹出页地址栏中的<strong>完整网址</strong>（形如 <code>http://localhost:4141/api/auth/callback?code=M.C5...&state=abc123</code>），粘贴到下方"回调地址"输入框。</p>
@@ -529,6 +532,7 @@ if (response.output_text) {
             <div class="copy-field">
               <input class="form-input" id="callbackInput" placeholder="Paste the full callback URL, e.g. http://localhost:4141/api/auth/callback?code=M.C5...&state=abc123" autocomplete="off">
               <button class="btn primary" onclick="submitCallback()" style="min-width:96px">Confirm and add</button>
+            </div>
             </div>
             <div id="authStatus" style="margin-top:12px"></div>
           </div>
@@ -675,7 +679,7 @@ if (response.output_text) {
       <!-- Settings -->
       <section id="page-settings" style="display:none">
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
-        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
+        <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label">Quota refresh interval (seconds, 0=off)</label><input class="form-input" id="setQuotaRefresh" type="number" placeholder="300"><p class="form-hint">自动探测并刷新所有账号的 M365 额度（剩余用量）。默认 300 秒；设为 0 关闭定时刷新。账号新增时也会立即刷新一次。</p></div><div class="form-group"><label class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
     </div>
   </main>
@@ -1411,17 +1415,31 @@ async function startPKCE(){
     $('callbackInput').dataset.state=d.state;
     const popup=window.open(d.url,'pkce','width=600,height=800');
     if(!popup){$('authStatus').innerHTML='<div class="highlight-box warning"><div class="highlight-box-title"><i data-lucide="alert-circle" style="width:14px;height:14px"></i>弹出窗口被浏览器拦截</div><p>请允许此网站的弹出窗口，然后重新点击"开始授权"。</p></div>';lucide.createIcons();return;}
-    $('authStatus').innerHTML='<div class="highlight-box"><div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i>授权页面已在新窗口打开</div><p>请在弹出窗口中完成登录。登录后弹出页会显示空白或错误——这是正常的。复制弹出页地址栏的<b>完整网址</b>，粘贴到下方"回调地址"输入框。</p></div>';
-    $('callbackInput').focus();
-    $('callbackInput').placeholder='粘贴弹出页地址栏中的完整回调地址…';
+    let onMsg=null;
+    if(d.auto){
+      // Automated capture: Microsoft returns the code straight to this server's
+      // /api/auth/callback, which renders a friendly page and postMessages the
+      // opener. No manual paste needed.
+      const box=document.getElementById('callbackManual'); if(box) box.classList.add('hidden');
+      const ru=esc(d.redirectUri||'');
+      $('authStatus').innerHTML='<div class="highlight-box"><div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i>授权页面已在新窗口打开</div><p>请在弹出窗口中完成登录。授权完成后该窗口会自动关闭并更新账号列表，<b>无需手动粘贴回调地址</b>。</p><p style="margin-top:8px;font-size:12px;color:var(--muted)">若弹出页提示“重定向 URI”错误，请在 Microsoft Entra 应用注册的<strong>重定向 URI</strong>中添加：<br><code style="word-break:break-all">'+ru+'</code><br>或点「手动模式」改用手动粘贴。</p></div>';
+      onMsg=(e)=>{ if(e.data&&e.data.type==='m365-auth-complete'){ /* status poll below picks up the result */ } };
+      window.addEventListener('message',onMsg);
+    }else{
+      const box=document.getElementById('callbackManual'); if(box) box.classList.remove('hidden');
+      $('authStatus').innerHTML='<div class="highlight-box"><div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i>授权页面已在新窗口打开</div><p>请在弹出窗口中完成登录。登录后弹出页会显示空白或错误——这是正常的。复制弹出页地址栏的<b>完整网址</b>，粘贴到下方"回调地址"输入框。</p></div>';
+      $('callbackInput').focus();
+      $('callbackInput').placeholder='粘贴弹出页地址栏中的完整回调地址…';
+    }
+    lucide.createIcons();
     if(pkceTimer)clearInterval(pkceTimer);
     const start=Date.now();
     pkceTimer=setInterval(async()=>{
-      if(Date.now()-start>600000){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>授权超时，请重新开始授权。</b></div>';return;}
-      if(popup&&popup.closed){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>授权窗口在完成前已关闭。</b></div>';return;}
+      if(Date.now()-start>600000){clearInterval(pkceTimer);if(onMsg)window.removeEventListener('message',onMsg);$('authStatus').innerHTML='<div class="highlight-box warning"><b>授权超时，请重新开始授权。</b></div>';return;}
+      if(popup&&popup.closed){clearInterval(pkceTimer);if(onMsg)window.removeEventListener('message',onMsg);$('authStatus').innerHTML='<div class="highlight-box warning"><div class="highlight-box-title"><i data-lucide="alert-circle" style="width:14px;height:14px"></i>授权窗口在完成前已关闭</div><p>若弹出页停在 Microsoft 的“重定向 URI”错误页，请在本服务的 Entra 应用注册中添加回调地址 <code style="word-break:break-all">'+esc(d.redirectUri||'')+'</code>，或点「手动模式」粘贴地址栏网址完成授权。</p></div>';lucide.createIcons();return;}
       try{const s=await api('/api/auth/status?state='+d.state);
-        if(s.status==='authenticated'){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box success"><div class="highlight-box-title"><i data-lucide="check-circle" style="width:14px;height:14px"></i>授权成功</div><p>账号已加入账号池。</p></div>';showNotice('授权成功','success');loadAccounts();}
-        if(s.status==='error'||s.status==='expired'){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>授权失败或已过期</b></div>';}
+        if(s.status==='authenticated'){clearInterval(pkceTimer);if(onMsg)window.removeEventListener('message',onMsg);$('authStatus').innerHTML='<div class="highlight-box success"><div class="highlight-box-title"><i data-lucide="check-circle" style="width:14px;height:14px"></i>授权成功</div><p>账号已加入账号池。</p></div>';lucide.createIcons();showNotice('授权成功','success');loadAccounts();}
+        if(s.status==='error'||s.status==='expired'){clearInterval(pkceTimer);if(onMsg)window.removeEventListener('message',onMsg);$('authStatus').innerHTML='<div class="highlight-box warning"><b>授权失败或已过期</b></div>';}
       }catch(e){}
     },2000);
   }catch(e){showNotice(e.message,'error');}
@@ -1436,6 +1454,13 @@ async function submitCallback(){
     else{u+=raw.replace(/^\?/,'');if(!raw.includes('state='))$('callbackInput').dataset.state&&(u+='&state='+$('callbackInput').dataset.state);}
     await api(u);showNotice('授权成功','success');$('callbackInput').value='';loadAccounts();showPage('dashboard');
   }catch(e){showNotice(e.message,'error');}
+}
+
+function toggleManualAuth(){
+  const box=document.getElementById('callbackManual');
+  if(!box)return;
+  const hidden=box.classList.toggle('hidden');
+  if(!hidden){const i=$('callbackInput');if(i)i.focus();}
 }
 
 async function loadKeys(){
@@ -1995,13 +2020,16 @@ async function loadSettings(){
     const d=await api('/api/admin/settings');
     const v=d.settings||{};
     $('setTimeout').value=v.chatTimeoutSeconds||120;
+    $('setQuotaRefresh').value=v.quotaRefreshIntervalSeconds||300;
   }catch(e){showNotice(e.message,'error');}
 }
 async function saveSettings(){
   try{
     const timeout=$('setTimeout').value.trim();
+    const qr=$('setQuotaRefresh').value.trim();
     const body={};
     if(timeout)body.chatTimeoutSeconds=parseInt(timeout);
+    if(qr!=='')body.quotaRefreshIntervalSeconds=parseInt(qr);
     await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
     showNotice('设置已保存','success');
   }catch(e){showNotice(e.message,'error');}

@@ -13,7 +13,7 @@ echo "=== sync web/ -> internal/web/web/ (go:embed reads internal/web/web/) ==="
 # The //go:embed directive in internal/web/security_http.go resolves relative to
 # that file's directory, so internal/web/web/ is what gets compiled in. Keep the
 # two copies in sync automatically to avoid stale embedded assets.
-cp -f web/index.html web/import.html web/login.html web/conversation.html web/debug.html internal/web/web/
+cp -f web/index.html web/chat.html web/import.html web/login.html web/conversation.html web/debug.html internal/web/web/
 echo "=== build linux/amd64 -> FPK app dir ==="
 # -a forces full rebuild (incl. //go:embed web assets) so frontend changes are actually baked in.
 # Version injected from the FPK manifest (single source of truth) for /api/version & update check.

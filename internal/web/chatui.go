@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -599,19 +600,62 @@ func (s *Server) chatQuotaCheck(u *chatUser, kind string) (bool, string) {
 
 type teeWriter struct {
 	http.ResponseWriter
-	buf  bytes.Buffer
-	code int
+	buf     bytes.Buffer
+	lineBuf bytes.Buffer
+	code    int
 }
 
 func (t *teeWriter) WriteHeader(c int) { t.code = c; t.ResponseWriter.WriteHeader(c) }
+
+// Write streams to the client AND buffers a cleaned copy for persistence.
+// SSE frames are line-delimited, so we strip internal markers at line
+// granularity to avoid corrupting a JSON frame that spans write boundaries.
 func (t *teeWriter) Write(p []byte) (int, error) {
-	t.buf.Write(p)
-	return t.ResponseWriter.Write(p)
+	t.lineBuf.Write(p)
+	for {
+		idx := bytes.IndexByte(t.lineBuf.Bytes(), '\n')
+		if idx < 0 {
+			break
+		}
+		line := t.lineBuf.Next(idx + 1)
+		cleaned := cleanInternalMarkers(string(line))
+		t.buf.WriteString(cleaned)
+		if _, err := t.ResponseWriter.Write([]byte(cleaned)); err != nil {
+			return len(p), err
+		}
+	}
+	return len(p), nil
 }
+
+// flushRemaining forwards any trailing bytes (a frame not terminated by '\n',
+// e.g. a non-streaming JSON body) after the upstream handler returns.
+func (t *teeWriter) flushRemaining() {
+	if t.lineBuf.Len() == 0 {
+		return
+	}
+	cleaned := cleanInternalMarkers(t.lineBuf.String())
+	t.buf.WriteString(cleaned)
+	_, _ = t.ResponseWriter.Write([]byte(cleaned))
+	t.lineBuf.Reset()
+}
+
 func (t *teeWriter) Flush() {
 	if f, ok := t.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// chatInternalMarkerRE strips tool-call / citation leakage (e.g. [cite][call_…]
+// or bare call_<uuid>) that upstream models or the gateway occasionally emit
+// verbatim into the chat body. publicInternalCitationPattern (defined in
+// public_identity.go) covers the <cite>turnXsearchY</cite> and cite… forms
+// and is applied unconditionally here regardless of the identity policy env.
+var chatInternalMarkerRE = regexp.MustCompile(`(?i)\[/?cite\]|\[cite\]\[call_[0-9a-fA-F-]+\]|call_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+func cleanInternalMarkers(s string) string {
+	s = publicInternalCitationPattern.ReplaceAllString(s, "")
+	s = chatInternalMarkerRE.ReplaceAllString(s, "")
+	return s
 }
 
 // dataURLFromFile loads a cached image as a data: URL for replay to the model.
@@ -714,6 +758,7 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	tw := &teeWriter{ResponseWriter: w, code: http.StatusOK}
 	s.openaiChat(tw, upReq)
+	tw.flushRemaining()
 
 	// extract assistant text and persist
 	if tw.code == http.StatusOK {
@@ -789,7 +834,7 @@ func extractUpstreamText(b []byte, stream bool) string {
 			} `json:"choices"`
 		}
 		if json.Unmarshal(b, &out) == nil && len(out.Choices) > 0 {
-			return out.Choices[0].Message.Content
+			return cleanInternalMarkers(out.Choices[0].Message.Content)
 		}
 		return ""
 	}
@@ -814,7 +859,7 @@ func extractUpstreamText(b []byte, stream bool) string {
 			sb.WriteString(chunk.Choices[0].Delta.Content)
 		}
 	}
-	return sb.String()
+	return cleanInternalMarkers(sb.String())
 }
 
 // ---------- image generation ----------
@@ -873,11 +918,15 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 	if u.APIKey != "" {
 		upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
 	}
-	cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}}
+	cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
 	s.imageGenerations(cw, upReq)
 	if cw.code != http.StatusOK {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(cw.code)
+		status := cw.code
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
 		_, _ = w.Write(cw.buf.Bytes())
 		return
 	}
@@ -908,7 +957,7 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 		}
 		s.chatUI.mu.Lock()
 		if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-			c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: sb.String(), Time: time.Now()})
+			c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: cleanInternalMarkers(sb.String()), Time: time.Now()})
 			c.UpdatedAt = time.Now()
 			s.chatUI.saveConv(c)
 		}

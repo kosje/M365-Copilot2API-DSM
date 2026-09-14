@@ -343,6 +343,81 @@ func (s *Server) RefreshExpiredTokens() {
 	}
 }
 
+// refreshAccountMetering sends a minimal probe chat to one account and lets
+// recordAccountChatResult update its metering/quota. Disabled or unavailable
+// accounts are skipped.
+func (s *Server) refreshAccountMetering(ctx context.Context, accountID string) {
+	acc, err := s.tokens.EnsureValid(accountID)
+	if err != nil {
+		log.Printf("[quota-refresh] account=%s skip (token invalid: %v)", accountID, err)
+		return
+	}
+	if !s.accountAvailable(accountID) {
+		return
+	}
+	cfg := s.settings.get()
+	req := chathub.Request{
+		Text:         rateLimitProbePrompt,
+		Tone:         "magic",
+		Started:      true,
+		LicenseType:  cfg.LicenseType,
+		Scenario:     cfg.Scenario,
+		FeatureFlags: s.featureFlags(),
+	}
+	// chatWithAccount records metering via recordAccountChatResult.
+	_, _ = s.chatWithAccount(ctx, accountID, chathub.Account{
+		AccessToken: acc.AccessToken,
+		OID:         acc.OID,
+		TID:         acc.TID,
+	}, req)
+}
+
+// refreshAllMetering refreshes metering for every enabled/available account,
+// bounded by a small worker pool so we don't hammer upstream at once.
+func (s *Server) refreshAllMetering(ctx context.Context) {
+	accounts := s.tokens.List()
+	if len(accounts) == 0 {
+		return
+	}
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for _, acc := range accounts {
+		if !s.accountAvailable(acc.ID) {
+			continue
+		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			defer cancel()
+			s.refreshAccountMetering(cctx, id)
+		}(acc.ID)
+	}
+	wg.Wait()
+}
+
+// StartQuotaRefresh launches a background ticker that refreshes all accounts'
+// metering on the configured interval (0 disables it). The interval is re-read
+// every tick so a settings change takes effect without a restart.
+func (s *Server) StartQuotaRefresh() {
+	go func() {
+		for {
+			interval := s.settings.get().QuotaRefreshIntervalSeconds
+			if interval <= 0 {
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			time.Sleep(time.Duration(interval) * time.Second)
+			log.Printf("[quota-refresh] refreshing metering for all accounts (interval=%ds)", interval)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			s.refreshAllMetering(ctx)
+			cancel()
+		}
+	}()
+}
+
 func (s *Server) Routes() http.Handler {
 	mcp.APIKeyValidator = s.validAPIKey
 	m := http.NewServeMux()
@@ -430,7 +505,7 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/" || r.URL.Path == "/login" {
+		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -960,7 +1035,7 @@ func (s *Server) bindProxy(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]any{"ok": true, "id": body.ID, "boundProxy": acc.BoundProxy})
 }
 
-func (s *Server) startPKCE(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) startPKCE(w http.ResponseWriter, r *http.Request) {
 	v, err := auth.Verifier()
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "pkce failure")
@@ -972,13 +1047,26 @@ func (s *Server) startPKCE(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	state := hex.EncodeToString(b)
-	redirectURI := auth.RedirectURI()
+	// Resolve the redirect URI. When the admin UI is reached via loopback
+	// (or an explicit M365_BROWSER_REDIRECT_URI points at our /api/auth/callback),
+	// Microsoft redirects straight back to this server and the code is captured
+	// automatically — no manual copy/paste of the callback URL. Otherwise we
+	// keep the nativeclient flow (manual paste) so LAN access still works.
+	redirectURI, auto := resolvePKCERedirectURI(r)
 	s.mu.Lock()
 	s.pkce[state] = pendingPKCE{Verifier: v, Created: time.Now(), Status: "pending", RedirectURI: redirectURI}
 	s.mu.Unlock()
-	jsonOut(w, map[string]string{
-		"status": "pkce_ready",
-		"state":  state,
+	note := ""
+	if auto {
+		note = "Automatic capture enabled: Microsoft redirects the code to " + redirectURI +
+			". Register this exact URI as a Web redirect URI in your Microsoft Entra app registration. " +
+			"Set M365_FORCE_NATIVECLIENT=1 to fall back to manual paste."
+	} else {
+		note = "Manual flow: after login, copy the final URL/code from the address bar into /api/auth/callback."
+	}
+	jsonOut(w, map[string]any{
+		"status":     "pkce_ready",
+		"state":      state,
 		"url": auth.AuthorizationURL(
 			auth.AuthorizeEndpoint(),
 			auth.ClientID(),
@@ -988,8 +1076,54 @@ func (s *Server) startPKCE(w http.ResponseWriter, _ *http.Request) {
 			auth.Scope(),
 		),
 		"redirectUri": redirectURI,
-		"note":        "If redirect is nativeclient, paste the final URL/code into /api/auth/callback after login.",
+		"auto":        auto,
+		"note":        note,
 	})
+}
+
+// resolvePKCERedirectURI returns the OAuth redirect URI and whether the flow can
+// complete automatically (code captured by our own /api/auth/callback).
+func resolvePKCERedirectURI(r *http.Request) (string, bool) {
+	// Explicit override (env) wins; any redirect that lands on our own
+	// callback endpoint is treated as auto-captured.
+	cfg := auth.RedirectURI()
+	if cfg != "" && cfg != auth.DefaultRedirectURI {
+		return cfg, strings.HasSuffix(cfg, "/api/auth/callback")
+	}
+	// Force the nativeclient manual-paste flow (e.g. when the Entra app cannot
+	// register a custom redirect URI, or for debugging).
+	if os.Getenv("M365_FORCE_NATIVECLIENT") == "1" {
+		return auth.DefaultRedirectURI, false
+	}
+	if r != nil && r.Host != "" {
+		// Honour reverse-proxy headers so a server behind HTTPS/TLS termination
+		// still derives the correct public https:// redirect URI.
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = strings.ToLower(strings.SplitN(proto, ",", 2)[0])
+		}
+		host := r.Host
+		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+			host = strings.SplitN(fwd, ",", 2)[0]
+		}
+		// Redirect Microsoft straight back to this server's callback endpoint so
+		// the code is captured automatically. Works for loopback, LAN and public
+		// access alike — the only prerequisite is that this exact URI is
+		// registered as a "Web" redirect URI in the Entra app registration.
+		return scheme + "://" + host + "/api/auth/callback", true
+	}
+	// No usable host (headless token refresh, etc.): keep nativeclient.
+	return auth.DefaultRedirectURI, false
+}
+
+func isLoopbackHost(host string) bool {
+	h := host
+	if i := strings.IndexByte(h, ':'); i >= 0 {
+		h = h[:i]
+	}
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")
 }
 
 func (s *Server) pkceStatus(w http.ResponseWriter, r *http.Request) {
@@ -1097,9 +1231,18 @@ func (s *Server) callbackPKCE(w http.ResponseWriter, r *http.Request) {
 	p.Account = map[string]any{"id": acc.ID, "email": acc.Email, "displayName": acc.DisplayName, "status": acc.Status, "oid": acc.OID, "tid": acc.TID}
 	s.pkce[state] = p
 	s.mu.Unlock()
-	// Browser loopback callbacks should finish in a friendly page instead of
-	// displaying a raw JSON response. Keep JSON for the manual/API flow.
-	if strings.HasPrefix(redirectURI, "http://127.0.0.1:") || strings.HasPrefix(redirectURI, "http://localhost:") {
+	// New account joined: refresh metering for the whole pool so the admin
+	// dashboard reflects up-to-date quotas immediately.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		s.refreshAllMetering(ctx)
+	}()
+	// Any callback that lands back on our own /api/auth/callback is the
+	// automated flow: Microsoft returned the code straight to this server, so
+	// finish in a friendly page (no raw JSON) and notify the opener window.
+	// Keep JSON for the nativeclient/manual-paste flow.
+	if strings.HasSuffix(redirectURI, "/api/auth/callback") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, `<!doctype html><meta charset="utf-8"><title>M365 Copilot2API 授权完成</title><style>body{font:16px system-ui;text-align:center;padding:15vh 20px;color:#242424}main{max-width:520px;margin:auto}h1{font-size:26px}</style><main><h1>授权完成</h1><p>账号已经自动加入账号池，可以关闭此页面。</p><script>if(window.opener){window.opener.postMessage({type:"m365-auth-complete"},window.location.origin);setTimeout(()=>window.close(),300)}</script></main>`)
 		return
