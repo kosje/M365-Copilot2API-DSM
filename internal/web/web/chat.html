@@ -164,6 +164,25 @@ input,textarea,select{font:inherit;color:inherit}
 .send:disabled{opacity:.45;cursor:default}
 .edit-hint{font-size:11.5px;color:#f59e0b;margin-top:6px;display:none}
 .hint{font-size:11px;color:var(--muted);margin-top:8px;text-align:center}
+/* ===== image options panel ===== */
+.imgpanel{border:1px solid var(--border);border-radius:12px;background:var(--bg);padding:10px 12px;margin-bottom:8px;font-size:12px}
+.imgpanel .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0}
+.imgpanel .lbl{color:var(--muted);font-size:11.5px;min-width:52px;flex-shrink:0}
+.chip{border:1px solid var(--border);border-radius:14px;padding:2.5px 10px;background:var(--bg);cursor:pointer;font-size:11.5px;color:var(--fg);transition:all .15s;white-space:nowrap}
+.chip:hover{border-color:var(--accent)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.imgpanel .adv{display:none;border-top:1px dashed var(--border);margin-top:8px;padding-top:8px}
+.imgpanel .adv.open{display:block}
+.imgpanel input.neg{width:100%;border:1px solid var(--border);border-radius:8px;padding:5px 8px;background:var(--panel);color:var(--fg);font-size:12px;margin-top:4px}
+.imgpanel .adv-toggle{background:none;border:none;color:var(--muted);cursor:pointer;font-size:11.5px;padding:0}
+.imgpanel .adv-toggle:hover{color:var(--accent)}
+.gen-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:8px 0}
+.gen-grid img{width:100%;border-radius:10px;cursor:zoom-in;border:1px solid var(--border)}
+.gen-item{position:relative}
+.gen-item .gen-actions{position:absolute;top:6px;right:6px;display:flex;gap:4px}
+.gen-item .gen-actions button{background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer}
+.optbadges{display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle}
+.optbadges span{font-size:10.5px;border:1px solid var(--border);border-radius:10px;padding:1px 7px;color:var(--muted)}
 #jumpBtn{position:absolute;right:26px;bottom:130px;width:36px;height:36px;border-radius:50%;background:var(--bg);border:1px solid var(--border);box-shadow:0 3px 12px rgba(0,0,0,.12);color:var(--muted);font-size:15px;z-index:20}
 #jumpBtn:hover{color:var(--accent);border-color:var(--accent)}
 
@@ -223,11 +242,19 @@ input,textarea,select{font:inherit;color:inherit}
           <label><b>🧭 系统提示词（对本页所有对话生效）</b><button class="code-copy" onclick="toggleSys(false)">收起</button></label>
           <textarea id="sysInput" placeholder="例如：你是一名严谨的中文技术顾问，回答先给结论再展开…" oninput="localStorage.setItem('m365_chat_sys',this.value)"></textarea>
         </div>
+        <div class="imgpanel hidden" id="imgPanel">
+          <div class="row"><span class="lbl">📐 比例</span><span id="sizeChips"></span></div>
+          <div class="row"><span class="lbl">🎨 风格</span><span id="styleChips"></span></div>
+          <div class="row"><span class="lbl">#️⃣ 数量</span><span id="countChips"></span><span class="lbl" style="min-width:0">✨</span><span id="qualityChips"></span>
+            <button class="adv-toggle" onclick="document.getElementById('advBox').classList.toggle('open')">⚙️ 高级 ▾</button></div>
+          <div class="adv" id="advBox"><span class="lbl">🚫 负面提示词</span><input class="neg" id="negInput" placeholder="不希望出现的元素，如：文字、水印、多余手指、模糊" oninput="pickNegative()"></div>
+        </div>
         <div class="input-box" id="inputBox">
           <div class="attach-row" id="attachRow"></div>
           <textarea id="input" rows="1" placeholder="给 M365 发送消息（Enter 发送 / Shift+Enter 换行）"></textarea>
           <div class="input-foot">
             <button class="mode-btn" id="imgModeBtn" onclick="toggleImgMode()" title="画图模式：发送的描述将生成图片">🎨 画图</button>
+            <button class="mode-btn" onclick="inspire()" title="随机灵感：随机填入一条提示词（聊天/画图模式各有专属灵感池）">🎲 灵感</button>
             <button class="mode-btn pic" onclick="pickImage()" title="添加图片">🖼️</button>
             <button class="mode-btn" onclick="toggleSys()" title="设置系统提示词">🧭 人设</button>
             <select id="modelSel" title="选择模型" onchange="onModelChange()"></select>
@@ -306,7 +333,7 @@ function showApp(){
   $('login').classList.add('hidden');$('app').classList.remove('hidden');
   $('whoami').textContent=me;$('uAvatar').textContent=(me||'?').slice(0,1).toUpperCase();
   $('sysInput').value=localStorage.getItem('m365_chat_sys')||'';
-  renderQuota();loadModels();loadConvs();newChat(true);
+  renderImgPanel();renderQuota();loadModels();loadConvs();newChat(true);
 }
 async function doLogin(){
   $('liBtn').disabled=true;$('loginErr').textContent='';
@@ -418,15 +445,14 @@ function newChat(silent){
 }
 function renderWelcome(){
   const w=document.createElement('div');w.className='welcome';
+  const tips=refreshWelcomeTips();
   w.innerHTML=`<h1>Hi，我是 M365 Copilot</h1><p>网关直连 · 支持文字对话、图片理解与 AI 画图</p>
   <div class="tips">
-    <div class="tip" onclick="tipFill('用一句话介绍你自己')">📝<b>自我介绍</b><small>一句话介绍你自己</small></div>
-    <div class="tip" onclick="tipFill('把下面这段话翻译成地道的英文：')">🌍<b>中英翻译</b><small>地道的翻译助手</small></div>
-    <div class="tip" onclick="tipFill('用 Python 写一个快速排序，带注释和测试用例')">💻<b>写代码</b><small>带注释的完整实现</small></div>
-    <div class="tip" onclick="tipFill('帮我把这篇长文总结成 5 个要点：')">📌<b>长文总结</b><small>提炼要点</small></div>
-    <div class="tip" onclick="tipFill('画一只在月球上骑自行车的宇航猫')">🎨<b>AI 画图</b><small>画一只月球宇航猫</small></div>
-    <div class="tip" onclick="document.getElementById('fileInput').click()">🖼️<b>图片理解</b><small>添加图片让我分析</small></div>
-  </div>`;
+    ${tips.map(([ic,t,s,p])=>p
+      ?`<div class="tip" onclick="tipFill(${JSON.stringify(p).replace(/"/g,'&quot;')})">${ic}<b>${t}</b><small>${s}</small></div>`
+      :`<div class="tip" onclick="document.getElementById('fileInput').click()">${ic}<b>${t}</b><small>${s}</small></div>`).join('')}
+  </div>
+  <div style="margin-top:10px"><button class="chip" onclick="renderWelcome()">🎲 换一批灵感</button></div>`;
   $('msgWrap').appendChild(w);
 }
 function tipFill(t){$('input').value=t;autoGrow();$('input').focus();}
@@ -591,7 +617,7 @@ function renderMsg(m,streaming){
       const cp=document.createElement('button');cp.textContent='⧉ 复制';
       cp.onclick=()=>{navigator.clipboard.writeText(m.content||'').then(()=>toast('已复制'),()=>toast('复制失败'));};
       const rg=document.createElement('button');rg.className='act-regen';rg.textContent='🔄 重新生成';
-      rg.onclick=regenLast;
+      rg.onclick=(m.gen&&m.gen.length)?imgRegenLast:regenLast;
       const qt=document.createElement('button');qt.textContent='❝ 引用';
       qt.onclick=()=>quoteText(m.content||'');
       const meta=document.createElement('span');meta.className='meta';
@@ -675,7 +701,73 @@ function renderAttach(){
     el.appendChild(t);
   });
 }
-function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('input').placeholder=imgMode?'描述想生成的图片…':'给 M365 发送消息（Enter 发送 / Shift+Enter 换行）';}
+function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('imgPanel').classList.toggle('hidden',!imgMode);$('input').placeholder=imgMode?'描述想生成的图片…（可选比例/风格/数量）':'给 M365 发送消息（Enter 发送 / Shift+Enter 换行）';}
+
+/* ---------- image options panel ---------- */
+const imgOpts={size:'1024x1024',style:'',count:1,quality:'',negative:''};
+try{Object.assign(imgOpts,JSON.parse(localStorage.getItem('m365_img_opts')||'{}'));}catch(e){}
+const SIZE_PRESETS=[['1:1','1024x1024'],['3:4','864x1152'],['4:3','1152x864'],['2:3','832x1216'],['3:2','1216x832'],['9:16','720x1280'],['16:9','1280x720']];
+const STYLE_PRESETS=[['auto','自动'],['photo','写实摄影'],['anime','动漫'],['3d','3D渲染'],['flat','扁平插画'],['watercolor','水彩'],['oil','油画'],['pixel','像素艺术'],['cyberpunk','赛博朋克'],['ink','水墨'],['sketch','线条画'],['sticker','贴纸'],['emote','表情包']];
+function saveImgOpts(){localStorage.setItem('m365_img_opts',JSON.stringify(imgOpts));}
+function renderImgPanel(){
+  $('sizeChips').innerHTML=SIZE_PRESETS.map(([l,v])=>`<button class="chip ${imgOpts.size===v?'on':''}" data-v="${v}" onclick="pickSize('${v}')">${l}</button>`).join(' ');
+  $('styleChips').innerHTML=STYLE_PRESETS.map(([l,v])=>`<button class="chip ${imgOpts.style===v?'on':''}" onclick="pickStyle('${v}')">${l}</button>`).join(' ');
+  $('countChips').innerHTML=[1,2,3,4].map(n=>`<button class="chip ${imgOpts.count===n?'on':''}" onclick="pickCount(${n})">${n}</button>`).join(' ');
+  $('qualityChips').innerHTML=`<button class="chip ${imgOpts.quality==='hd'?'on':''}" onclick="pickQuality()">高清</button>`;
+  $('negInput').value=imgOpts.negative||'';
+}
+function pickSize(v){imgOpts.size=v;saveImgOpts();renderImgPanel();}
+function pickStyle(v){imgOpts.style=imgOpts.style===v?'':v;saveImgOpts();renderImgPanel();}
+function pickCount(n){imgOpts.count=n;saveImgOpts();renderImgPanel();}
+function pickQuality(){imgOpts.quality=imgOpts.quality==='hd'?'':'hd';saveImgOpts();renderImgPanel();}
+function pickNegative(){imgOpts.negative=$('negInput').value.trim();saveImgOpts();}
+function optBadgeHTML(){
+  const t=[];
+  if(imgOpts.size&&imgOpts.size!=='1024x1024')t.push(imgOpts.size);
+  const st=STYLE_PRESETS.find(([l,v])=>v===imgOpts.style);if(st&&imgOpts.style)t.push(st[1]);
+  if(imgOpts.count>1)t.push('x'+imgOpts.count);
+  if(imgOpts.quality==='hd')t.push('高清');
+  return t.length?`<span class="optbadges">${t.map(x=>`<span>${x}</span>`).join('')}</span>`:'';
+}
+
+/* ---------- random inspiration ---------- */
+const chatInspire=[
+  '用一句话介绍你自己','帮我写一封请假邮件，语气礼貌简洁','把下面这段话翻译成地道的英文：','用 Python 写一个快速排序，带注释和测试用例',
+  '帮我把这篇长文总结成 5 个要点：','解释一下什么是哈希表，和数组相比优劣是什么？','给我一份一周减脂餐计划（含热量估算）',
+  '用费曼学习法帮我理解量子纠缠','写一首关于秋天的现代诗','帮我想 10 个 科技类公众号 标题',
+  '这段代码有 bug 吗？帮我 review：','为我的年终述职写一个 3 分钟开场白','用 SWOT 分析法分析 无人驾驶出租车 行业',
+  '把下面的会议记录整理成待办清单：','给我讲讲复利效应，并举 3 个生活中的例子','帮孩子出 10 道小学三年级数学应用题（附答案）',
+  '我要去成都玩 3 天，帮我做个行程规划（美食优先）','对比一下 PostgreSQL 和 MySQL 的适用场景','帮我润色这段话，使其更专业：',
+  '写一个 Bash 脚本：批量重命名当前目录下所有 .png 文件','如何向 8 岁小孩解释互联网是怎么工作的？','给我 5 个提高深度工作力的具体方法',
+];
+const imgInspire=[
+  '一只穿着宇航服的橘猫在月球上骑自行车，地球挂在背景天空','日落时分的赛博朋克城市街头，霓虹灯与积水倒影','水墨风格的山间云海，一叶扁舟',
+  '3D 渲染的可爱小机器人坐在书桌前打字，暖色台灯','扁平插画风格：一家人在公园野餐，远处是城市天际线','蒸汽波风格的复古电脑与棕榈树',
+  '水彩画：清晨的江南古镇，石桥与乌篷船','像素风格的海边小屋，黄昏氛围','写实摄影：雨后森林中的光束穿透树梢',
+  '一个巨大温室玻璃穹顶里的热带花园，正午阳光','复古海报风格：星际列车停靠在土星环站台','皮克斯风格的祖孙俩在厨房做饺子',
+  '极简线条画：一杯冒热气的咖啡与一本翻开的书','油画风格：暴风雨中的灯塔与巨浪','动漫风格：放学后的教室，夕阳透过窗户',
+  '等距视角的微型小岛，岛上有瀑布和小木屋','微距摄影：露珠中的彩虹倒影','赛博朋克风格的全息投影便利店',
+  '一幅太空歌剧场景：舰队跃迁时的蓝光隧道','儿童绘本风格：长颈鹿在放风筝','油画静物：木桌上的柑橘与陶罐',
+  '未来感悬浮城市在云层之上，清晨薄雾','一只柴犬穿着和服在樱花树下打伞','极光下的雪山湖泊，倒影完美对称',
+];
+function inspire(){
+  const pool=imgMode?imgInspire:chatInspire;
+  const pick=pool[Math.floor(Math.random()*pool.length)];
+  $('input').value=pick;autoGrow();$('input').focus();
+}
+function refreshWelcomeTips(){
+  const tips=[
+    ['📝','自我介绍','一句话介绍你自己','用一句话介绍你自己'],
+    ['🌍','中英翻译','地道的翻译助手','把下面这段话翻译成地道的英文：'],
+    ['💻','写代码','带注释的完整实现','用 Python 写一个快速排序，带注释和测试用例'],
+    ['📌','长文总结','提炼要点','帮我把这篇长文总结成 5 个要点：'],
+    ['🎨','AI 画图','画一只月球宇航猫','画一只在月球上骑自行车的宇航猫'],
+    ['🖼️','图片理解','添加图片让我分析',''],
+  ];
+  const picks=[...chatInspire].sort(()=>Math.random()-.5).slice(0,3);
+  picks.forEach((p,i)=>tips.push(['✨','灵感 '+(i+1),'随机灵感',p]));
+  return tips.sort(()=>Math.random()-.5).slice(0,6);
+}
 
 /* ---------- send / stream ---------- */
 function setBusyUI(on){
@@ -865,27 +957,67 @@ function retryLast(){
   if(curMsgs.length&&curMsgs[curMsgs.length-1].role==='user'){streamChat({regenerate:true});}
   else streamChat({});
 }
+function imgRegenLast(){
+  if(busy)return;
+  const wrap=$('msgWrap');
+  const as=wrap.querySelectorAll('.msg.assistant');
+  if(!as.length)return;
+  as[as.length-1].closest('.msg').remove();
+  while(curMsgs.length&&curMsgs[curMsgs.length-1].role==='assistant')curMsgs.pop();
+  if(!curMsgs.length||curMsgs[curMsgs.length-1].role!=='user'){toast('没有可重新生成的用户消息');loadConvs();return;}
+  const last=curMsgs.pop();
+  // 服务端持久化的画图用户消息 = '🎨 ' + prompt + 选项后缀「（…）」，剥离后重画
+  let p=(last.content||'').replace(/^🎨\s*/,'');
+  const cut=p.indexOf('（');
+  if(cut>0&&p.endsWith('）'))p=p.slice(0,cut);
+  if(!p)p=lastImgPrompt;
+  if(!p){toast('没有可用的画图提示词');loadConvs();return;}
+  genImage(p);
+}
+let lastImgPrompt='';
 
 async function genImage(prompt){
-  busy=true;setBusyUI(true);
-  renderMsg({role:'user',content:'🎨 '+prompt},false);
+  busy=true;setBusyUI(true);lastImgPrompt=prompt;
+  pickNegative();
+  const editImage=attachments.length?attachments[0]:''; // 画图模式下已传图 → 图生图
+  if(editImage){attachments=[];renderAttach();}
+  const badges=optBadgeHTML();
+  renderMsg({role:'user',content:'🎨 '+prompt+badges},false);
   curMsgs.push({role:'user',content:'🎨 '+prompt});
-  const body=renderMsg({role:'assistant',content:''},true);
+  const body=renderMsg({role:'assistant',content:'<span class="stream-cursor"></span> 生成中…'+(imgOpts.count>1?`（${imgOpts.count} 张，逐张生成）`:'')},true);
   jumpBottom(true);
   try{
-    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt})});
+    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt,size:imgOpts.size,count:imgOpts.count,style:imgOpts.style,quality:imgOpts.quality,negative:imgOpts.negative,editImage})});
     curConv=d.conversationId;
-    body.innerHTML='';const img=document.createElement('img');img.className='att';img.src=d.url;img.onload=scrollBottom;img.onclick=()=>zoom(d.url);body.appendChild(img);
+    const urls=d.urls&&d.urls.length?d.urls:[d.url];
+    body.innerHTML='';
+    if(urls.length===1){
+      const img=document.createElement('img');img.className='att';img.src=urls[0];img.onload=scrollBottom;img.onclick=()=>zoom(urls[0]);body.appendChild(img);
+    }else{
+      const grid=document.createElement('div');grid.className='gen-grid';
+      urls.forEach((u,i)=>{
+        const cell=document.createElement('div');cell.className='gen-item';
+        const img=document.createElement('img');img.src=u;img.onclick=()=>zoom(u);img.onload=scrollBottom;
+        const act=document.createElement('div');act.className='gen-actions';
+        const dl=document.createElement('button');dl.textContent='⬇';dl.title='下载';
+        dl.onclick=()=>{const a=document.createElement('a');a.href=u;a.download='image-'+(i+1)+'.png';a.click();};
+        act.appendChild(dl);cell.append(img,act);grid.appendChild(cell);
+      });
+      body.appendChild(grid);
+    }
+    if(d.partial&&d.partial.length){
+      const warn=document.createElement('div');warn.style.cssText='font-size:11.5px;color:var(--muted);margin-top:4px';
+      warn.textContent='⚠ '+d.partial.join('；');body.appendChild(warn);
+    }
     const tools=document.createElement('div');tools.className='tools';
-    const op=document.createElement('button');op.textContent='⬇ 下载原图';
-    op.onclick=()=>{const a=document.createElement('a');a.href=d.url;a.download='image.png';a.click();};
     const meta=document.createElement('span');meta.className='meta';
-    const mb=document.createElement('span');mb.className='mbadge';mb.textContent='gpt-image-2';meta.appendChild(mb);
-    tools.append(op,meta);
+    const mb=document.createElement('span');mb.className='mbadge';mb.textContent=editImage?'gpt-image-2 图生图':'gpt-image-2';meta.appendChild(mb);
+    const re=document.createElement('button');re.textContent='🔁 再来一张';re.onclick=()=>genImage(prompt);
+    tools.append(re,meta);
     body.appendChild(tools);
-    curMsgs.push({role:'assistant',content:'',gen:[d.url.split('/').pop()]});
+    curMsgs.push({role:'assistant',content:'',gen:urls.map(u=>u.split('/').pop())});
     loadConvs();
-  }catch(e){body.innerHTML='<span style="color:var(--err)">⚠ '+esc(e.message)+'</span>';curMsgs.pop();}
+  }catch(e){body.innerHTML='<span style="color:var(--err)">⚠ '+esc(e.message)+'</span><div style="margin-top:6px"><button class="chip" onclick="retryLast()">重试</button></div>';curMsgs.pop();}
   finally{busy=false;setBusyUI(false);refreshQuota();refreshActions();scrollBottom();}
 }
 boot();

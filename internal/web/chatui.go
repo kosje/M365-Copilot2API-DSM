@@ -950,22 +950,34 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 		ConversationID string `json:"conversationId"`
 		Prompt         string `json:"prompt"`
 		Size           string `json:"size"`
+		Count          int    `json:"count"`
+		Style          string `json:"style"`
+		Negative       string `json:"negative"`
+		Quality        string `json:"quality"`
+		EditImage      string `json:"editImage"` // data URI of an uploaded image → 图生图 (edit) mode
 	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) != nil || strings.TrimSpace(in.Prompt) == "" {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxImageEditRequestBytes)).Decode(&in) != nil || strings.TrimSpace(in.Prompt) == "" {
 		writeOpenAIError(w, 400, "invalid_request_error", "prompt is required")
 		return
 	}
-	size := strings.TrimSpace(in.Size)
-	if size == "" {
-		size = "1024x1024"
+	size := normalizeImageSize(in.Size)
+	count := in.Count
+	if count <= 0 {
+		count = 1
 	}
+	if count > 4 {
+		count = 4
+	}
+	// 图生图：带编辑底图时走 upstream edit 操作（保持原图未提及部分）。
+	isEdit := strings.HasPrefix(strings.ToLower(strings.TrimSpace(in.EditImage)), "data:image/")
+	finalPrompt := composeImagePrompt(in.Prompt, in.Style, in.Negative, in.Quality)
 
 	s.chatUI.mu.Lock()
 	conv := s.chatUI.loadConv(u.ID, in.ConversationID)
 	if conv == nil {
 		conv = &chatConv{ID: uuid.NewString(), UserID: u.ID, Title: "新对话", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	}
-	conv.Messages = append(conv.Messages, chatMessage{Role: "user", Content: in.Prompt, Time: time.Now()})
+	conv.Messages = append(conv.Messages, chatMessage{Role: "user", Content: "🎨 " + imageUserDisplay(in.Prompt, size, in.Style, in.Quality, count, isEdit), Time: time.Now()})
 	if conv.Title == "新对话" {
 		t := []rune("🎨 " + in.Prompt)
 		if len(t) > 40 {
@@ -978,84 +990,157 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 	s.chatUI.mu.Unlock()
 
 	upBody, _ := json.Marshal(map[string]any{
-		"prompt": in.Prompt, "n": 1, "size": size,
+		"prompt": finalPrompt, "n": 1, "size": size,
 		"response_format": "b64_json", "model": "gpt-image-2",
-	})
-	upReq := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(upBody))
-	upReq.Header.Set("Content-Type", "application/json")
-	if u.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
-	}
-	cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
-	s.imageGenerations(cw, upReq)
-	if cw.code != http.StatusOK {
-		w.Header().Set("Content-Type", "application/json")
-		status := cw.code
-		if status == 0 {
-			status = http.StatusOK
-		}
-		w.WriteHeader(status)
-		_, _ = w.Write(cw.buf.Bytes())
-		return
-	}
-	var out struct {
-		Data []struct {
-			B64 string `json:"b64_json"`
-			URL string `json:"url"`
-		} `json:"data"`
-		Warning string `json:"warning"`
-	}
-	if json.Unmarshal(cw.buf.Bytes(), &out) != nil || len(out.Data) == 0 {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
-		return
-	}
-	// 兜底：图片已在上游生成，但服务器下载失败（设备可能无代理直连图片 CDN）。
-	// 把上游地址直接给用户，提示自行下载。
-	if out.Data[0].B64 == "" && out.Data[0].URL != "" {
-		urls := make([]string, 0, len(out.Data))
-		for _, d := range out.Data {
-			if d.URL != "" {
-				urls = append(urls, d.URL)
+		"operation": func() string {
+			if isEdit {
+				return "edit"
 			}
-		}
-		var sb strings.Builder
-		sb.WriteString("⚠️ 图片已生成，但服务器下载图片失败（设备可能无法直连图片 CDN，需要代理）。请自行点击下面的链接下载：\n")
-		for i, u := range urls {
-			sb.WriteString(fmt.Sprintf("\n[下载图片 %d](%s)", i+1, u))
-		}
-		s.chatUI.mu.Lock()
-		if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-			c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: cleanInternalMarkers(sb.String()), Time: time.Now()})
-			c.UpdatedAt = time.Now()
-			s.chatUI.saveConv(c)
-		}
-		s.chatUI.mu.Unlock()
-		jsonOut(w, map[string]any{"status": "ok", "conversationId": convID, "warning": "download_failed", "urls": urls})
-		return
+			return ""
+		}(),
+	})
+	if isEdit {
+		upBody, _ = json.Marshal(map[string]any{
+			"prompt": finalPrompt, "n": 1, "size": size,
+			"response_format": "b64_json", "model": "gpt-image-2",
+			"operation": "edit",
+			"attachments": []map[string]string{{
+				"type": "image", "url": strings.TrimSpace(in.EditImage),
+				"name": "edit.png", "mimeType": "image/png",
+			}},
+		})
 	}
-	if out.Data[0].B64 == "" {
+	// 多图循环生成：每张独立调用一次上游（上游单次只稳定返回一张）。
+	// 第一张失败 → 整体报错；后续失败 → 已成功的照常返回，附带失败说明。
+	type genResult struct {
+		fileID string
+		err    string
+	}
+	results := make([]genResult, 0, count)
+	for i := 0; i < count; i++ {
+		upReq := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(upBody))
+		upReq.Header.Set("Content-Type", "application/json")
+		if u.APIKey != "" {
+			upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
+		}
+		cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
+		s.imageGenerations(cw, upReq)
+		if cw.code != http.StatusOK {
+			if i == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				status := cw.code
+				if status == 0 {
+					status = http.StatusOK
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write(cw.buf.Bytes())
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张生成失败（HTTP %d）", i+1, cw.code)})
+			continue
+		}
+		var out struct {
+			Data []struct {
+				B64 string `json:"b64_json"`
+				URL string `json:"url"`
+			} `json:"data"`
+			Warning string `json:"warning"`
+		}
+		if json.Unmarshal(cw.buf.Bytes(), &out) != nil || len(out.Data) == 0 {
+			if i == 0 {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张未返回图片", i+1)})
+			continue
+		}
+		// 兜底：图片已在上游生成，但服务器下载失败（设备可能无代理直连图片 CDN）。
+		if out.Data[0].B64 == "" && out.Data[0].URL != "" {
+			if i == 0 {
+				var sb strings.Builder
+				sb.WriteString("⚠️ 图片已生成，但服务器下载图片失败（设备可能无法直连图片 CDN，需要代理）。请自行点击下面的链接下载：\n")
+				for j, d := range out.Data {
+					if d.URL != "" {
+						sb.WriteString(fmt.Sprintf("\n[下载图片 %d](%s)", j+1, d.URL))
+					}
+				}
+				s.chatUI.mu.Lock()
+				if c := s.chatUI.loadConv(u.ID, convID); c != nil {
+					c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: cleanInternalMarkers(sb.String()), Time: time.Now()})
+					c.UpdatedAt = time.Now()
+					s.chatUI.saveConv(c)
+				}
+				s.chatUI.mu.Unlock()
+				urls := make([]string, 0, len(out.Data))
+				for _, d := range out.Data {
+					if d.URL != "" {
+						urls = append(urls, d.URL)
+					}
+				}
+				jsonOut(w, map[string]any{"status": "ok", "conversationId": convID, "warning": "download_failed", "urls": urls})
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张下载失败", i+1)})
+			continue
+		}
+		if out.Data[0].B64 == "" {
+			if i == 0 {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张未返回图片", i+1)})
+			continue
+		}
+		img, err := base64.StdEncoding.DecodeString(out.Data[0].B64)
+		if err != nil || len(img) == 0 {
+			if i == 0 {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "invalid image data")
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张数据无效", i+1)})
+			continue
+		}
+		id, err := s.chatUI.saveImage(img, "image/png")
+		if err != nil {
+			if i == 0 {
+				writeOpenAIError(w, 500, "internal_error", "save image failed")
+				return
+			}
+			results = append(results, genResult{err: fmt.Sprintf("第 %d 张保存失败", i+1)})
+			continue
+		}
+		results = append(results, genResult{fileID: id})
+	}
+	genIDs := make([]string, 0, len(results))
+	outURLs := make([]string, 0, len(results))
+	failures := make([]string, 0)
+	for _, r := range results {
+		if r.fileID != "" {
+			genIDs = append(genIDs, r.fileID)
+			outURLs = append(outURLs, "/api/chatui/file/"+r.fileID)
+		} else {
+			failures = append(failures, r.err)
+		}
+	}
+	if len(genIDs) == 0 {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
-		return
-	}
-	img, err := base64.StdEncoding.DecodeString(out.Data[0].B64)
-	if err != nil || len(img) == 0 {
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "invalid image data")
-		return
-	}
-	id, err := s.chatUI.saveImage(img, "image/png")
-	if err != nil {
-		writeOpenAIError(w, 500, "internal_error", "save image failed")
 		return
 	}
 	s.chatUI.mu.Lock()
 	if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-		c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: "", Gen: []string{id}, Time: time.Now()})
+		c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: "", Gen: genIDs, Model: "gpt-image-2", Time: time.Now()})
 		c.UpdatedAt = time.Now()
 		s.chatUI.saveConv(c)
 	}
 	s.chatUI.mu.Unlock()
-	bumpChatQuota(u.ID, "image")
-	jsonOut(w, map[string]any{"status": "ok", "conversationId": convID, "fileId": id, "url": "/api/chatui/file/" + id})
+	for range genIDs {
+		bumpChatQuota(u.ID, "image") // 每张成功图片各计一次画图配额
+	}
+	out := map[string]any{"status": "ok", "conversationId": convID, "urls": outURLs, "url": outURLs[0]}
+	if len(failures) > 0 {
+		out["partial"] = failures
+	}
+	jsonOut(w, out)
 }
 
 // chatCaptureWriter buffers the whole response (used for in-process non-stream calls).

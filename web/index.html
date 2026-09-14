@@ -622,6 +622,7 @@ if (response.output_text) {
           <div><h2 class="page-title">Chat Users</h2><p class="page-sub">Accounts, quotas and storage for the /chat test frontend</p></div>
           <div style="display:flex;gap:8px">
             <a class="btn" href="/chat" target="_blank" rel="noopener">Open /chat ↗</a>
+            <button class="btn" onclick="openChatBrowse('','imgs')">🖼 图片库</button>
             <button class="btn danger" onclick="chatCleanup('expired')">Clean expired</button>
             <button class="btn danger" onclick="chatCleanup('all-images')">Clear image cache</button>
           </div>
@@ -763,6 +764,18 @@ if (response.output_text) {
 </div>
 
 <!-- Use API Modal -->
+<div class="modal-overlay" id="chatBrowseModal">
+  <div class="modal" style="max-width:880px;width:95%">
+    <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">💬 Chat 内容管理
+      <select id="cbUserSel" class="form-input" style="width:auto;padding:4px 8px;font-size:12px" onchange="cbSwitchUser()"></select>
+      <span style="flex:1"></span>
+      <button class="btn-sm btn" id="cbTabImgs" onclick="cbTab('imgs')">🖼 图片</button>
+      <button class="btn-sm btn" id="cbTabConvs" onclick="cbTab('convs')">💬 对话</button>
+      <button class="btn-sm btn" onclick="closeChatBrowse()">关闭</button>
+    </h3>
+    <div id="cbBody" style="max-height:62vh;overflow:auto"></div>
+  </div>
+</div>
 <div class="modal-overlay" id="useKeyModal">
   <div class="modal wide">
     <div class="modal-head">
@@ -1687,6 +1700,7 @@ function renderChatAdmin(){
       <td><code></code></td>
       <td class="key-created" style="font-size:12px;color:var(--muted)"></td>
       <td style="text-align:right;white-space:nowrap">
+        <button class="btn-sm btn" data-a="convs">对话</button>
         <button class="btn-sm btn" data-a="quota">Quota</button>
         <button class="btn-sm btn" data-a="pass">Password</button>
         <button class="btn-sm btn ${u.enabled?'danger':'success'}" data-a="toggle">${u.enabled?'Disable':'Enable'}</button>
@@ -1696,6 +1710,7 @@ function renderChatAdmin(){
     tr.children[3].textContent=`对话 ${q.chat||0} · 画图 ${q.image||0}`;
     tr.querySelector('code').textContent=u.keyPrefix||'';
     tr.querySelector('.key-created').textContent=new Date(u.createdAt).toLocaleDateString();
+    tr.querySelector('[data-a="convs"]').addEventListener('click',()=>openChatBrowse(u.id,'convs'));
     tr.querySelector('[data-a="quota"]').addEventListener('click',()=>{
       const dc=prompt(`「${u.username}」每日对话次数（0=不限）`,u.dailyChat||0);if(dc===null)return;
       const di=prompt(`「${u.username}」每日画图次数（0=不限）`,u.dailyImage||0);if(di===null)return;
@@ -1728,6 +1743,74 @@ async function chatCleanup(scope){
   if(!confirm(scope==='all-images'?'清空全部图片缓存？':'立即清理过期数据？'))return;
   try{const d=await api('/api/chatui/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cleanup',scope})});showNotice(`已清理 ${d.removed} 个文件，释放 ${fmtBytes(d.freedBytes)}`,'success');loadChatAdmin();}
   catch(e){showNotice(e.message,'error');}
+}
+
+// ===== Chat content browse: conversations & generated images (admin) =====
+let cbUser='',cbMode='imgs';
+function openChatBrowse(user,mode){
+  cbUser=user||'';cbMode=mode||'imgs';
+  const sel=$('cbUserSel');
+  sel.innerHTML='<option value="">全部用户（图片）</option>'+((chatAdminData&&chatAdminData.users)||[]).map(u=>`<option value="${u.id}" ${u.id===cbUser?'selected':''}>${esc(u.username)}</option>`).join('');
+  cbTab(cbMode);
+  $('chatBrowseModal').classList.add('open');
+}
+function closeChatBrowse(){$('chatBrowseModal').classList.remove('open');}
+function cbSwitchUser(){cbUser=$('cbUserSel').value;cbTab(cbMode);}
+function cbTab(m){
+  cbMode=m;
+  $('cbTabImgs').className='btn-sm btn '+(m==='imgs'?'primary':'');
+  $('cbTabConvs').className='btn-sm btn '+(m==='convs'?'primary':'');
+  if(m==='convs')loadCbConvs();else loadCbImages();
+}
+async function loadCbImages(){
+  $('cbBody').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const d=await api('/api/chatui/admin/images'+(cbUser?`?user=${cbUser}`:''));
+    const imgs=d.images||[];
+    if(!imgs.length){$('cbBody').innerHTML='<div class="empty">No images stored</div>';return;}
+    $('cbBody').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px">`+imgs.map(i=>`
+      <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
+        <img src="${i.url}" loading="lazy" style="width:100%;height:120px;object-fit:cover;cursor:zoom-in" onclick="window.open('${i.url}','_blank')">
+        <div style="padding:6px;font-size:10.5px;color:var(--muted)">${fmtBytes(i.size)} · ${new Date(i.modifiedAt).toLocaleString()}<br>${i.refs&&i.refs.length?esc(i.refs.map(r=>`${r.username}：${r.conv}`).join('；')):'未被对话引用'}</div>
+        <div style="padding:0 6px 6px"><button class="btn-sm btn danger" onclick="cbDelImage('${i.id}')">🗑 删除</button></div>
+      </div>`).join('')+`</div>`;
+  }catch(e){$('cbBody').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+}
+async function cbDelImage(id){
+  if(!confirm('删除该图片？将同时从所有对话记录中移除其引用。'))return;
+  try{await api('/api/chatui/admin/image/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});showNotice('图片已删除','success');loadCbImages();loadChatAdmin();}
+  catch(e){showNotice(e.message,'error');}
+}
+async function loadCbConvs(){
+  $('cbBody').innerHTML='<div class="empty">Loading…</div>';
+  if(!cbUser){$('cbBody').innerHTML='<div class="empty">请先在上方选择一个用户</div>';return;}
+  try{
+    const d=await api('/api/chatui/admin/convs?user='+cbUser);
+    const cs=d.conversations||[];
+    if(!cs.length){$('cbBody').innerHTML='<div class="empty">该用户暂无对话</div>';return;}
+    $('cbBody').innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">`+cs.map(c=>`
+      <div style="display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:10px;padding:8px 12px">
+        <div style="flex:1"><b>${esc(c.title)}</b><div style="font-size:11px;color:var(--muted)">${c.messages} 条消息 · ${c.images} 张生成图 · ${new Date(c.updatedAt).toLocaleString()}</div></div>
+        <button class="btn-sm btn" onclick="cbOpenConv('${c.id}')">查看</button>
+      </div>`).join('')+`</div>`;
+  }catch(e){$('cbBody').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+}
+async function cbOpenConv(id){
+  $('cbBody').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const d=await api(`/api/chatui/admin/convs?user=${cbUser}&id=${id}`);
+    $('cbBody').innerHTML=`<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px"><button class="btn-sm btn" onclick="loadCbConvs()">← 返回</button><b>${esc(d.title)}</b><span style="font-size:11px;color:var(--muted)">${esc(d.username||'')}</span></div>`+
+      (d.messages||[]).map(m=>{
+        let imgs='';
+        if((m.gen&&m.gen.length)||(m.images&&m.images.length)){
+          const ids=[...(m.gen||[]),...(m.images||[])];
+          imgs=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">`+ids.map(fid=>`<div style="position:relative"><img src="/api/chatui/admin/image?id=${fid}" loading="lazy" style="max-width:140px;max-height:140px;border-radius:8px;cursor:zoom-in" onclick="window.open('/api/chatui/admin/image?id=${fid}','_blank')"><button class="btn-sm btn danger" style="position:absolute;top:2px;right:2px;padding:1px 6px" onclick="cbDelImage('${fid}')">🗑</button></div>`).join('')+`</div>`;
+        }
+        return `<div style="border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:6px">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">${m.role==='user'?'👤 用户':'🤖 M365'}${m.model?' · '+esc(m.model):''} · ${new Date(m.time).toLocaleString()}</div>
+          <div style="font-size:13px;white-space:pre-wrap">${esc(m.content||'')}</div>${imgs}</div>`;
+      }).join('');
+  }catch(e){$('cbBody').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
 // ===== Usage page =====
