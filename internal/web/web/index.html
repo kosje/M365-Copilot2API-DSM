@@ -753,6 +753,12 @@ if (response.output_text) {
       <input class="form-input" id="editKeyModels" placeholder="gpt-5.6-sol, gpt-5.6-luna">
     </div>
     <div class="form-group">
+      <label class="form-label">智能路由（auto）模型池与优先级</label>
+      <div id="editKeyAutoOrder" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
+      <div id="editKeyAutoChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      <p class="form-hint">该密钥的 <code>auto</code>/智能路由请求将固定路由到池中<b>优先级最高</b>的模型（① 为最高）；未加入池中的模型不会被 auto 选中，从而排除不想被调用的模型。点击下方模型名加入/移出池，↑↓ 调整优先级。留空 = 保持上游原生智能路由。若同时配置了模型白名单，请保证池内模型也在白名单内。</p>
+    </div>
+    <div class="form-group">
       <label class="form-label">IP 白名单（逗号分隔，支持 CIDR，留空 = 不限制）</label>
       <input class="form-input" id="editKeyIPs" placeholder="192.168.1.10, 10.0.0.0/8">
     </div>
@@ -1653,7 +1659,9 @@ function safeCopyText(text,msg){
 }
 
 let editKeyId=null;
-function editKey(rec){
+let editKeyAutoPool=[];       // ordered model IDs, index 0 = highest priority
+let editKeyAvailableModels=[]; // all public models from /api/admin/models
+async function editKey(rec){
   rec=rec||{};
   editKeyId=rec.id;
   $('editKeyName').value=rec.name||'';
@@ -1664,8 +1672,44 @@ function editKey(rec){
   $('editKeyModels').value=(rec.modelWhitelist||[]).join(', ');
   $('editKeyIPs').value=(rec.ipWhitelist||[]).join(', ');
   editKeyRecord=rec;
+  editKeyAutoPool=(rec.autoModels||[]).slice();
   $('editKeyModal').classList.add('open');
+  renderKeyAutoPool();
+  try{
+    const md=await api('/api/admin/models');
+    editKeyAvailableModels=(md.data||[]).map(m=>m.id).filter(id=>id&&id!=='gpt-image-2');
+  }catch(e){editKeyAvailableModels=[];}
+  renderKeyAutoPool();
   setTimeout(()=>$('editKeyName').focus(),50);
+}
+function renderKeyAutoPool(){
+  const orderEl=$('editKeyAutoOrder'),chipEl=$('editKeyAutoChips');
+  if(!orderEl||!chipEl)return;
+  // ordered pool rows with priority + move/remove controls
+  orderEl.replaceChildren(...editKeyAutoPool.map((id,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 10px;background:var(--surface,#f5f6f8);border:1px solid var(--border,#e3e5ea);border-radius:8px;font-size:13px';
+    const prio=document.createElement('span');
+    prio.textContent=`${i+1}`;
+    prio.style.cssText='display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:50%;background:var(--accent,#4f6ef7);color:#fff;font-size:11px;font-weight:700';
+    const name=document.createElement('b');name.textContent=id;name.style.flex='1';
+    const up=document.createElement('button');up.textContent='↑';up.className='btn-sm btn';up.disabled=i===0;up.onclick=()=>{[editKeyAutoPool[i-1],editKeyAutoPool[i]]=[editKeyAutoPool[i],editKeyAutoPool[i-1]];renderKeyAutoPool();};
+    const down=document.createElement('button');down.textContent='↓';down.className='btn-sm btn';down.disabled=i===editKeyAutoPool.length-1;down.onclick=()=>{[editKeyAutoPool[i+1],editKeyAutoPool[i]]=[editKeyAutoPool[i],editKeyAutoPool[i+1]];renderKeyAutoPool();};
+    const rm=document.createElement('button');rm.textContent='✕';rm.className='btn-sm btn';rm.onclick=()=>{editKeyAutoPool.splice(i,1);renderKeyAutoPool();};
+    row.append(prio,name,up,down,rm);
+    return row;
+  }));
+  if(!editKeyAutoPool.length){const p=document.createElement('span');p.textContent='（未配置 — auto 走上游原生智能路由）';p.style.cssText='font-size:12px;color:var(--muted)';orderEl.append(p);}
+  // candidate chips: available models not already in the pool
+  const inPool=new Set(editKeyAutoPool.map(s=>s.toLowerCase()));
+  const cands=editKeyAvailableModels.filter(id=>!inPool.has(id.toLowerCase()));
+  chipEl.replaceChildren(...cands.map(id=>{
+    const b=document.createElement('button');
+    b.textContent='+ '+id;b.className='btn-sm btn';
+    b.onclick=()=>{editKeyAutoPool.push(id);renderKeyAutoPool();};
+    return b;
+  }));
+  if(!cands.length){const s=document.createElement('span');s.textContent='全部模型已在池中';s.style.cssText='font-size:12px;color:var(--muted)';chipEl.append(s);}
 }
 function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;editKeyRecord=null;}
 let editKeyRecord=null;
@@ -1679,7 +1723,8 @@ async function saveEditKey(){
     totalQuota:Math.max(0,parseInt($('editKeyTotal').value)||0),
     perMinuteRate:Math.max(0,parseInt($('editKeyRate').value)||0),
     modelWhitelist:$('editKeyModels').value.split(',').map(s=>s.trim()).filter(Boolean),
-    ipWhitelist:$('editKeyIPs').value.split(',').map(s=>s.trim()).filter(Boolean)
+    ipWhitelist:$('editKeyIPs').value.split(',').map(s=>s.trim()).filter(Boolean),
+    autoModels:editKeyAutoPool.map(s=>s.trim()).filter(Boolean)
   };
   const expVal=$('editKeyExpires').value;
   if(expVal){payload.expiresAt=new Date(expVal).toISOString();}

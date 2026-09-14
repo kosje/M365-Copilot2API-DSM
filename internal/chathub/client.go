@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -169,6 +170,30 @@ func IsRetriablePhase(p Phase) bool {
 }
 
 var chTrace = os.Getenv("M365_TRACE") == "1"
+
+// captureAsyncGwFrame dumps raw upstream frames that mention the async gateway
+// (Copilot file generation) into <data dir>/debug/ for offline analysis.
+// Enabled when M365_ASYNCGW_CAPTURE=1; capped at 20 files per run.
+func captureAsyncGwFrame(frame []byte) {
+	if os.Getenv("M365_ASYNCGW_CAPTURE") != "1" {
+		return
+	}
+	if !strings.Contains(string(frame), "asyncgw") && !strings.Contains(string(frame), "v1/objects") {
+		return
+	}
+	dir := os.Getenv("M365_DATA_DIR")
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "debug"), 0o755); err != nil {
+		return
+	}
+	name := filepath.Join(dir, "debug", fmt.Sprintf("asyncgw-%d-%d.json", time.Now().UnixMilli(), os.Getpid()))
+	if err := os.WriteFile(name, frame, 0o644); err != nil {
+		return
+	}
+	log.Printf("[asyncgw-capture] frame saved: %s (%d bytes)", name, len(frame))
+}
 
 func commonPrefixLen(a, b string) int {
 	n := len(a)
@@ -790,6 +815,7 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 				log.Printf("[trace:ws] frame_len=%d preview=%q", len(part), truncate(part, 120))
 			}
 			b := []byte(part)
+			captureAsyncGwFrame(b)
 			events = append(events, json.RawMessage(b))
 			var obj map[string]any
 			if err := json.Unmarshal(b, &obj); err != nil {

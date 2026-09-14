@@ -193,6 +193,17 @@ type Server struct {
 		convCache            *conversationCache
 		chatUI               *chatUIStore
 		lastHealthyAccount   string
+	// File proxy: Microsoft 365 Copilot generated files (PDF/Word/Excel/PPTX/
+	// ZIP/py/etc.) are hosted in the ephemeral asyncgw/AMS store and are NOT
+	// directly downloadable via any bearer token (verified 404 for every
+	// scope incl. FOCI Teams token, and anonymous). The only working retrieval
+	// is to ask Copilot to re-emit the file bytes as base64 in the SAME M365
+	// conversation, then cache locally and serve. fileProxyCtx records the M365
+	// conversation context per internal chat-conversation so the proxy can
+	// continue that exact conversation to fetch the bytes.
+	fileProxyMu    sync.Mutex
+	fileProxyCtx   map[string]m365ConvCtx
+	fileProxyCache map[string]string // "<convID>|<filename>" -> absolute file path
 }
 
 const maxResponsesPerTenant = 256
@@ -511,6 +522,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/chatui/images", s.chatImageGen)
 	m.HandleFunc("/api/chatui/report", s.chatReport)
 	m.HandleFunc("/api/chatui/file/", s.chatFile)
+	m.HandleFunc("/api/chatui/fileproxy", s.chatFileProxy)
 	m.HandleFunc("/api/chatui/admin", s.chatAdmin)
 	m.HandleFunc("/api/chatui/admin/convs", s.chatAdminConvs)
 	m.HandleFunc("/api/chatui/admin/images", s.chatAdminImages)
@@ -2011,6 +2023,15 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	startedAt := time.Now()
 	log.Printf("[req-trace] id=%s stage=http_start stream=%t", requestID, r.URL.Query().Get("stream") == "true")
+	// Record the M365 conversation context for generated-file proxy retrieval.
+	// The context variables are populated once the chat result is finalized.
+	var fpAccID, fpConv, fpSess string
+	var fpAccount chathub.Account
+	defer func() {
+		if fpConv != "" && fpAccID != "" {
+			s.recordConvCtx(r.Header.Get("X-M365-Internal-Conv"), fpAccID, fpAccount.AccessToken, fpAccount.OID, fpAccount.TID, fpConv, fpSess)
+		}
+	}()
 	defer func() {
 		log.Printf("[req-trace] id=%s stage=http_return total_ms=%d", requestID, time.Since(startedAt).Milliseconds())
 	}()
@@ -2465,8 +2486,15 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if err != nil {
-			log.Printf("[req-trace] id=%s stage=stream_error err=%v", requestID, err)
+	// Record the finalized M365 conversation context so generated-file retrieval
+	// can continue the exact session that produced the file.
+	fpAccID = acc.ID
+	fpConv = res.ConversationID
+	fpSess = res.SessionID
+	fpAccount = chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}
+
+	if err != nil {
+		log.Printf("[req-trace] id=%s stage=stream_error err=%v", requestID, err)
 			if errors.Is(err, chathub.ErrImageLimit) && s.accountPool != nil {
 				s.accountPool.MarkImageLimited(acc.ID)
 			}

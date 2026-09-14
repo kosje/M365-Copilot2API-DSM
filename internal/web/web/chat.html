@@ -45,6 +45,9 @@ input,textarea,select{font:inherit;color:inherit}
 #app{display:flex;height:100%}
 .side{width:260px;background:var(--side);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .brand{padding:18px 18px 10px;display:flex;align-items:center;gap:10px}
+.side-close{display:none;margin-left:auto;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;color:var(--muted);font-size:15px;background:rgba(127,127,127,.1);flex-shrink:0}
+.side-close:hover{color:var(--text);background:rgba(127,127,127,.18)}
+.side-mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:39}
 .brand .logo-mark{width:32px;height:32px;font-size:14px;border-radius:9px;margin:0}
 .brand b{font-size:15px}
 .side-acts{display:flex;gap:8px;margin:10px 14px 0}
@@ -106,6 +109,9 @@ input,textarea,select{font:inherit;color:inherit}
 .code-head{display:flex;justify-content:space-between;align-items:center;padding:5px 6px 5px 13px;background:var(--side);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
 .code-copy{color:var(--muted);font-size:12px;padding:3px 9px;border-radius:7px}
 .code-copy:hover{color:var(--accent);background:var(--accent-weak)}
+.dl-chip{display:inline-flex;align-items:center;gap:5px;margin:4px 6px 4px 0;padding:7px 13px;border-radius:9px;background:var(--accent-weak);color:var(--accent);border:1px solid var(--accent);font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;transition:filter .15s,transform .1s}
+.dl-chip:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.dl-chip:active{transform:translateY(0)}
 .md pre{margin:0;border:none;border-radius:0;padding:12px 14px;overflow-x:auto;background:var(--code-bg)}
 .md pre code{background:none;padding:0;font-size:12.5px;line-height:1.6;word-break:normal;white-space:pre}
 .tk-k{color:var(--tk-k);font-weight:600}
@@ -170,9 +176,12 @@ input,textarea,select{font:inherit;color:inherit}
 .mode-btn.pic{padding:6px 9px}
 #modelSel{max-width:180px;padding:6px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--muted);font-size:12.5px;outline:none}
 #modelSel:focus{border-color:var(--accent)}
-.send{margin-left:auto;width:34px;height:34px;border-radius:11px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
-.send.stop{background:var(--err)}
-.send:disabled{opacity:.45;cursor:default}
+.send{margin-left:auto;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(77,107,254,.35);transition:transform .15s,box-shadow .15s,background .15s;flex-shrink:0}
+.send:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(77,107,254,.5)}
+.send:active{transform:translateY(0);box-shadow:0 1px 4px rgba(77,107,254,.4)}
+.send.stop{background:var(--err);box-shadow:0 2px 8px rgba(220,38,38,.35)}
+.send.stop:hover{box-shadow:0 4px 14px rgba(220,38,38,.5)}
+.send:disabled{opacity:.45;cursor:default;transform:none;box-shadow:none}
 .edit-hint{font-size:11.5px;color:#f59e0b;margin-top:6px;display:none}
 .hint{font-size:11px;color:var(--muted);margin-top:8px;text-align:center}
 /* ===== image options panel ===== */
@@ -207,7 +216,30 @@ input,textarea,select{font:inherit;color:inherit}
   .side{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:.25s;box-shadow:0 0 30px rgba(0,0,0,.3)}
   .side.open{transform:none}
   .mob-bar{display:flex}
+  .side-close{display:flex}
+  .side-mask{display:block;opacity:0;pointer-events:none;transition:opacity .25s}
+  .side-mask.show{opacity:1;pointer-events:auto}
   #jumpBtn{bottom:150px;right:18px}
+  /* ---- 移动端底部操作栏适配 ---- */
+  html,body{overflow-x:hidden;max-width:100vw}
+  .msgs{padding-top:14px}
+  .msg-wrap{padding:0 12px}
+  .composer{padding:0 10px}
+  .composer-wrap{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .input-box{padding:10px 12px 8px;border-radius:16px}
+  /* 16px 及以上字号避免 iOS 聚焦时自动放大页面 */
+  #input,#sysInput{font-size:16px}
+  .input-foot{flex-wrap:wrap;gap:6px}
+  .mode-btn{flex-shrink:0;white-space:nowrap;padding:6px 9px;font-size:12px;gap:4px}
+  .mode-btn.pic{padding:6px 8px}
+  #modelSel{flex:1 1 110px;min-width:0;max-width:none}
+  .send{flex-shrink:0;width:40px;height:40px;border-radius:13px}
+  /* 欢迎页卡片两列铺满、不溢出 */
+  .welcome{padding-top:5vh}
+  .welcome .tips{gap:8px;padding:0 12px}
+  .welcome .tip{min-width:0;width:calc(50% - 4px);padding:11px 12px;font-size:12.5px}
+  /* 固定角标在手机上遮挡输入区，隐藏 */
+  #verFoot{display:none}
 }
 </style>
 </head>
@@ -227,7 +259,7 @@ input,textarea,select{font:inherit;color:inherit}
 
 <div id="app" class="hidden">
   <div class="side" id="side">
-    <div class="brand"><div class="logo-mark">M</div><b>M365 对话</b></div>
+    <div class="brand"><div class="logo-mark">M</div><b>M365 对话</b><button class="side-close" onclick="toggleSide(false)" title="收起侧边栏">✕</button></div>
     <div class="side-acts">
       <button class="newchat" onclick="newChat()">✏️ 新对话</button>
       <button class="expbtn" onclick="exportConv()" title="导出当前对话为 Markdown">⬇</button>
@@ -243,8 +275,9 @@ input,textarea,select{font:inherit;color:inherit}
       <div class="quota-line" id="quotaLine">今日额度加载中…</div>
     </div>
   </div>
+  <div class="side-mask" id="sideMask" onclick="toggleSide(false)"></div>
   <div class="main">
-    <div class="mob-bar"><button onclick="document.getElementById('side').classList.toggle('open')">☰</button><b id="mobTitle">M365 对话</b></div>
+    <div class="mob-bar"><button onclick="toggleSide()">☰</button><b id="mobTitle">M365 对话</b></div>
     <div class="msgs" id="msgs"><div class="msg-wrap" id="msgWrap"></div></div>
     <button id="jumpBtn" class="hidden" onclick="jumpBottom()" title="回到底部">↓</button>
     <div class="composer-wrap">
@@ -270,7 +303,7 @@ input,textarea,select{font:inherit;color:inherit}
             <input type="file" id="fileInput" multiple hidden accept="image/*,.csv,.tsv,.xlsx,.xls,.pdf,.txt,.md,.markdown,.json,.jsonl,.log,.xml,.yaml,.yml,.ini,.toml,.conf,.cfg,.env,.py,.js,.ts,.jsx,.tsx,.go,.java,.c,.cpp,.h,.hpp,.cs,.rb,.rs,.php,.sh,.bash,.bat,.ps1,.sql,.html,.htm,.css,.scss,.vue,.srt,.vtt">
             <button class="mode-btn" onclick="toggleSys()" title="设置系统提示词">🧭 人设</button>
             <select id="modelSel" title="选择模型" onchange="onModelChange()"></select>
-            <button class="send" id="sendBtn" onclick="send()" title="发送（生成中点击可停止）">↑</button>
+            <button class="send" id="sendBtn" onclick="send()" title="发送（生成中点击可停止）"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg></button>
           </div>
           <div class="edit-hint" id="editHint">✏️ 正在编辑最后一条消息，发送后将覆盖原对话（Esc 取消）</div>
         </div>
@@ -424,7 +457,7 @@ function convEl(c){
   const div=document.createElement('div');div.className='conv-item'+(c.id===curConv?' active':'');
   div.innerHTML=`<span class="t"></span><button class="act ren" title="重命名">✎</button><button class="act del" title="删除对话">✕</button>`;
   div.querySelector('.t').textContent=c.title||'新对话';
-  div.onclick=e=>{if(e.target.classList.contains('act'))return;openConv(c.id);document.getElementById('side').classList.remove('open');};
+  div.onclick=e=>{if(e.target.classList.contains('act'))return;openConv(c.id);toggleSide(false);};
   div.querySelector('.ren').onclick=async e=>{
     e.stopPropagation();
     const t=prompt('重命名对话：',c.title||'');
@@ -452,7 +485,7 @@ function exportConv(){
 function newChat(silent){
   curConv=null;curMsgs=[];attachments=[];editing=false;renderAttach();setEditingUI();
   $('msgWrap').innerHTML='';$('mobTitle').textContent='M365 对话';
-  renderConvList();renderWelcome();
+  toggleSide(false);renderConvList();renderWelcome();
   if(!silent)$('input').focus();
 }
 function renderWelcome(){
@@ -503,10 +536,27 @@ function inline(s){
   h=h.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g,'$1<i>$2</i>');
   h=h.replace(/~~([^~]+)~~/g,'<s>$1</s>');
   h=h.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|data:image\/[^\s)]+)\)/g,'<img class="att" src="$2" alt="$1" loading="lazy" onclick="zoom(this.src)">');
-  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g,(m,t,u)=>{
+    if(u.indexOf('/api/chatui/fileproxy')===0)return '<a class="dl-chip" href="'+u+'" rel="noopener" download>⬇ '+t+'</a>';
+    return '<a href="'+u+'" target="_blank" rel="noopener">'+t+'</a>';
+  });
 
   h=h.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  // Bare generated-file proxy links (asyncgw URL was rewritten to a relative path).
+  h=h.replace(/(^|[\s>])(\/api\/chatui\/fileproxy[^\s<)]+)/g,'$1<a class="dl-chip" href="$2" rel="noopener" download>⬇ 下载文件</a>');
   return h;
+}
+// Rewrite unreachable Microsoft asyncgw generated-file links (which the user
+// cannot open) into local gateway proxy URLs keyed to the current conversation.
+function rewriteAsyncGW(text){
+  if(!text)return text;
+  const re=/https?:\/\/[a-z0-9-]+\.asyncgw\.teams\.microsoft\.com\/v1\/objects\/[^\s"'\)\]\s]+/gi;
+  return text.replace(re,u=>{
+    const m=u.match(/\/([^\/?#]+)(?:\?[^ ]*)?$/);
+    let name=m?m[1]:'file';
+    try{name=decodeURIComponent(name);}catch(e){}
+    return '/api/chatui/fileproxy?conv='+encodeURIComponent(curConv||'')+'&name='+encodeURIComponent(name);
+  });
 }
 const KW_RAW={
   js:'const let var function return if else for while do class extends new this typeof instanceof async await try catch finally throw switch case break continue default import export from null undefined true false void yield delete in of static get set super',
@@ -842,10 +892,12 @@ function refreshWelcomeTips(){
 }
 
 /* ---------- send / stream ---------- */
+const SEND_ICON='<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
+const STOP_ICON='<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
 function setBusyUI(on){
   const btn=$('sendBtn');
   btn.classList.toggle('stop',on);
-  btn.textContent=on?'⏹':'↑';
+  btn.innerHTML=on?STOP_ICON:SEND_ICON;
   btn.title=on?'停止生成（Esc）':'发送';
 }
 function stopGen(){if(abortCtl)abortCtl.abort();}
@@ -930,6 +982,26 @@ $('input').addEventListener('paste',e=>{
   }
   if(files.length){e.preventDefault();addFiles(files);}
 });
+// ---------- 侧边栏开关（手机端：遮罩点击 / ✕ 按钮均可收回） ----------
+function toggleSide(open){
+  const s=$('side');
+  const to=open===undefined?!s.classList.contains('open'):!!open;
+  s.classList.toggle('open',to);
+  $('sideMask').classList.toggle('show',to);
+}
+
+// 📎 文件选择：change 事件绑定（v1.5.0 起缺失导致选完文件无反应，仅粘贴路径生效）
+$('fileInput').addEventListener('change',e=>{
+  const files=e.target.files;
+  if(files&&files.length)addFiles(files);
+});
+// 手机端缩短输入框占位文案（快捷键提示在触屏上无意义且容易溢出）
+function fitPlaceholder(){
+  const mob=window.innerWidth<=720;
+  $('input').placeholder=mob?'给 M365 发送消息…':'给 M365 发送消息（Enter 发送 / Shift+Enter 换行）';
+}
+window.addEventListener('resize',fitPlaceholder);
+fitPlaceholder();
 
 async function streamChat(opts){
   opts=opts||{};
@@ -988,6 +1060,9 @@ async function streamChat(opts){
       paint();
     }
     if(!acc){acc='（空回复，请重试）';paint();}
+    // Rewrite unreachable Microsoft asyncgw file links into local proxy download links.
+    acc=rewriteAsyncGW(acc);
+    body.innerHTML=mdRender(acc);
     // client-side conversation state
     if(opts.userMsg){
       const um=opts.userMsg;
@@ -1011,7 +1086,7 @@ async function streamChat(opts){
       });
       curMsgs.push(um);
     }
-    if(acc)curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});
+    if(acc){acc=rewriteAsyncGW(acc);curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});}
     body.innerHTML=mdRender(acc)+(acc?'':'')+(aborted
       ?'<div class="tools"><span class="meta">⏹ 已停止生成</span></div>'
       :'<span style="color:var(--err)">⚠ '+esc(e.message||e)+'</span><div class="tools"><button onclick="retryLast()">🔄 重试</button></div>');

@@ -109,6 +109,9 @@ input,textarea,select{font:inherit;color:inherit}
 .code-head{display:flex;justify-content:space-between;align-items:center;padding:5px 6px 5px 13px;background:var(--side);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
 .code-copy{color:var(--muted);font-size:12px;padding:3px 9px;border-radius:7px}
 .code-copy:hover{color:var(--accent);background:var(--accent-weak)}
+.dl-chip{display:inline-flex;align-items:center;gap:5px;margin:4px 6px 4px 0;padding:7px 13px;border-radius:9px;background:var(--accent-weak);color:var(--accent);border:1px solid var(--accent);font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;transition:filter .15s,transform .1s}
+.dl-chip:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.dl-chip:active{transform:translateY(0)}
 .md pre{margin:0;border:none;border-radius:0;padding:12px 14px;overflow-x:auto;background:var(--code-bg)}
 .md pre code{background:none;padding:0;font-size:12.5px;line-height:1.6;word-break:normal;white-space:pre}
 .tk-k{color:var(--tk-k);font-weight:600}
@@ -533,10 +536,27 @@ function inline(s){
   h=h.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g,'$1<i>$2</i>');
   h=h.replace(/~~([^~]+)~~/g,'<s>$1</s>');
   h=h.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|data:image\/[^\s)]+)\)/g,'<img class="att" src="$2" alt="$1" loading="lazy" onclick="zoom(this.src)">');
-  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g,(m,t,u)=>{
+    if(u.indexOf('/api/chatui/fileproxy')===0)return '<a class="dl-chip" href="'+u+'" rel="noopener" download>⬇ '+t+'</a>';
+    return '<a href="'+u+'" target="_blank" rel="noopener">'+t+'</a>';
+  });
 
   h=h.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  // Bare generated-file proxy links (asyncgw URL was rewritten to a relative path).
+  h=h.replace(/(^|[\s>])(\/api\/chatui\/fileproxy[^\s<)]+)/g,'$1<a class="dl-chip" href="$2" rel="noopener" download>⬇ 下载文件</a>');
   return h;
+}
+// Rewrite unreachable Microsoft asyncgw generated-file links (which the user
+// cannot open) into local gateway proxy URLs keyed to the current conversation.
+function rewriteAsyncGW(text){
+  if(!text)return text;
+  const re=/https?:\/\/[a-z0-9-]+\.asyncgw\.teams\.microsoft\.com\/v1\/objects\/[^\s"'\)\]\s]+/gi;
+  return text.replace(re,u=>{
+    const m=u.match(/\/([^\/?#]+)(?:\?[^ ]*)?$/);
+    let name=m?m[1]:'file';
+    try{name=decodeURIComponent(name);}catch(e){}
+    return '/api/chatui/fileproxy?conv='+encodeURIComponent(curConv||'')+'&name='+encodeURIComponent(name);
+  });
 }
 const KW_RAW={
   js:'const let var function return if else for while do class extends new this typeof instanceof async await try catch finally throw switch case break continue default import export from null undefined true false void yield delete in of static get set super',
@@ -1040,6 +1060,9 @@ async function streamChat(opts){
       paint();
     }
     if(!acc){acc='（空回复，请重试）';paint();}
+    // Rewrite unreachable Microsoft asyncgw file links into local proxy download links.
+    acc=rewriteAsyncGW(acc);
+    body.innerHTML=mdRender(acc);
     // client-side conversation state
     if(opts.userMsg){
       const um=opts.userMsg;
@@ -1063,7 +1086,7 @@ async function streamChat(opts){
       });
       curMsgs.push(um);
     }
-    if(acc)curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});
+    if(acc){acc=rewriteAsyncGW(acc);curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});}
     body.innerHTML=mdRender(acc)+(acc?'':'')+(aborted
       ?'<div class="tools"><span class="meta">⏹ 已停止生成</span></div>'
       :'<span style="color:var(--err)">⚠ '+esc(e.message||e)+'</span><div class="tools"><button onclick="retryLast()">🔄 重试</button></div>');
