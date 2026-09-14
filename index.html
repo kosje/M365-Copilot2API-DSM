@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M365 Copilot2API — 群晖套件来源</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
+    font: 16px/1.7 -apple-system, "Segoe UI", "Noto Sans SC", system-ui, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+  header img { width: 64px; height: 64px; border-radius: 14px; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .sub { color: #6b7280; margin: .25rem 0 0; font-size: .95rem; }
+  h2 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .url {
+    display: block; padding: .85rem 1rem; border-radius: 8px;
+    background: #f3f4f6; border: 1px solid #e5e7eb;
+    word-break: break-all; font-size: .95rem; margin: .5rem 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    .url { background: #1f2430; border-color: #2d3441; }
+    .sub { color: #9aa4b2; }
+    td, th { border-color: #2d3441 !important; }
+  }
+  ol { padding-left: 1.3rem; }
+  li { margin: .35rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e5e7eb; }
+  .note { font-size: .9rem; color: #6b7280; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="icon_256.png" alt="">
+  <div>
+    <h1>M365 Copilot2API — 群晖套件来源</h1>
+    <p class="sub">把 Microsoft 365 Copilot 转成 OpenAI / Anthropic 兼容 API 的自托管网关，DSM 7 套件版。</p>
+  </div>
+</header>
+
+<h2>添加套件来源</h2>
+<p>在 DSM 里打开 <b>套件中心 → 设置 → 套件来源 → 新增</b>，名称任填，位置填：</p>
+<code class="url">https://kosje.github.io/M365-Copilot2API-DSM/index.json</code>
+<p>添加后回到套件中心左侧的<b>社群</b>分类，就能看到 Copilot2API，点安装即可。以后有新版本，套件中心会像官方套件一样提示更新。</p>
+<p class="note">首次安装会提示「由第三方开发者提供，未经 Synology 验证」，点确定继续。DSM 7 取消了 DSM 6 时代的「任何发布者」信任级别开关，所有社群套件都会有这个提示，签名也无法消除。</p>
+
+<h2>要求</h2>
+<table>
+  <tr><th>DSM</th><td>7.0 及以上</td></tr>
+  <tr><th>架构</th><td>x86-64。二进制为 <code>linux/amd64</code>，<b>ARM 机型无法运行</b></td></tr>
+  <tr><th>端口</th><td>4141（固定）</td></tr>
+</table>
+<p class="note">已实测：DS918+ / DSM 7.2.1-69057 Update 12 / Intel J1900。</p>
+
+<h2>装好之后</h2>
+<ol>
+  <li>安装向导里设置管理员密码（≥8 位）</li>
+  <li>访问 <code>http://群晖IP:4141</code>，或点桌面上的 Copilot2API 图标</li>
+  <li>账号管理 → 设备码登录 → 按提示在浏览器完成 Microsoft 登录</li>
+  <li>API Key 页创建密钥，在客户端填 <code>http://群晖IP:4141/v1</code></li>
+</ol>
+
+<h2>相关链接</h2>
+<ul>
+  <li><a href="https://github.com/kosje/M365-Copilot2API-DSM">本仓库（群晖适配 + SPK 打包）</a></li>
+  <li><a href="https://github.com/kosje/M365-Copilot2API-DSM/releases">Releases（手动下载 SPK）</a></li>
+  <li><a href="https://github.com/my788525/M365-Copilot2API-FNOS">上游增强分支（/chat 对话端、额度体系）</a></li>
+  <li><a href="https://github.com/HEXUXIU/M365-Copilot2API">原始项目（核心能力来源）</a></li>
+</ul>
+
+<p class="note">
+本项目不是微软官方产品，与 Microsoft、OpenAI、Anthropic 均无从属关系；仅供个人学习与研究，<b>禁止用于商业 API 转售</b>。
+许可证 <a href="https://github.com/kosje/M365-Copilot2API-DSM/blob/main/LICENSE">AGPL-3.0 with Non-Commercial API Relay Restriction</a>。
+</p>
+
+</body>
+</html>
