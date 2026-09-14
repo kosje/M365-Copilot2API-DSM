@@ -1435,6 +1435,34 @@ async function checkUpdate(){
   }catch(e){/* GitHub 不可达：仅显示当前版本 + GitHub 链接 */}
 }
 document.addEventListener('DOMContentLoaded', checkUpdate);
+
+async function applySelfUpdate(latest,btn){
+  if(!confirm('将自动下载并更新到 v'+latest+'（自动尝试直连与镜像加速），服务会原地重启约 5-10 秒。继续？'))return;
+  if(btn){btn.disabled=true;btn.textContent='下载中…';}
+  try{
+    await api('/api/admin/update/apply',{method:'POST',body:JSON.stringify({tag:'v'+latest})});
+  }catch(e){
+    showNotice(e.message,'error');
+    if(btn){btn.disabled=false;btn.textContent='⚡ 一键更新';}
+    return;
+  }
+  showNotice('新版本已就绪，服务重启中，等待上线…','success');
+  if(btn)btn.textContent='重启中…';
+  for(let i=0;i<45;i++){
+    await new Promise(r=>setTimeout(r,2000));
+    try{
+      const v=await fetch('/api/version',{cache:'no-store'}).then(r=>r.json());
+      if(String(v.version||'').replace(/^v/,'')===latest){
+        showNotice('已更新到 v'+latest,'success');
+        if(btn)btn.textContent='✓ 已更新';
+        setTimeout(()=>location.reload(),1500);
+        return;
+      }
+    }catch(e){/* restart window: keep polling */}
+  }
+  showNotice('更新指令已发出但未检测到版本变化，请稍后刷新页面确认','error');
+  if(btn){btn.disabled=false;btn.textContent='⚡ 一键更新';}
+}
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') loadAccounts(); });
 
 async function toggleAccountSchedule(id,enabled){

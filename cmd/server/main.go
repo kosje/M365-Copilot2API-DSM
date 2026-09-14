@@ -36,6 +36,7 @@ func main() {
 	s.StartQuotaRefresh()
 	s.StartTokenRefresh()
 	s.StartAlertMonitor()
+	s.StartUpdateChecker()
 	web.OpenAuditStore()
 	listen := "127.0.0.1:4141"
 	if v := os.Getenv("M365_LISTEN"); v != "" {

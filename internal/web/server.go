@@ -495,6 +495,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/usage/logs", s.adminUsageLogs)
 	m.HandleFunc("/api/admin/alerts/test", s.adminAlertTest)
 	m.HandleFunc("/api/admin/audit", s.adminAudit)
+	m.HandleFunc("/api/admin/update/apply", s.adminUpdateApply)
 	m.HandleFunc("/metrics", s.metricsHandler)
 	m.HandleFunc("/api/plugins", s.plugins)
 	// Chat UI ("测试或轻应用")
