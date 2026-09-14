@@ -76,6 +76,20 @@ type runtimeSettings struct {
 	EnableCodeCanvas           bool           `json:"enableCodeCanvas"`
 	EnableSydneyReconnect      bool           `json:"enableSydneyReconnect"`
 	QuotaRefreshIntervalSeconds int          `json:"quotaRefreshIntervalSeconds"`
+	// SessionTTLMinutes controls how long a session binding stays alive before
+	// eviction from sessions.json (and from in-memory lookup).
+	SessionTTLMinutes int `json:"sessionTtlMinutes"`
+	// ContextTTLMinutes controls how long a resolved conversation context remains
+	// eligible for prefix/suffix/fuzzy reuse.
+	ContextTTLMinutes int `json:"contextTtlMinutes"`
+	// ContextSimilarity is the Jaccard similarity threshold (0-1) used to fuzzy
+	// match a request against stored ContextHistory when strict prefix/suffix
+	// matching fails.
+	ContextSimilarity float64 `json:"contextSimilarity"`
+	// PublicIdentityPolicy enables the public-facing identity rewrite policy
+	// (neutralising Microsoft-brand references in answers and replacing them
+	// with a generic GPT-5-series identity).
+	PublicIdentityPolicy bool `json:"publicIdentityPolicy"`
 	// ModelAliases maps arbitrary client-requested model names (e.g. "gpt-4o",
 	// "claude-sonnet-4") to configured public models. Keys are matched
 	// case-insensitively; values must be existing public model IDs.
@@ -116,6 +130,16 @@ func envInt(name string, fallback int) int {
 	}
 	return fallback
 }
+func envFloat(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	if f, e := strconv.ParseFloat(raw, 64); e == nil && f >= 0 && f <= 1 {
+		return f
+	}
+	return fallback
+}
 func defaultRuntimeSettings() runtimeSettings {
 	return runtimeSettings{
 		MaxToolCallsPerTurn: envInt("M365_MAX_TOOL_CALLS_PER_TURN", 32), MaxToolRounds: envInt("M365_MAX_TOOL_ROUNDS", 512),
@@ -140,6 +164,10 @@ func defaultRuntimeSettings() runtimeSettings {
 		EnableCodeCanvas:           os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
 		EnableSydneyReconnect:      os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
 		QuotaRefreshIntervalSeconds: envInt("M365_QUOTA_REFRESH_INTERVAL_SECONDS", 300),
+		SessionTTLMinutes:          envInt("M365_SESSION_TTL_MINUTES", 120),
+		ContextTTLMinutes:          envInt("M365_CONTEXT_TTL_MINUTES", 120),
+		ContextSimilarity:          envFloat("M365_CONTEXT_SIMILARITY", 0.6),
+		PublicIdentityPolicy:       os.Getenv("M365_PUBLIC_IDENTITY_POLICY") == "true",
 		ModelAliases:               map[string]string{},
 		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
 		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
@@ -286,6 +314,15 @@ func validateSettings(v runtimeSettings) error {
 	if v.LoopRepeatLimit != 0 && (v.LoopRepeatLimit < 1 || v.LoopRepeatLimit > 64) {
 		return fmt.Errorf("同一失败循环上限(loopRepeatLimit)必须为 1-64")
 	}
+	if v.SessionTTLMinutes < 1 || v.SessionTTLMinutes > 10080 {
+		return fmt.Errorf("会话绑定 TTL(sessionTtlMinutes)必须为 1-10080 分钟")
+	}
+	if v.ContextTTLMinutes < 1 || v.ContextTTLMinutes > 10080 {
+		return fmt.Errorf("上下文复用 TTL(contextTtlMinutes)必须为 1-10080 分钟")
+	}
+	if v.ContextSimilarity < 0 || v.ContextSimilarity > 1 {
+		return fmt.Errorf("上下文相似度阈值(contextSimilarity)必须为 0-1")
+	}
 	if strings.TrimSpace(v.Scenario) == "" {
 		return fmt.Errorf("场景标识不能为空")
 	}
@@ -409,6 +446,63 @@ func currentSettings() runtimeSettings { return openSettingsStore().get() }
 // currentSettingsSafe returns the persisted settings without panicking when a
 // test-constructed Server has no settings store.
 func currentSettingsSafe() runtimeSettings { return openSettingsStore().get() }
+
+func sessionTTLMinutes() int {
+	if raw, ok := os.LookupEnv("M365_SESSION_TTL_MINUTES"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 10080 {
+			return n
+		}
+		return 120
+	}
+	if n := currentSettings().SessionTTLMinutes; n > 0 && n <= 10080 {
+		return n
+	}
+	return 120
+}
+func contextTTLMinutes() int {
+	if raw, ok := os.LookupEnv("M365_CONTEXT_TTL_MINUTES"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 10080 {
+			return n
+		}
+		return 120
+	}
+	if n := currentSettings().ContextTTLMinutes; n > 0 && n <= 10080 {
+		return n
+	}
+	return 120
+}
+func contextSimilarityThreshold() float64 {
+	if raw, ok := os.LookupEnv("M365_CONTEXT_SIMILARITY"); ok {
+		if f, e := strconv.ParseFloat(strings.TrimSpace(raw), 64); e == nil && f >= 0 && f <= 1 {
+			return f
+		}
+		return 0.6
+	}
+	if f := currentSettings().ContextSimilarity; f >= 0 && f <= 1 {
+		return f
+	}
+	return 0.6
+}
+func accountDefaultConcurrency() int {
+	if raw, ok := os.LookupEnv("M365_ACCOUNT_DEFAULT_CONCURRENCY"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 8
+	}
+	// Compatibility: the older env name M365_ACCOUNT_CONCURRENCY_LIMIT is
+	// exposed in settings.json as accountConcurrencyLimit.
+	if raw, ok := os.LookupEnv("M365_ACCOUNT_CONCURRENCY_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 8
+	}
+	if n := currentSettings().AccountConcurrencyLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 8
+}
 
 // resolveModelAlias maps a client-requested model name through the configured
 // alias table (case-insensitive). Unmatched models are returned unchanged, so

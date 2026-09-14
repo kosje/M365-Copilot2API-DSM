@@ -2,9 +2,6 @@ package web
 
 import (
 	"context"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 
 	"m365-copilot2api/internal/chathub"
@@ -20,13 +17,7 @@ type accountConcurrency struct {
 }
 
 func newAccountConcurrency() *accountConcurrency {
-	limit := defaultAccountConcurrency
-	if raw := strings.TrimSpace(os.Getenv("M365_ACCOUNT_DEFAULT_CONCURRENCY")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	return &accountConcurrency{limit: limit, inflight: map[string]int{}, changed: make(chan struct{})}
+	return &accountConcurrency{limit: accountDefaultConcurrency(), inflight: map[string]int{}, changed: make(chan struct{})}
 }
 
 func (c *accountConcurrency) Available(accountID string) bool {

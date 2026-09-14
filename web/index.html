@@ -704,11 +704,12 @@ if (response.output_text) {
         <h2 style="font-size:18px;font-weight:700;margin-bottom:8px">Advanced Parameters</h2>
         <div class="card" style="border-color:#f59e0b;background:rgba(245,158,11,.05)">
           <div class="card-body" style="padding:12px 16px">
-            <p style="margin:0;color:#b45309;font-size:13px;line-height:1.6"><strong>⚠️ 高级参数。</strong> 下列数值会影响 Agent 调度、上下文预算与并发行为。除特殊说明外，修改后<strong>保存即生效</strong>，无需重启。建议先用默认值跑通，再按实际负载微调；数值越界会被后端校验拒绝（见每项下方范围）。</p>
+            <p style="margin:0;color:#b45309;font-size:13px;line-height:1.6"><strong>⚠️ 高级参数。</strong> 下列数值会影响 Agent 调度、上下文预算、会话复用与并发行为。除特殊说明外，修改后<strong>保存即生效</strong>，无需重启。建议先用默认值跑通，再按实际负载微调；数值越界会被后端校验拒绝（见每项下方范围）。</p>
           </div>
         </div>
         <div class="card"><div class="card-body">
           <h3 style="font-size:14px;font-weight:700;margin:4px 0 12px;color:#6366f1">Agent 调度</h3>
+          <div class="form-group"><label class="form-label">工具规划模式 (toolPlanningMode)</label><select class="form-input" id="advToolPlanning"><option value="router">router（网关路由规划）</option><option value="native">native（云端原生规划）</option></select><p class="form-hint">决定工具调用由网关本地规划还是透传给上游 Copilot 原生规划。<strong>默认 router</strong>。router 模式下网关根据可用工具自行决定调用，更可控；native 模式下由微软云端决定，可能更符合原生体验。切换后下一条请求生效。</p></div>
           <div class="form-group"><label class="form-label">每轮最大工具调用数 (maxToolCallsPerTurn)</label><input class="form-input" id="advMaxToolCalls" type="number" min="1" max="64" placeholder="32"><p class="form-hint">单个回复轮次内最多允许并行发起的工具调用数量。范围 1-64，<strong>默认 32</strong>。并发仅对只读类工具（read/list/get/…）放开，写类工具（exec/write/edit/…）一律串行，因此该值主要决定「同时读多少源」。调太高可能被上游限流，调太低长任务会变慢。</p></div>
           <div class="form-group"><label class="form-label">最大工具轮次 (maxToolRounds)</label><input class="form-input" id="advMaxRounds" type="number" min="1" max="512" placeholder="512"><p class="form-hint">一次对话请求内 Agent 循环迭代（工具调用→观察→再决策）的最大轮次。范围 1-512，<strong>默认 512</strong>。这是单条消息的「思考步数」硬上限，到达即停止。复杂多步任务建议保持较大值，简单任务可下调以省额度。</p></div>
           <div class="form-group"><label class="form-label">同一调用循环检测阈值 (loopSameLimit)</label><input class="form-input" id="advLoopSame" type="number" min="1" max="64" placeholder="3"><p class="form-hint">Agent Ledger 检测到<strong>同一工具调用重复出现</strong>达到该次数即判定「卡死循环」并强制停止。范围 1-64，<strong>默认 3</strong>。原版硬编码为 2/3，易误杀长任务；调高可容忍更多重复步骤，调低能更快止损。</p></div>
@@ -719,10 +720,21 @@ if (response.output_text) {
           <div class="form-group"><label class="form-label">单次最大输出 token (maxOutputTokens)</label><input class="form-input" id="advMaxOut" type="number" min="1" placeholder="16384"><p class="form-hint">单次回复允许生成的最大 token 数。范围 1 ~ 小于上下文窗口，<strong>默认 16384</strong>。长文/代码生成可上调，但受上游模型上限与上下文窗口共同约束。</p></div>
           <div class="form-group"><label class="form-label">单对话最大消息数 (maxConversationMessages)</label><input class="form-input" id="advMaxConv" type="number" min="1" max="10000" placeholder="600"><p class="form-hint">单个会话保留的最大消息条数，超出部分从上下文头部丢弃（被丢弃历史若达到 Auto-Compact 阈值会先压缩）。范围 1-10000，<strong>默认 600</strong>。调高保留更长记忆，调低更省 token。</p></div>
 
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">会话复用</h3>
+          <div class="form-group"><label class="form-label">会话绑定 TTL (sessionTtlMinutes, 分钟)</label><input class="form-input" id="advSessionTTL" type="number" min="1" max="10080" placeholder="120"><p class="form-hint">会话绑定在 <code>sessions.json</code> 及内存中的存活时间。超过该时间未活跃即被清除，下次请求视为新会话。范围 1-10080（7 天），<strong>默认 120</strong>。长聊场景可调高，公共/多租户场景建议保持较短。</p></div>
+          <div class="form-group"><label class="form-label">上下文复用 TTL (contextTtlMinutes, 分钟)</label><input class="form-input" id="advContextTTL" type="number" min="1" max="10080" placeholder="120"><p class="form-hint">已解析对话上下文可用于前缀/后缀/模糊复用的时间窗口。范围 1-10080，<strong>默认 120</strong>。与 sessionTtlMinutes 通常保持一致；若希望历史短暂失忆可调低。</p></div>
+          <div class="form-group"><label class="form-label">上下文相似度阈值 (contextSimilarity, 0-1)</label><input class="form-input" id="advCtxSim" type="number" min="0" max="1" step="0.05" placeholder="0.6"><p class="form-hint">当严格前缀/后缀匹配失败时，用 Jaccard 相似度模糊匹配历史上下文；超过该阈值即复用对应会话。范围 0-1，<strong>默认 0.6</strong>。设 0 关闭模糊复用；设 1 要求几乎完全相同（仅允许少量字符差异）。推荐 0.5-0.8。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advPublicIdentity" style="width:18px;height:18px;cursor:pointer"><label for="advPublicIdentity" class="form-label" style="margin:0;cursor:pointer">启用公开身份策略 (publicIdentityPolicy)</label></div>
+          <p class="form-hint">开启后，当用户询问「你是谁/基于什么模型」时，回复会统一替换为 GPT-5 系列 AI 助手，并清洗正文、推理、引用中的 Microsoft/Copilot/M365 品牌标识。<strong>默认关闭</strong>。仅在需要对外公开访问且希望弱化微软品牌时启用。</p>
+
           <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">超时与并发</h3>
+          <div class="form-group"><label class="form-label">聊天超时 (chatTimeoutSeconds, 秒)</label><input class="form-input" id="advChatTimeout" type="number" min="5" max="3600" placeholder="120"><p class="form-hint">单次聊天/补全请求的最长等待时间。范围 5-3600，<strong>默认 120</strong>。模型推理或工具链较长时可适度上调，超时返回 504。</p></div>
           <div class="form-group"><label class="form-label">图片生成超时 (imageTimeoutSeconds, 秒)</label><input class="form-input" id="advImgTimeout" type="number" min="5" max="3600" placeholder="300"><p class="form-hint">一次画图/图生图请求的最长等待时间。范围 5-3600，<strong>默认 300</strong>。多图、高分辨率或生图队列繁忙时可能需要更久，超时返回 504。</p></div>
           <div class="form-group"><label class="form-label">限流冷却时间 (rateLimitCooldownSeconds, 秒)</label><input class="form-input" id="advCooldown" type="number" min="5" max="3600" placeholder="30"><p class="form-hint">命中上游限流（429）后，账号进入冷却、暂停派发新请求的最短等待。范围 5-3600，<strong>默认 30</strong>。调高可减少对限流账号的无效重试，调低恢复更快但更易再撞限流。</p></div>
-          <div class="form-group"><label class="form-label">单账号并发上限 (accountConcurrencyLimit)</label><input class="form-input" id="advConcur" type="number" min="1" max="64" placeholder="8"><p class="form-hint">单个 M365 账号同时处理的请求数上限。范围 1-64，<strong>默认 8</strong>。多账号池会按此值放大总吞吐；调太高可能触发账号级限流，调太低浪费账号额度。</p></div>
+          <div class="form-group"><label class="form-label">单账号并发上限 (accountConcurrencyLimit)</label><input class="form-input" id="advConcur" type="number" min="1" max="64" placeholder="8"><p class="form-hint">单个 M365 账号同时处理的请求数上限。范围 1-64，<strong>默认 8</strong>。对应环境变量 <code>M365_ACCOUNT_DEFAULT_CONCURRENCY</code>（旧名 <code>M365_ACCOUNT_CONCURRENCY_LIMIT</code> 仍兼容）。多账号池会按此值放大总吞吐；调太高可能触发账号级限流，调太低浪费账号额度。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">日志</h3>
+          <div class="form-group"><label class="form-label">日志级别 (logLevel)</label><select class="form-input" id="advLogLevel"><option value="silent">silent（完全静默）</option><option value="error">error（仅错误）</option><option value="warn">warn（错误与警告）</option><option value="info">info（常规运行信息）</option><option value="debug">debug（调试，输出最多）</option></select><p class="form-hint">控制台/日志文件输出粒度。<strong>默认 info</strong>。debug 会打印大量请求/响应细节，仅排查问题时临时开启；生产建议 info 或 warn。</p></div>
 
           <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
             <button class="btn primary" onclick="saveAdvanced()">保存高级参数</button>
@@ -2407,22 +2419,36 @@ async function testAlertWebhook(){
 
 // Advanced Parameters page: expose all tunable constants for live editing.
 const advFields=[
-  {id:'advMaxToolCalls', key:'maxToolCallsPerTurn', def:32},
-  {id:'advMaxRounds',    key:'maxToolRounds',       def:512},
-  {id:'advLoopSame',     key:'loopSameLimit',       def:3},
-  {id:'advLoopRepeat',   key:'loopRepeatLimit',     def:5},
-  {id:'advCtx',          key:'contextWindow',       def:128000},
-  {id:'advMaxOut',       key:'maxOutputTokens',     def:16384},
-  {id:'advMaxConv',      key:'maxConversationMessages', def:600},
-  {id:'advImgTimeout',   key:'imageTimeoutSeconds', def:300},
-  {id:'advCooldown',     key:'rateLimitCooldownSeconds', def:30},
-  {id:'advConcur',       key:'accountConcurrencyLimit', def:8},
+  {id:'advToolPlanning', key:'toolPlanningMode', def:'router', type:'select'},
+  {id:'advMaxToolCalls', key:'maxToolCallsPerTurn', def:32, type:'int'},
+  {id:'advMaxRounds',    key:'maxToolRounds',       def:512, type:'int'},
+  {id:'advLoopSame',     key:'loopSameLimit',       def:3, type:'int'},
+  {id:'advLoopRepeat',   key:'loopRepeatLimit',     def:5, type:'int'},
+  {id:'advCtx',          key:'contextWindow',       def:128000, type:'int'},
+  {id:'advMaxOut',       key:'maxOutputTokens',     def:16384, type:'int'},
+  {id:'advMaxConv',      key:'maxConversationMessages', def:600, type:'int'},
+  {id:'advSessionTTL',   key:'sessionTtlMinutes',   def:120, type:'int'},
+  {id:'advContextTTL',   key:'contextTtlMinutes',   def:120, type:'int'},
+  {id:'advCtxSim',       key:'contextSimilarity',   def:0.6, type:'float'},
+  {id:'advChatTimeout',  key:'chatTimeoutSeconds',  def:120, type:'int'},
+  {id:'advImgTimeout',   key:'imageTimeoutSeconds', def:300, type:'int'},
+  {id:'advCooldown',     key:'rateLimitCooldownSeconds', def:30, type:'int'},
+  {id:'advConcur',       key:'accountConcurrencyLimit', def:8, type:'int'},
+  {id:'advLogLevel',     key:'logLevel',            def:'info', type:'select'},
 ];
 async function loadAdvanced(){
   try{
     const d=await api('/api/admin/settings');
     const v=d.settings||{};
-    advFields.forEach(f=>{ const el=$(f.id); if(el) el.value = (v[f.key]!=null && v[f.key]!==0) ? v[f.key] : f.def; });
+    advFields.forEach(f=>{
+      const el=$(f.id); if(!el) return;
+      const val=v[f.key];
+      if(f.type==='select') el.value = (val!=null && val!=='') ? val : f.def;
+      else if(f.type==='float') el.value = (val!=null && val!=='') ? val : f.def;
+      else el.value = (val!=null && val!==0) ? val : f.def;
+    });
+    const pub=$('advPublicIdentity');
+    if(pub) pub.checked = v.publicIdentityPolicy!=null ? !!v.publicIdentityPolicy : false;
     $('advStatus').textContent='';
   }catch(e){showNotice(e.message,'error');}
 }
@@ -2433,9 +2459,12 @@ async function saveAdvanced(){
       const el=$(f.id); if(!el) return;
       const raw=(el.value||'').trim();
       if(raw==='') return;            // 留空 = 沿用已保存值
-      const n=parseInt(raw,10);
-      if(!Number.isNaN(n)) body[f.key]=n;
+      if(f.type==='select'){ body[f.key]=raw; }
+      else if(f.type==='float'){ const n=parseFloat(raw); if(!Number.isNaN(n)) body[f.key]=n; }
+      else { const n=parseInt(raw,10); if(!Number.isNaN(n)) body[f.key]=n; }
     });
+    const pub=$('advPublicIdentity');
+    if(pub) body.publicIdentityPolicy = pub.checked;
     if(Object.keys(body).length===0){ $('advStatus').textContent='未改动任何值'; return; }
     await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
     $('advStatus').textContent='✓ 已保存';

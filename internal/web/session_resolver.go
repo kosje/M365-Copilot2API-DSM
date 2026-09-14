@@ -60,18 +60,10 @@ const defaultMaxSessions = 1000
 func openSessionResolver() *sessionResolver {
 	// 闂茬疆 2 灏忔椂鍗宠涓鸿繃鏈燂紙鐢ㄦ埛锛? 灏忔椂涓嶆椿璺冨凡缁忕畻涔咃級銆備細璇濊繃鏈熷悗
 	// 浠?sessions.json 鍓旈櫎锛屼簯绔璇濅氦缁?auto_cleanup 鎸夌浉鍚岀獥鍙ｅ洖鏀躲€?
-	ttl := 2 * time.Hour
-	if v := os.Getenv("M365_SESSION_TTL_MINUTES"); v != "" {
-		if d, err := time.ParseDuration(v + "m"); err == nil {
-			ttl = d
-		}
-	}
-	contextTTL := 2 * time.Hour
-	if v := os.Getenv("M365_CONTEXT_TTL_MINUTES"); v != "" {
-		if d, err := time.ParseDuration(v + "m"); err == nil {
-			contextTTL = d
-		}
-	}
+	// Default session/context TTL is driven by runtime settings; explicit env
+	// variables still win for backward compatibility.
+	ttl := time.Duration(sessionTTLMinutes()) * time.Minute
+	contextTTL := time.Duration(contextTTLMinutes()) * time.Minute
 	path := os.Getenv("M365_SESSION_CACHE")
 	if path == "" {
 		path = "sessions.json"
@@ -278,7 +270,101 @@ func (sr *sessionResolver) Resolve(r *http.Request, body *oaiReq) ResolveResult 
 		}
 	}
 
+	// Fuzzy fallback: if the request does not strictly prefix/suffix any stored
+	// history but is highly similar to one (e.g. client locally truncated
+	// history), reuse that session and send the full request as the boundary
+	// is unknown.
+	if fuzzyID, score := sr.matchFuzzyContextLocked(tenant, ipFinger, body.Messages); fuzzyID != "" {
+		sess := sr.sessions[fuzzyID]
+		sess.LastUsedAt = time.Now().UTC()
+		sr.sessions[fuzzyID] = sess
+		sr.persist.markDirty()
+		return ResolveResult{
+			SessionID:      sess.SessionID,
+			ConversationID: sess.ConversationID,
+			AccountID:      sess.AccountID,
+			MatchedBy:      fmt.Sprintf("context_fuzzy_%.2f", score),
+			IsNew:          false,
+			HistoryLen:     0,
+		}
+	}
+
 	return ResolveResult{IsNew: true}
+}
+
+func (sr *sessionResolver) matchFuzzyContextLocked(tenant, ipFinger string, messages []oaiMsg) (string, float64) {
+	if len(messages) == 0 {
+		return "", 0
+	}
+	threshold := contextSimilarityThreshold()
+	if threshold <= 0 {
+		return "", 0
+	}
+	needle := messagesText(messages)
+	if needle == "" {
+		return "", 0
+	}
+	type match struct {
+		id    string
+		score float64
+	}
+	best := match{}
+	for id, sess := range sr.sessions {
+		if time.Since(sess.LastUsedAt) > sr.contextTTL {
+			continue
+		}
+		if sess.Tenant != tenant {
+			continue
+		}
+		if sess.IPFingerprint != ipFinger {
+			continue
+		}
+		haystack := messagesText(sess.ContextHistory)
+		if haystack == "" {
+			continue
+		}
+		score := jaccardSimilarity(needle, haystack)
+		if score >= threshold && score > best.score {
+			best = match{id: id, score: score}
+		}
+	}
+	return best.id, best.score
+}
+
+func messagesText(msgs []oaiMsg) string {
+	var parts []string
+	for _, m := range msgs {
+		parts = append(parts, m.Role+":"+contentToString(m.Content))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func jaccardSimilarity(a, b string) float64 {
+	setA := runeBigrams(a)
+	setB := runeBigrams(b)
+	if len(setA) == 0 || len(setB) == 0 {
+		return 0
+	}
+	intersection := 0
+	for k := range setA {
+		if _, ok := setB[k]; ok {
+			intersection++
+		}
+	}
+	union := len(setA) + len(setB) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func runeBigrams(s string) map[string]struct{} {
+	runes := []rune(strings.ToLower(s))
+	out := make(map[string]struct{})
+	for i := 0; i+1 < len(runes); i++ {
+		out[string(runes[i:i+2])] = struct{}{}
+	}
+	return out
 }
 
 func (sr *sessionResolver) matchSuffixLocked(tenant, ipFinger string, messages []oaiMsg) (string, int) {
