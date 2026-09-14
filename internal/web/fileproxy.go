@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
@@ -196,6 +197,14 @@ func extractBase64File(text string) ([]byte, error) {
 		clean = clean[:len(clean)-1]
 	}
 	if len(clean) < 32 {
+		// Observed with a 69 KB PDF: rather than emit base64 that would not fit
+		// in its output budget, the model writes the base64 to *another* file
+		// and answers with a link to it — so the reply parses fine and contains
+		// no payload at all. Say so, because "no usable base64" on its own
+		// reads like a parser bug when it is really a size ceiling.
+		if asyncgwURLRe.MatchString(text) {
+			return nil, fmt.Errorf("the model returned another file link instead of inline base64 — the file is too large to re-emit in one reply (retrieval works up to roughly 40 KB; raise M365_MAX_OUTPUT_TOKENS or ask for a smaller file)")
+		}
 		return nil, fmt.Errorf("no usable base64 found (len=%d)", len(clean))
 	}
 	dec, err := base64.StdEncoding.DecodeString(clean)
@@ -205,7 +214,57 @@ func extractBase64File(text string) ([]byte, error) {
 	if !validFileMagic(dec) {
 		return nil, fmt.Errorf("decoded bytes are not a recognized file type (magic=%q)", string(dec[:min(len(dec), 8)]))
 	}
+	if err := validFileTail(dec); err != nil {
+		return nil, err
+	}
 	return dec, nil
+}
+
+// validFileTail checks the terminator every format we accept is required to
+// end with.
+//
+// The magic number alone only proves the file started correctly, and the way
+// this file is retrieved makes truncation the likeliest failure by far: the
+// model re-emits the bytes as base64 and stops at the output token limit,
+// roughly 40 KB of payload. The head survives that, so a magic-only check
+// passes a half file and the user downloads something that will not open,
+// with nothing anywhere saying why. Fail loudly instead.
+func validFileTail(b []byte) error {
+	// Terminators live at the very end, except ZIP's end-of-central-directory
+	// record, which a trailing comment can push up to 64 KiB back.
+	tailLen := 1024
+	if len(b) < tailLen {
+		tailLen = len(b)
+	}
+	tail := b[len(b)-tailLen:]
+
+	switch {
+	case bytes.HasPrefix(b, []byte("%PDF-")):
+		if !bytes.Contains(tail, []byte("%%EOF")) {
+			return fmt.Errorf("PDF is truncated: no %%%%EOF in the last %d bytes (got %d bytes total; the model likely hit its output limit re-emitting the file)", tailLen, len(b))
+		}
+	case len(b) >= 2 && b[0] == 'P' && b[1] == 'K':
+		zipTail := 66 * 1024
+		if len(b) < zipTail {
+			zipTail = len(b)
+		}
+		if !bytes.Contains(b[len(b)-zipTail:], []byte{'P', 'K', 0x05, 0x06}) {
+			return fmt.Errorf("zip-based file is truncated: no end-of-central-directory record (got %d bytes total; the model likely hit its output limit re-emitting the file)", len(b))
+		}
+	case len(b) >= 3 && b[0] == 0xFF && b[1] == 0xD8:
+		if !bytes.HasSuffix(b, []byte{0xFF, 0xD9}) {
+			return fmt.Errorf("JPEG is truncated: missing end-of-image marker (got %d bytes total)", len(b))
+		}
+	case len(b) >= 4 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G':
+		if !bytes.Contains(tail, []byte("IEND")) {
+			return fmt.Errorf("PNG is truncated: missing IEND chunk (got %d bytes total)", len(b))
+		}
+	case bytes.HasPrefix(b, []byte("GIF8")):
+		if b[len(b)-1] != 0x3B {
+			return fmt.Errorf("GIF is truncated: missing trailer (got %d bytes total)", len(b))
+		}
+	}
+	return nil
 }
 
 func validFileMagic(b []byte) bool {
