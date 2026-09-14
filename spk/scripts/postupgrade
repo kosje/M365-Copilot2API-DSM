@@ -16,9 +16,11 @@ if [ -d "$BACKUP" ]; then
     rm -rf "$BACKUP"
 fi
 
-PKG_USER="${SYNOPKG_PKGNAME:-m365-copilot2api}"
-if id "$PKG_USER" >/dev/null 2>&1; then
-    chown -R "$PKG_USER:$PKG_USER" "$VAR_DIR" 2>/dev/null
+OWNER="$(stat -c '%U:%G' "$VAR_DIR" 2>/dev/null || true)"
+if [ -n "$OWNER" ] && [ "$OWNER" != "root:root" ]; then
+    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null
+elif [ -n "${SYNOPKG_PKGNAME:-}" ] && id "$SYNOPKG_PKGNAME" >/dev/null 2>&1; then
+    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null
 fi
 chmod 700 "$DATA_DIR" 2>/dev/null
 

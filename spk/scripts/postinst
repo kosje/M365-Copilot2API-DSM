@@ -7,7 +7,7 @@ set -u
 
 VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
 DATA_DIR="$VAR_DIR/data"
-BOOTSTRAP_PW="$VAR_DIR/admin-password-bootstrap"
+WIZARD_PW="$VAR_DIR/admin-password-wizard"
 KEEP_DIR="/var/packages/m365-copilot2api/keep"
 
 mkdir -p "$DATA_DIR"
@@ -19,20 +19,26 @@ if [ -d "$KEEP_DIR" ] && [ -f "$KEEP_DIR/accounts.json" ]; then
     echo "restored retained data from $KEEP_DIR on $(date)" >> "$DATA_DIR/restore.log" 2>/dev/null
 fi
 
-# Hand the wizard password to the app as a one-shot bootstrap file. The app
-# only consumes it when no password is stored yet, or when the value differs
-# from the last bootstrap — matching the fnOS wizard's "reinstall to reset a
-# forgotten password" behaviour. A password changed in the console is not
-# overwritten by an ordinary restart.
+# Stash the wizard password for start-stop-status to export as
+# M365_ADMIN_PASSWORD. The app fingerprints that value and re-applies it only
+# when it changes, so a reinstall with a new password resets a forgotten one
+# while ordinary restarts leave a console-changed password alone.
 if [ -n "${pkgwizard_admin_password:-}" ]; then
-    printf '%s' "$pkgwizard_admin_password" > "$BOOTSTRAP_PW"
-    chmod 600 "$BOOTSTRAP_PW"
+    printf '%s' "$pkgwizard_admin_password" > "$WIZARD_PW"
+    chmod 600 "$WIZARD_PW"
 fi
 
-# The service account is created by DSM from conf/privilege (run-as package).
-PKG_USER="${SYNOPKG_PKGNAME:-m365-copilot2api}"
-if id "$PKG_USER" >/dev/null 2>&1; then
-    chown -R "$PKG_USER:$PKG_USER" "$VAR_DIR" 2>/dev/null
+# Hand everything under var/ to the service account. Take the owner from the
+# var directory DSM itself created rather than guessing a username: the
+# account name that conf/privilege's "run-as: package" produces is not
+# something to hardcode, and a wrong guess would silently skip the chown and
+# leave the data directory root-owned — which the unprivileged service cannot
+# write to.
+OWNER="$(stat -c '%U:%G' "$VAR_DIR" 2>/dev/null || true)"
+if [ -n "$OWNER" ] && [ "$OWNER" != "root:root" ]; then
+    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null
+elif [ -n "${SYNOPKG_PKGNAME:-}" ] && id "$SYNOPKG_PKGNAME" >/dev/null 2>&1; then
+    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null
 fi
 chmod 700 "$DATA_DIR" 2>/dev/null
 

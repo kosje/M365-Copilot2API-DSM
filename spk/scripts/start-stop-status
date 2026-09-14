@@ -17,7 +17,7 @@ LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/m365-copilot2api.log}"
 CONFIG="$DATA_DIR/accounts.json"
 APIKEYS="$DATA_DIR/api-keys.json"
 PWFILE="$DATA_DIR/admin-password"
-BOOTSTRAP_PW="$VAR_DIR/admin-password-bootstrap"
+WIZARD_PW="$VAR_DIR/admin-password-wizard"
 APPLOG="$DATA_DIR/app.log"
 PIDFILE="$VAR_DIR/m365-copilot2api.pid"
 
@@ -35,13 +35,17 @@ for cand in "$APP_DIR/bin/m365-copilot2api" "$APP_DIR/m365-copilot2api"; do
 done
 
 running() {
+    [ -n "$BIN" ] || return 1
     [ -f "$PIDFILE" ] || return 1
     pid="$(cat "$PIDFILE" 2>/dev/null)"
     [ -n "$pid" ] || return 1
     # Confirm the pid is still our binary and not a recycled number.
     [ -d "/proc/$pid" ] || return 1
     exe="$(readlink "/proc/$pid/exe" 2>/dev/null)"
-    case "$exe" in
+    # Guard the empty case explicitly: with an unset BIN the patterns below
+    # would collapse to "" and match a failed readlink, reporting a dead
+    # service as running.
+    [ -n "$exe" ] && case "$exe" in
         "$BIN"|"$BIN "*) return 0 ;;
     esac
     # readlink may be unavailable to a non-root user; fall back to cmdline.
@@ -71,12 +75,20 @@ case "$1" in
         M365_ADMIN_PASSWORD_FILE="$PWFILE"
         export M365_LISTEN M365_DATA_DIR M365_CONFIG M365_API_KEYS M365_ADMIN_PASSWORD_FILE
 
-        # The wizard password is handed over once, by postinst, through a
-        # bootstrap file the app consumes on first start; it never overwrites a
-        # password the admin later changed in the console.
-        if [ -s "$BOOTSTRAP_PW" ]; then
-            M365_ADMIN_PASSWORD_BOOTSTRAP_FILE="$BOOTSTRAP_PW"
-            export M365_ADMIN_PASSWORD_BOOTSTRAP_FILE
+        # Hand the wizard password over as M365_ADMIN_PASSWORD, which is the
+        # only input the reset path keys off: the app fingerprints this value
+        # into <data dir>/admin-envhash and re-applies it only when it differs
+        # from the last one applied. So a reinstall with a NEW wizard password
+        # resets a forgotten password, while a routine restart leaves a
+        # console-changed password alone.
+        #
+        # M365_ADMIN_PASSWORD_BOOTSTRAP_FILE is deliberately not used: it is
+        # consulted only when no password is stored at all, so with the data
+        # directory retained across an uninstall it would never fire and the
+        # wizard's "reinstall to reset" promise would silently do nothing.
+        if [ -s "$WIZARD_PW" ]; then
+            M365_ADMIN_PASSWORD="$(cat "$WIZARD_PW")"
+            export M365_ADMIN_PASSWORD
         fi
 
         cd "$(dirname "$BIN")" || exit 1
