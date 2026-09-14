@@ -780,6 +780,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			ClearExpires   bool       `json:"clearExpires"`
 			ModelWhitelist []string   `json:"modelWhitelist"`
 			IPWhitelist    []string   `json:"ipWhitelist"`
+			AutoModels     []string   `json:"autoModels"`
 		}
 		if json.NewDecoder(r.Body).Decode(&b) != nil || b.ID == "" {
 			writeOpenAIError(w, 400, "invalid_request_error", "bad json")
@@ -803,6 +804,9 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		if b.IPWhitelist != nil {
 			opts.IPWhitelist = &b.IPWhitelist
+		}
+		if b.AutoModels != nil {
+			opts.AutoModels = &b.AutoModels
 		}
 		updated, e := s.apiKeys.update(b.ID, opts)
 		if e != nil {
@@ -2035,6 +2039,15 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if resolved := s.settings.resolveModelAlias(body.Model); resolved != body.Model {
 		log.Printf("[model-alias] %s -> %s", body.Model, resolved)
 		body.Model = resolved
+	}
+	// Per-key "auto" model pool: when the key configures autoModels, an
+	// "auto"/smart-routing request is pinned to the highest-priority pool
+	// entry instead of the upstream magic tone. The resolved model is also
+	// surfaced via X-M365-Auto-Model so clients (chat UI) can show it.
+	if resolved := requestAutoModel(r, body.Model); !strings.EqualFold(resolved, body.Model) {
+		log.Printf("[auto-route] model=auto -> %s (per-key pool)", resolved)
+		body.Model = resolved
+		w.Header().Set("X-M365-Auto-Model", resolved)
 	}
 	if !requestModelAllowed(r, body.Model) {
 		writeOpenAIError(w, http.StatusForbidden, "auth_error", "model is not allowed for this API key")

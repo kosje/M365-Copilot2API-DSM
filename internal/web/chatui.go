@@ -882,9 +882,15 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 			text += "\n\n![](" + iu + ")\n\n[⬇ 图片原地址（若上图未显示，点此自行下载）](" + iu + ")"
 		}
 		if text != "" || len(gen) > 0 {
+			// When the per-key auto pool resolved "auto" to a concrete model,
+			// persist that model so the history badge shows what actually ran.
+			persistModel := model
+			if am := strings.TrimSpace(tw.Header().Get("X-M365-Auto-Model")); am != "" {
+				persistModel = am
+			}
 			s.chatUI.mu.Lock()
 			if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Gen: gen, Model: model, Time: time.Now()})
+				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Gen: gen, Model: persistModel, Time: time.Now()})
 				c.UpdatedAt = time.Now()
 				s.chatUI.saveConv(c)
 			}
