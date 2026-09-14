@@ -127,6 +127,11 @@ input,textarea,select{font:inherit;color:inherit}
 .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .stream-cursor::after{content:'▍';color:var(--accent);animation:blink 1s infinite}
+.thumb.doc{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:var(--panel,#f6f7f9);border:1px solid var(--border);border-radius:8px;max-width:260px}
+.thumb.doc .doc-ico{font-size:16px}
+.thumb.doc .doc-name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.thumb.doc .doc-size{font-size:10.5px;color:var(--muted);flex:none}
+.doc-chip{display:inline-flex;align-items:center;gap:4px;margin:3px 4px 0 0;padding:3px 9px;background:var(--panel,#f6f7f9);border:1px solid var(--border);border-radius:999px;font-size:11.5px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .img-progress{display:inline-flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}
 .img-progress .pbar{width:130px;height:4px;border-radius:2px;background:var(--border);overflow:hidden;position:relative}
 .img-progress .pbar::after{content:'';position:absolute;left:-45%;width:45%;height:100%;border-radius:2px;background:var(--accent);animation:imgslide 1.1s ease-in-out infinite}
@@ -261,7 +266,8 @@ input,textarea,select{font:inherit;color:inherit}
           <div class="input-foot">
             <button class="mode-btn" id="imgModeBtn" onclick="toggleImgMode()" title="画图模式：发送的描述将生成图片">🎨 画图</button>
             <button class="mode-btn" onclick="inspire()" title="随机灵感：随机填入一条提示词（聊天/画图模式各有专属灵感池）">🎲 灵感</button>
-            <button class="mode-btn pic" onclick="pickImage()" title="添加图片">🖼️</button>
+            <button class="mode-btn pic" onclick="pickFile()" title="添加附件：图片 / CSV / Excel / PDF / 文本 / 代码文件">📎</button>
+            <input type="file" id="fileInput" multiple hidden accept="image/*,.csv,.tsv,.xlsx,.xls,.pdf,.txt,.md,.markdown,.json,.jsonl,.log,.xml,.yaml,.yml,.ini,.toml,.conf,.cfg,.env,.py,.js,.ts,.jsx,.tsx,.go,.java,.c,.cpp,.h,.hpp,.cs,.rb,.rs,.php,.sh,.bash,.bat,.ps1,.sql,.html,.htm,.css,.scss,.vue,.srt,.vtt">
             <button class="mode-btn" onclick="toggleSys()" title="设置系统提示词">🧭 人设</button>
             <select id="modelSel" title="选择模型" onchange="onModelChange()"></select>
             <button class="send" id="sendBtn" onclick="send()" title="发送（生成中点击可停止）">↑</button>
@@ -280,7 +286,7 @@ input,textarea,select{font:inherit;color:inherit}
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-let me=null,quota=null,convs=[],curConv=null,curMsgs=[],imgMode=false,attachments=[],busy=false;
+let me=null,quota=null,convs=[],curConv=null,curMsgs=[],imgMode=false,attachments=[],docAttachments=[],busy=false;
 let abortCtl=null,editing=false,curModel=localStorage.getItem('m365_chat_model')||'auto';
 
 function toast(t){const el=$('toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2200);}
@@ -617,7 +623,17 @@ function renderMsg(m,streaming){
   const div=document.createElement('div');div.className='msg '+m.role;
   if(m.role==='user'){
     const b=document.createElement('div');b.className='bubble';
-    b.textContent=m.content||'';
+    if(Array.isArray(m.content)){
+      let txt='';
+      for(const p of m.content){
+        if(p.type==='text'&&p.text)txt+=(txt?'\n':'')+p.text;
+        else if(p.type==='image_url'&&p.image_url&&p.image_url.url){const img=document.createElement('img');img.className='att';img.src=p.image_url.url;b.appendChild(img);}
+        else if(p.type==='file'){const chip=document.createElement('span');chip.className='doc-chip';chip.textContent='📄 '+((p.file&&p.file.name)||p.text||'文件');b.appendChild(chip);}
+      }
+      b.textContent=txt;
+    }else{
+      b.textContent=m.content||'';
+    }
     if(m.badges&&m.badges.length){const bg=document.createElement('span');bg.className='optbadges';m.badges.forEach(t=>{const sp=document.createElement('span');sp.textContent=t;bg.appendChild(sp);});b.appendChild(bg);}
     addImgs(b,m.images);
     const tools=document.createElement('div');tools.className='tools';
@@ -640,8 +656,9 @@ function renderMsg(m,streaming){
       rg.onclick=(m.gen&&m.gen.length)?imgRegenLast:regenLast;
       const qt=document.createElement('button');qt.textContent='❝ 引用';
       qt.onclick=()=>quoteText(m.content||'');
+      if(extractHtmlBlock(m.content)){const rp=document.createElement('button');rp.textContent='🧾 生成反馈文件';rp.title='把回复中的 HTML 保存为可打开的网页文件（表格可复制进 Excel）';rp.onclick=()=>saveHtmlReport(rp,m.content);tools.appendChild(rp);}
       const meta=document.createElement('span');meta.className='meta';
-      if(m.model){const mb=document.createElement('span');mb.className='mbadge';mb.textContent=m.model;meta.appendChild(mb);}
+      if(m.model){const mb=document.createElement('span');mb.className='mbadge';mb.textContent=modelLabel(m.model);meta.appendChild(mb);}
       if(m.time){const ts=document.createElement('span');ts.textContent=new Date(m.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});meta.appendChild(ts);}
       tools.append(cp,rg,qt,meta);
       body.appendChild(tools);
@@ -668,11 +685,21 @@ $('msgs').addEventListener('scroll',()=>{
 });
 
 /* ---------- attachments ---------- */
-function pickImage(){$('fileInput').click();}
+function pickFile(){$('fileInput').click();}
+const DOC_EXT=/\.(csv|tsv|xlsx|xls|pdf|txt|md|markdown|json|jsonl|log|xml|yaml|yml|ini|toml|conf|cfg|env|py|js|ts|jsx|tsx|go|java|c|cpp|h|hpp|cs|rb|rs|php|sh|bash|bat|ps1|sql|html|htm|css|scss|vue|srt|vtt)$/i;
 function addFiles(files){
   for(const f of files){
-    if(!f.type.startsWith('image/'))continue;
-    compressImage(f).then(d=>{attachments.push(d);renderAttach();}).catch(()=>toast('图片读取失败'));
+    const isImg=f.type&&f.type.startsWith('image/');
+    if(!isImg&&!DOC_EXT.test(f.name)){toast('不支持的文件类型：'+f.name);continue;}
+    if(f.size>20*1024*1024){toast('文件超过 20MB 限制：'+f.name);continue;}
+    if(isImg){
+      compressImage(f).then(d=>{attachments.push(d);renderAttach();}).catch(()=>toast('图片读取失败'));
+    }else{
+      readFileAsDataURL(f).then(d=>{
+        docAttachments.push({name:f.name,mime:f.type||'',data:d,size:f.size});
+        renderAttach();
+      }).catch(()=>toast('文件读取失败'));
+    }
   }
   $('fileInput').value='';
 }
@@ -720,6 +747,13 @@ function renderAttach(){
     t.querySelector('.rm').onclick=()=>{attachments.splice(i,1);renderAttach();};
     el.appendChild(t);
   });
+  docAttachments.forEach((d,i)=>{
+    const t=document.createElement('div');t.className='thumb doc';
+    const kb=d.size>1048576?(d.size/1048576).toFixed(1)+'MB':Math.max(1,Math.round(d.size/1024))+'KB';
+    t.innerHTML=`<span class="doc-ico">📄</span><span class="doc-name" title="${d.name.replace(/"/g,'&quot;')}">${d.name}</span><span class="doc-size">${kb}</span><span class="rm">✕</span>`;
+    t.querySelector('.rm').onclick=()=>{docAttachments.splice(i,1);renderAttach();};
+    el.appendChild(t);
+  });
 }
 function toggleImgMode(){imgMode=!imgMode;$('imgModeBtn').classList.toggle('on',imgMode);$('imgPanel').classList.toggle('hidden',!imgMode);$('input').placeholder=imgMode?'描述想生成的图片…（可选比例/风格/数量）':'给 M365 发送消息（Enter 发送 / Shift+Enter 换行）';}
 
@@ -741,9 +775,27 @@ function pickStyle(v){imgOpts.style=imgOpts.style===v?'':v;saveImgOpts();renderI
 function pickCount(n){imgOpts.count=n;saveImgOpts();renderImgPanel();}
 function pickQuality(){imgOpts.quality=imgOpts.quality==='hd'?'':'hd';saveImgOpts();renderImgPanel();}
 function pickNegative(){imgOpts.negative=$('negInput').value.trim();saveImgOpts();}
+function modelLabel(m){return m==='auto'?'智能路由':(m||'');}
+function sizeLabel(sz){const f=SIZE_PRESETS.find(x=>x[1]===sz);return f?f[0]:sz;}
+function extractHtmlBlock(text){
+  if(!text)return '';
+  const m=text.match(/```html\s*\n([\s\S]*?)```/i)||text.match(/```\s*\n(<!DOCTYPE[\s\S]*?)```/i);
+  return m?m[1].trim():'';
+}
+async function saveHtmlReport(btn,contentText){
+  const html=extractHtmlBlock(contentText||'');
+  if(!html){toast('未找到 HTML 代码块');return;}
+  btn.disabled=true;btn.textContent='⏳ 生成中…';
+  try{
+    const d=await api('/api/chatui/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({html:html,name:'反馈文件'})});
+    const a=document.createElement('a');a.href=d.url;a.target='_blank';a.rel='noopener';a.textContent='📄 打开反馈文件';
+    a.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:var(--accent);color:#fff;border-radius:8px;font-size:12px;text-decoration:none;margin-left:6px';
+    btn.after(a);btn.textContent='✓ 已生成';btn.disabled=false;
+  }catch(e){btn.textContent='🧾 生成反馈文件';btn.disabled=false;toast(e.message);}
+}
 function optBadgeTags(){
   const t=[];
-  if(imgOpts.size&&imgOpts.size!=='1024x1024')t.push(imgOpts.size);
+  if(imgOpts.size&&imgOpts.size!=='1024x1024')t.push(sizeLabel(imgOpts.size));
   const st=STYLE_PRESETS.find(([l,v])=>v===imgOpts.style);if(st&&imgOpts.style)t.push(st[1]);
   if(imgOpts.count>1)t.push('x'+imgOpts.count);
   if(imgOpts.quality==='hd')t.push('高清');
@@ -806,12 +858,15 @@ async function send(){
     $('input').value='';autoGrow();
     await genImage(text);return;
   }
-  if(!text&&attachments.length===0)return;
+  if(!text&&attachments.length===0&&docAttachments.length===0)return;
   const parts=[];
   if(text)parts.push({type:'text',text});
   for(const a of attachments)parts.push({type:'image_url',image_url:{url:a}});
   const hasImgs=attachments.length>0;
-  attachments=[];renderAttach();
+  const hasDocs=docAttachments.length>0;
+  const docNames=docAttachments.map(d=>d.name);
+  for(const d of docAttachments)parts.push({type:'file',file:{name:d.name,mime:d.mime,data:d.data}});
+  attachments=[];docAttachments=[];renderAttach();
   $('input').value='';autoGrow();
   if(editing){
     // edit & resend: drop last user(+assistant) from client view; backend truncates too
@@ -822,10 +877,11 @@ async function send(){
     const as=wrap.querySelectorAll('.msg.assistant');if(as.length)as[as.length-1].closest('.msg').remove();
     setEditingUI();
   }
-  renderMsg({role:'user',content:text||'（图片）',images:[]},false);
-  if(hasImgs){
+  renderMsg({role:'user',content:text||((hasImgs||hasDocs)?'（附件）':'')},false);
+  {
     const b=$('msgWrap').querySelector('.msg.user:last-child .bubble');
     for(const p of parts)if(p.type==='image_url'){const img=document.createElement('img');img.className='att';img.src=p.image_url.url;b.appendChild(img);}
+    for(const n of docNames){const chip=document.createElement('span');chip.className='doc-chip';chip.textContent='📄 '+n;b.appendChild(chip);}
   }
   refreshActions();
   jumpBottom(true);
@@ -933,12 +989,28 @@ async function streamChat(opts){
     }
     if(!acc){acc='（空回复，请重试）';paint();}
     // client-side conversation state
-    if(opts.userMsg)curMsgs.push(opts.userMsg);
+    if(opts.userMsg){
+      const um=opts.userMsg;
+      if(Array.isArray(um.content))um.content=um.content.map(p=>{
+        if(p.type==='image_url')return p;
+        if(p.type==='file')return {type:'text',text:'[附件文件：'+((p.file&&p.file.name)||'文件')+']'};
+        return p;
+      });
+      curMsgs.push(um);
+    }
     curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});
     renderFinalTools(body,acc,((Date.now()-t0)/1000).toFixed(1));
   }catch(e){
     const aborted=e&&(e.name==='AbortError'||/abort/i.test(e.message||''));
-    if(opts.userMsg)curMsgs.push(opts.userMsg);
+    if(opts.userMsg){
+      const um=opts.userMsg;
+      if(Array.isArray(um.content))um.content=um.content.map(p=>{
+        if(p.type==='image_url')return p;
+        if(p.type==='file')return {type:'text',text:'[附件文件：'+((p.file&&p.file.name)||'文件')+']'};
+        return p;
+      });
+      curMsgs.push(um);
+    }
     if(acc)curMsgs.push({role:'assistant',content:acc,model:curModel,time:new Date().toISOString()});
     body.innerHTML=mdRender(acc)+(acc?'':'')+(aborted
       ?'<div class="tools"><span class="meta">⏹ 已停止生成</span></div>'
@@ -958,8 +1030,9 @@ function renderFinalTools(body,acc,secs){
   rg.onclick=regenLast;
   const qt=document.createElement('button');qt.textContent='❝ 引用';
   qt.onclick=()=>quoteText(acc);
+  if(extractHtmlBlock(acc)){const rp=document.createElement('button');rp.textContent='🧾 生成反馈文件';rp.title='把回复中的 HTML 保存为可打开的网页文件（表格可复制进 Excel）';rp.onclick=()=>saveHtmlReport(rp,acc);t.appendChild(rp);}
   const meta=document.createElement('span');meta.className='meta';
-  const mb=document.createElement('span');mb.className='mbadge';mb.textContent=curModel;meta.appendChild(mb);
+  const mb=document.createElement('span');mb.className='mbadge';mb.textContent=modelLabel(curModel);meta.appendChild(mb);
   if(secs){const st=document.createElement('span');st.textContent='⏱ '+secs+'s · '+acc.length+' 字';meta.appendChild(st);}
   t.append(cp,rg,qt,meta);
   body.appendChild(t);

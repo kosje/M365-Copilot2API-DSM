@@ -282,6 +282,31 @@ func (s *chatUIStore) saveImage(data []byte, contentType string) (string, error)
 	return id, nil
 }
 
+// saveReport persists a generated HTML report under <dir>/reports/<uuid>.html
+// and returns the file id for /api/chatui/file/<id>.
+func (s *chatUIStore) saveReport(data []byte) (string, error) {
+	id := uuid.NewString() + ".html"
+	dir := filepath.Join(s.Dir, "reports")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, id)
+	if err := os.WriteFile(p, data, 0600); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *chatUIStore) openReport(id string) (*os.File, error) {
+	if strings.Contains(id, "/") || strings.Contains(id, "\\") || strings.Contains(id, "..") {
+		return nil, os.ErrNotExist
+	}
+	if !strings.HasSuffix(strings.ToLower(id), ".html") {
+		return nil, os.ErrNotExist
+	}
+	return os.Open(filepath.Join(s.Dir, "reports", id))
+}
+
 var imageExtTypes = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 	".webp": "image/webp", ".gif": "image/gif",
@@ -1217,6 +1242,40 @@ func (c *chatCaptureWriter) WriteHeader(code int) { c.code = code }
 func (c *chatCaptureWriter) Write(p []byte) (int, error) { return c.buf.Write(p) }
 func (c *chatCaptureWriter) Flush() {}
 
+// chatReport saves an assistant-generated HTML report server-side so the user
+// can open it as a standalone page (tables can be copied into Excel etc.).
+func (s *Server) chatReport(w http.ResponseWriter, r *http.Request) {
+	u := s.chatAuth(r)
+	if u == nil {
+		writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "chat login required")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	var in struct {
+		HTML string `json:"html"`
+		Name string `json:"name"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 10<<20)).Decode(&in) != nil || strings.TrimSpace(in.HTML) == "" {
+		writeOpenAIError(w, 400, "invalid_request_error", "html is required")
+		return
+	}
+	doc := strings.TrimSpace(in.HTML)
+	lower := strings.ToLower(doc)
+	if !strings.Contains(lower, "<!doctype html") && !strings.Contains(lower, "<html") {
+		// fragment: wrap into a minimal document
+		doc = "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" + strings.ReplaceAll(strings.TrimSpace(in.Name), "<", "") + "</title><style>body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;margin:24px;line-height:1.6;color:#1f2328}table{border-collapse:collapse;margin:12px 0}th,td{border:1px solid #d0d7de;padding:6px 12px}th{background:#f6f8fa}tr:nth-child(even){background:#fafbfc}h1,h2,h3{margin:16px 0 8px}</style></head><body>\n" + doc + "\n</body></html>"
+	}
+	id, err := s.chatUI.saveReport([]byte(doc))
+	if err != nil {
+		writeOpenAIError(w, 500, "internal_error", "save report failed")
+		return
+	}
+	jsonOut(w, map[string]any{"status": "ok", "id": id, "url": "/api/chatui/file/" + id})
+}
+
 func (s *Server) chatFile(w http.ResponseWriter, r *http.Request) {
 	u := s.chatAuth(r)
 	if u == nil {
@@ -1230,6 +1289,17 @@ func (s *Server) chatFile(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/chatui/file/")
 	f, ct, err := s.chatUI.openImage(id)
 	if err != nil {
+		// reports (generated HTML) live in a separate directory
+		if rf, rerr := s.chatUI.openReport(id); rerr == nil {
+			defer rf.Close()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			// Opaque-origin sandbox: scripts/links run but the page cannot
+			// touch chat cookies, storage or same-origin APIs.
+			w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms allow-modals")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			http.ServeContent(w, r, id, time.Now(), rf)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}

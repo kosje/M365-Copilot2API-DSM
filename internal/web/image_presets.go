@@ -70,14 +70,22 @@ var imageStyleLabels = map[string]string{
 	"ink": "水墨", "sketch": "线条画", "sticker": "贴纸", "emote": "表情包",
 }
 
+// imageRatioLabels maps pixel sizes to their aspect-ratio chip label.
+var imageRatioLabels = map[string]string{
+	"864x1152": "3:4", "1152x864": "4:3", "832x1216": "2:3",
+	"1216x832": "3:2", "720x1280": "9:16", "1280x720": "16:9",
+}
+
 // imageUserDisplay renders the persisted user message with a short option tag.
 func imageUserDisplay(prompt, size, style, quality string, count int, isEdit bool) string {
 	var tags []string
 	if isEdit {
 		tags = append(tags, "图生图")
 	}
-	if s := size; s != "" && s != "1024x1024" {
-		tags = append(tags, s)
+	if l := imageRatioLabels[strings.TrimSpace(size)]; l != "" {
+		tags = append(tags, l)
+	} else if size != "" && size != "1024x1024" {
+		tags = append(tags, size)
 	}
 	if l := imageStyleLabels[strings.ToLower(strings.TrimSpace(style))]; l != "" {
 		tags = append(tags, l)

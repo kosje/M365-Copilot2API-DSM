@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -63,10 +64,51 @@ func parseContent(c any) (string, []chathub.Attachment) {
 				files = append(files, chathub.Attachment{Type: "image", URL: u, MimeType: "image/*"})
 			}
 		case "input_file", "file":
-			u := stringValue(m, "file_data", "file_url", "url", "source", "file_id")
-			if u != "" || stringValue(m, "filename", "name") != "" {
-				files = append(files, chathub.Attachment{Type: "file", URL: u, Name: stringValue(m, "filename", "name"), MimeType: stringValue(m, "mime_type", "mimeType", "content_type")})
+			// Document attachments (CSV/XLSX/PDF/text): upstream is a chat
+			// service with no native file upload, so we extract the text
+			// server-side and inline it into the prompt. Supported shapes:
+			//   {type:"file", file:{name, mime, data:"data:...;base64,..."}}
+			//   {type:"input_file", file_data:"data:...;base64,...", filename:"x.csv"}
+			//   {type:"file", url:"data:...;base64,...", name:"x.csv"}
+			name := stringValue(m, "filename", "name")
+			mime := stringValue(m, "mime_type", "mimeType", "content_type")
+			dataURI := ""
+			if raw, ok := m["file"].(map[string]any); ok {
+				if n, ok := raw["name"].(string); ok && n != "" && name == "" {
+					name = n
+				}
+				if mm, ok := raw["mime"].(string); ok && mm != "" && mime == "" {
+					mime = mm
+				}
+				if d, ok := raw["data"].(string); ok {
+					dataURI = d
+				}
+				if d, ok := raw["url"].(string); ok && dataURI == "" {
+					dataURI = d
+				}
 			}
+			if dataURI == "" {
+				dataURI = stringValue(m, "file_data", "data", "file_url", "url")
+			}
+			if dataURI == "" && name == "" {
+				// no usable payload — keep legacy behaviour for file_id refs
+				if u := stringValue(m, "file_id"); u != "" {
+					files = append(files, chathub.Attachment{Type: "file", URL: u, Name: name, MimeType: mime})
+				}
+				break
+			}
+			text.WriteString("\n\n")
+			if payload, ok := decodeDataURI(dataURI); ok {
+				extracted, err := extractDocText(name, mime, payload)
+				if err != nil {
+					fmt.Fprintf(&text, "[附件文件 %s 无法读取：%v]", name, err)
+				} else {
+					text.WriteString(extracted)
+				}
+			} else {
+				fmt.Fprintf(&text, "[附件文件 %s 的数据格式不受支持（仅支持 data URI）]", name)
+			}
+			text.WriteString("\n\n")
 		case "input_audio", "audio":
 			u := stringValue(m, "data", "audio_url", "url", "source")
 			if u != "" {
@@ -84,4 +126,29 @@ func stringValue(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// decodeDataURI decodes "data:[mime];base64,XXXX" payloads. Plain base64
+// (no prefix) is accepted as well.
+func decodeDataURI(s string) ([]byte, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, false
+	}
+	const prefix = "base64,"
+	if i := strings.Index(s, prefix); i >= 0 {
+		s = s[i+len(prefix):]
+	} else if strings.HasPrefix(s, "http") {
+		return nil, false
+	}
+	// Strip data URI header when it survived the prefix cut (e.g. plain base64
+	// input never had one; data:...;base64, was handled above).
+	if i := strings.Index(s, ","); i >= 0 && strings.HasPrefix(s, "data:") {
+		s = s[i+1:]
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
+	if err != nil || len(dec) == 0 {
+		return nil, false
+	}
+	return dec, true
 }

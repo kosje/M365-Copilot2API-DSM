@@ -43,7 +43,7 @@ func TestNormalizeImageSize(t *testing.T) {
 
 func TestImageUserDisplay(t *testing.T) {
 	got := imageUserDisplay("a cat", "864x1152", "anime", "hd", 2, true)
-	for _, want := range []string{"a cat", "图生图", "864x1152", "动漫", "高清", "x2"} {
+	for _, want := range []string{"a cat", "图生图", "3:4", "动漫", "高清", "x2"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("display %q missing %q", got, want)
 		}

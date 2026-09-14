@@ -509,6 +509,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/chatui/chat", s.chatProxy)
 	m.HandleFunc("/api/chatui/models", s.chatModels)
 	m.HandleFunc("/api/chatui/images", s.chatImageGen)
+	m.HandleFunc("/api/chatui/report", s.chatReport)
 	m.HandleFunc("/api/chatui/file/", s.chatFile)
 	m.HandleFunc("/api/chatui/admin", s.chatAdmin)
 	m.HandleFunc("/api/chatui/admin/convs", s.chatAdminConvs)
