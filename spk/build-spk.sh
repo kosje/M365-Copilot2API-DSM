@@ -77,6 +77,26 @@ for f in start-stop-status postinst preuninst preupgrade postupgrade; do
 done
 echo "  ✓ 脚本语法检查通过"
 
+# INFO 的 version 必须高于已发布的最新版，否则套件中心会拒绝升级安装。
+# 这道检查是因为真出过一次：版本号只在本地临时目录里递增，仓库里的 INFO
+# 一直停在旧版本，照着仓库构建出来的包比线上还旧。
+FEED="$ROOT/.gh-pages/index.json"
+if [ -f "$FEED" ] && command -v jq >/dev/null 2>&1; then
+    PUBLISHED="$(jq -r '.packages[0].version // empty' "$FEED")"
+    INFOVER="$(grep -m1 '^version=' "$SPK/INFO" | cut -d'"' -f2)"
+    if [ -n "$PUBLISHED" ]; then
+        newest="$(printf '%s\n%s\n' "$PUBLISHED" "$INFOVER" | sort -V | tail -1)"
+        if [ "$INFOVER" = "$PUBLISHED" ]; then
+            echo "  ! INFO version ($INFOVER) 与已发布版本相同 —— 套件中心不会视为升级"
+        elif [ "$newest" != "$INFOVER" ]; then
+            echo "✗ INFO version ($INFOVER) 低于已发布的 $PUBLISHED，套件中心会拒绝安装"
+            exit 1
+        else
+            echo "  ✓ INFO version $INFOVER 高于已发布的 $PUBLISHED"
+        fi
+    fi
+fi
+
 rm -rf "$BUILD"
 echo
 echo "==> 完成: $OUT"
