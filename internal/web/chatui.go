@@ -828,13 +828,38 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	s.openaiChat(tw, upReq)
 	tw.flushRemaining()
 
-	// extract assistant text and persist
+	// extract assistant text (and any upstream-generated images) and persist
 	if tw.code == http.StatusOK {
 		text := extractUpstreamText(tw.buf.Bytes(), in.Stream)
-		if text != "" {
+		var gen []string
+		var failed []string
+		for _, iu := range extractUpstreamImages(tw.buf.Bytes(), in.Stream) {
+			b64, ct, err := downloadImageAsBase64(iu)
+			if err != nil {
+				log.Printf("[chatui] upstream chat image download failed: %v", err)
+				failed = append(failed, iu)
+				continue
+			}
+			rawData, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil || len(rawData) == 0 {
+				failed = append(failed, iu)
+				continue
+			}
+			if id, err := s.chatUI.saveImage(rawData, ct); err == nil {
+				gen = append(gen, id)
+			} else {
+				failed = append(failed, iu)
+			}
+		}
+		// Images the server could not download (CDN unreachable) fall back to
+		// inline markdown URLs, which the web chat renders as <img>.
+		for _, iu := range failed {
+			text += "\\n\\n![](" + iu + ")"
+		}
+		if text != "" || len(gen) > 0 {
 			s.chatUI.mu.Lock()
 			if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Model: model, Time: time.Now()})
+				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Gen: gen, Model: model, Time: time.Now()})
 				c.UpdatedAt = time.Now()
 				s.chatUI.saveConv(c)
 			}
@@ -889,6 +914,39 @@ func (s *Server) persistChatUserMessage(m map[string]any) (string, []string) {
 
 // extractUpstreamText pulls the assistant text out of an OpenAI response
 // (streaming SSE or plain JSON).
+// extractUpstreamImages pulls generated-image URLs out of an openaiChat
+// response buffer. Stream mode carries them in the terminal chunk ("images"
+// top-level field); non-stream JSON exposes the same field.
+func extractUpstreamImages(b []byte, stream bool) []string {
+	var urls []string
+	if stream {
+		for _, line := range strings.Split(string(b), "\\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			p := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if p == "" || p == "[DONE]" {
+				continue
+			}
+			var chunk struct {
+				Images []string `json:"images"`
+			}
+			if json.Unmarshal([]byte(p), &chunk) == nil && len(chunk.Images) > 0 {
+				urls = append(urls, chunk.Images...)
+			}
+		}
+	} else {
+		var out struct {
+			Images []string `json:"images"`
+		}
+		if json.Unmarshal(b, &out) == nil {
+			urls = out.Images
+		}
+	}
+	return urls
+}
+
 func extractUpstreamText(b []byte, stream bool) string {
 	if len(b) == 0 {
 		return ""

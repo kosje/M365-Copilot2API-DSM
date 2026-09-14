@@ -2554,6 +2554,12 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		if len(res.Scores) > 0 {
 			finishChunk["x_m365_scores"] = res.Scores
 		}
+		// Chat UI: upstream may generate images during a normal chat turn.
+		// Surface their URLs in the terminal chunk so the web chat can render
+		// them (the streaming deltas never carry image payloads).
+		if len(res.Images) > 0 {
+			finishChunk["images"] = res.Images
+		}
 		_ = sw.data(mustJSON(finishChunk))
 		_ = sw.data("[DONE]")
 		if res.Timestamps.RequestSent != "" {

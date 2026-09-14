@@ -486,7 +486,9 @@ function inline(s){
   h=h.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
   h=h.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g,'$1<i>$2</i>');
   h=h.replace(/~~([^~]+)~~/g,'<s>$1</s>');
+  h=h.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|data:image\/[^\s)]+)\)/g,'<img class="att" src="$2" alt="$1" loading="lazy" onclick="zoom(this.src)">');
   h=h.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+
   h=h.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return h;
 }
@@ -868,6 +870,7 @@ async function streamChat(opts){
   const body=renderMsg({role:'assistant',content:''},true);
   jumpBottom(true);
   let acc='';
+  let streamImages=[];
   const t0=Date.now();
   const paint=()=>{
     body.innerHTML=mdRender(acc);
@@ -908,8 +911,14 @@ async function streamChat(opts){
           if(j.error)throw new Error(j.error.message||JSON.stringify(j.error));
           const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;
           if(d){acc+=d;paint();}
+          if(j.images&&j.images.length)streamImages=streamImages.concat(j.images);
         }catch(e){if(e instanceof SyntaxError)continue;throw e;}
       }
+    }
+    if(streamImages.length){
+      if(!acc)acc='🎨 已为你生成图片：';
+      acc+=NL+NL+streamImages.map(u=>'![]('+u+')').join(NL+NL);
+      paint();
     }
     if(!acc){acc='（空回复，请重试）';paint();}
     // client-side conversation state
