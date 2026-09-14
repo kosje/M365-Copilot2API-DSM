@@ -478,6 +478,14 @@ async function openConv(id){
 }
 
 /* ---------- markdown rendering ---------- */
+function fallbackCopy(t){
+  const ta=document.createElement('textarea');ta.value=t||'';ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(e){}document.body.removeChild(ta);
+}
+function safeCopyText(text,okMsg){
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text||'').then(()=>toast(okMsg||'已复制'),()=>{fallbackCopy(text);toast(okMsg||'已复制');});
+  }else{fallbackCopy(text);toast(okMsg||'已复制');}
+}
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function inline(s){
   let h=esc(s);
@@ -595,7 +603,8 @@ $('msgWrap').addEventListener('click',e=>{
   if(!btn)return;
   const cb=btn.closest('.codeblock');if(!cb)return;
   const code=cb.querySelector('code');
-  navigator.clipboard.writeText(code?code.textContent:'').then(()=>{btn.textContent='✓ 已复制';toast('代码已复制');setTimeout(()=>{btn.textContent='⧉ 复制';},1500);},()=>toast('复制失败'));
+  const t=code?code.textContent:'';const done=()=>{btn.textContent='✓ 已复制';toast('代码已复制');setTimeout(()=>{btn.textContent='⧉ 复制';},1500);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,()=>{fallbackCopy(t);done();});}else{fallbackCopy(t);done();}
 });
 
 /* ---------- message rendering ---------- */
@@ -611,7 +620,7 @@ function renderMsg(m,streaming){
     addImgs(b,m.images);
     const tools=document.createElement('div');tools.className='tools';
     const cp=document.createElement('button');cp.textContent='⧉ 复制';
-    cp.onclick=()=>{navigator.clipboard.writeText(m.content||'').then(()=>toast('已复制'),()=>toast('复制失败'));};
+    cp.onclick=()=>{safeCopyText(m.content||'','已复制');};
     const ed=document.createElement('button');ed.className='act-edit';ed.textContent='✏️ 编辑重发';
     ed.onclick=editLastUser;
     tools.append(cp,ed);
@@ -624,7 +633,7 @@ function renderMsg(m,streaming){
     if(!streaming){
       const tools=document.createElement('div');tools.className='tools';
       const cp=document.createElement('button');cp.textContent='⧉ 复制';
-      cp.onclick=()=>{navigator.clipboard.writeText(m.content||'').then(()=>toast('已复制'),()=>toast('复制失败'));};
+      cp.onclick=()=>{safeCopyText(m.content||'','已复制');};
       const rg=document.createElement('button');rg.className='act-regen';rg.textContent='🔄 重新生成';
       rg.onclick=(m.gen&&m.gen.length)?imgRegenLast:regenLast;
       const qt=document.createElement('button');qt.textContent='❝ 引用';
@@ -942,7 +951,7 @@ function renderFinalTools(body,acc,secs){
   if(tools)tools.remove();
   const t=document.createElement('div');t.className='tools';
   const cp=document.createElement('button');cp.textContent='⧉ 复制';
-  cp.onclick=()=>{navigator.clipboard.writeText(acc).then(()=>toast('已复制'),()=>toast('复制失败'));};
+  cp.onclick=()=>{safeCopyText(acc,'已复制');};
   const rg=document.createElement('button');rg.className='act-regen';rg.textContent='🔄 重新生成';
   rg.onclick=regenLast;
   const qt=document.createElement('button');qt.textContent='❝ 引用';

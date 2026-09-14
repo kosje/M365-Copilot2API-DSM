@@ -1145,7 +1145,7 @@ function buildCurl(keyPrefix){
   return `curl ${base}/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${keyPrefix}..." \\\n  -d '{"model":"auto","messages":[{"role":"user","content":"Say hello in one sentence."}]}'`;
 }
 async function copyCurl(){
-  try{await navigator.clipboard.writeText($('onbCurl').textContent.trim());showNotice('curl 已复制','success');}catch(e){}
+  safeCopyText($('onbCurl').textContent.trim(),'curl 已复制');
 }
 async function loadOnboarding(){
   let acc=0,key=0,prefix='sk-';
@@ -1972,7 +1972,7 @@ function renderUkeTabs(){
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function ukeFile(path,content){
   return `<div class="uke-file">
-    <div class="uke-file-head"><code>${esc(path)}</code><button class="btn btn-sm" onclick="navigator.clipboard.writeText(this.closest('.uke-file').querySelector('pre').textContent.trim());showNotice('已复制','success')">Copy</button></div>
+    <div class="uke-file-head"><code>${esc(path)}</code><button class="btn btn-sm" onclick="safeCopyText(this.closest('.uke-file').querySelector('pre').textContent.trim(),'已复制')">Copy</button></div>
     <pre>${esc(content)}</pre>
   </div>`;
 }
@@ -2072,7 +2072,7 @@ Model ID: auto
 async function copyUseKey(){
   const v=$('useKeyVal').value;
   if(!v){showNotice('完整密钥不可用','error');return;}
-  try{await navigator.clipboard.writeText(v);showNotice('已复制','success');}catch(e){}
+  safeCopyText(v,'已复制');
 }
 
 async function loadConversations(){

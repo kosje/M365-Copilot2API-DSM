@@ -854,7 +854,7 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 		// Images the server could not download (CDN unreachable) fall back to
 		// inline markdown URLs, which the web chat renders as <img>.
 		for _, iu := range failed {
-			text += "\\n\\n![](" + iu + ")"
+			text += "\n\n![](" + iu + ")\n\n[⬇ 图片原地址（若上图未显示，点此自行下载）](" + iu + ")"
 		}
 		if text != "" || len(gen) > 0 {
 			s.chatUI.mu.Lock()
@@ -1138,7 +1138,11 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 				jsonOut(w, map[string]any{"status": "ok", "conversationId": convID, "warning": "download_failed", "urls": urls})
 				return
 			}
-			results = append(results, genResult{err: fmt.Sprintf("第 %d 张下载失败", i+1)})
+			if u := out.Data[0].URL; u != "" {
+				results = append(results, genResult{err: fmt.Sprintf("第 %d 张下载失败，可点击原地址自行下载：%s", i+1, u)})
+			} else {
+				results = append(results, genResult{err: fmt.Sprintf("第 %d 张下载失败", i+1)})
+			}
 			continue
 		}
 		if out.Data[0].B64 == "" {
