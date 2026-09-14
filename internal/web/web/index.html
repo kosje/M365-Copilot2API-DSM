@@ -504,26 +504,17 @@ if (response.output_text) {
           <div class="card-head"><span class="card-title">Add account</span></div>
           <div class="card-body">
             <div class="tabs" style="display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
-              <button class="btn btn-sm active" id="tabAuto" onclick="switchAuthTab('auto')" style="flex:1">自动回调</button>
               <button class="btn btn-sm" id="tabManual" onclick="switchAuthTab('manual')" style="flex:1">手动粘贴</button>
-              <button class="btn btn-sm" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录</button>
-            </div>
-
-            <div id="authAuto">
-              <p class="page-sub" style="margin:0 0 12px">登录后 Microsoft 直接把授权码回传本服务，<b>无需复制地址栏</b>。弹出页若报「重定向 URI」错误，需要把下面地址加到 Microsoft Entra 应用注册的 Web 重定向 URI 中。</p>
-              <button class="btn primary" onclick="startPKCE()" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> Start authorization</button>
-              <div id="redirectUriBox" class="hidden" style="margin-bottom:12px">
-                <label class="form-label">本次授权使用的回调地址（供 Entra 注册 / 复制）</label>
-                <div class="copy-field">
-                  <input class="form-input" id="redirectUriInput" readonly autocomplete="off">
-                  <button class="btn primary" onclick="copyRedirectUri()" style="min-width:80px">复制</button>
-                </div>
-              </div>
+              <button class="btn btn-sm active" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录</button>
             </div>
 
             <div id="authManual" class="hidden">
-              <p class="page-sub" style="margin:0 0 12px">弹出页使用 Microsoft 原生回调地址，登录后地址栏会显示 <code>https://login.microsoftonline.com/common/oauth2/nativeclient?code=...</code>，复制整段网址粘贴到下方。</p>
-              <button class="btn primary" onclick="startPKCE('manual')" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> Start manual authorization</button>
+              <div class="highlight-box" style="margin-bottom:12px">
+                <div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i> 手动粘贴方式说明</div>
+                <p style="margin:0">适合在浏览器拦截弹出窗口、或无法使用设备码时使用。登录后 Microsoft 会跳转到一个空白页面，<b>地址栏里已经带了授权码</b>，把它整段复制回来即可。</p>
+              </div>
+              <p class="page-sub" style="margin:0 0 12px"><b>操作步骤：</b>① 点击下方「开始手动授权」→ ② 在弹出页登录 Microsoft 账号 → ③ 页面变空白后，<b>复制浏览器地址栏里的完整网址</b>（形如 <code>https://login.microsoftonline.com/common/oauth2/nativeclient?code=M.C5...&state=...</code>）→ ④ 粘贴到下方输入框，点「确认添加」。</p>
+              <button class="btn primary" onclick="startPKCE('manual')" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> 开始手动授权</button>
               <div id="callbackManual" style="margin-bottom:12px">
                 <label class="form-label">回调地址</label>
                 <div class="copy-field">
@@ -533,9 +524,13 @@ if (response.output_text) {
               </div>
             </div>
 
-            <div id="authDevice" class="hidden">
-              <p class="page-sub" style="margin:0 0 12px">无需在 Entra 注册任何回调地址。点击开始后页面会显示一段用户代码和登录网址，复制代码到浏览器打开网址并登录，本服务会自动轮询完成授权。</p>
-              <button class="btn primary" onclick="startDeviceCode()" style="width:100%;margin-bottom:12px;"><i data-lucide="smartphone" style="width:15px;height:15px"></i> Start device-code login</button>
+            <div id="authDevice">
+              <div class="highlight-box success" style="margin-bottom:12px">
+                <div class="highlight-box-title"><i data-lucide="check-circle" style="width:14px;height:14px"></i> 推荐：设备码登录（无需配置）</div>
+                <p style="margin:0"><b>这是最简单的方式</b>，不需要在 Microsoft 后台做任何设置，也不会遇到「重定向地址」报错。</p>
+              </div>
+              <p class="page-sub" style="margin:0 0 12px"><b>操作步骤：</b>① 点击下方「开始设备码登录」→ ② 页面会显示一组<b>用户代码</b>和<b>登录网址</b> → ③ 点击「打开」或复制网址到任意浏览器，登录 Microsoft 账号后<b>粘贴用户代码</b>并确认 → ④ 回到本页面，系统会<b>自动等待并刷新</b>，登录成功后账号自动加入，无需再复制任何内容。</p>
+              <button class="btn primary" onclick="startDeviceCode()" style="width:100%;margin-bottom:12px;"><i data-lucide="smartphone" style="width:15px;height:15px"></i> 开始设备码登录</button>
               <div id="deviceCodeBox" class="hidden" style="margin-bottom:12px">
                 <div class="highlight-box" style="margin-bottom:12px">
                   <div class="highlight-box-title"><i data-lucide="copy" style="width:14px;height:14px"></i> 在浏览器中完成登录</div>
@@ -590,12 +585,12 @@ if (response.output_text) {
       <!-- API Keys -->
       <section id="page-apikeys" style="display:none">
         <div class="page-head">
-          <div><h2 class="page-title">API Keys</h2><p class="page-sub">Manage access keys</p></div>
-          <button class="btn primary" onclick="openKeyModal()">Create key</button>
+          <div><h2 class="page-title">API Keys</h2><p class="page-sub">管理访问密钥</p></div>
+          <button class="btn primary" onclick="openKeyModal()">创建 Key</button>
         </div>
         <div class="card">
-          <div class="card-head"><span class="card-title">Key list</span><span style="font-size:11px;color:var(--muted)">Full key is displayed for personal use; click Copy to copy it</span></div>
-          <table class="table"><thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Status</th><th>Last used</th><th>Quota</th><th style="text-align:right">Actions</th></tr></thead><tbody id="keyRows"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody></table>
+          <div class="card-head"><span class="card-title">密钥列表</span><span style="font-size:11px;color:var(--muted)">个人自用，完整密钥直接显示，点击「复制」即可复制</span></div>
+          <table class="table"><thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>状态</th><th>最后使用</th><th>额度</th><th style="text-align:right">操作</th></tr></thead><tbody id="keyRows"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody></table>
         </div>
       </section>
 
@@ -708,21 +703,21 @@ if (response.output_text) {
 <!-- Key Modal -->
 <div class="modal-overlay" id="keyModal">
   <div class="modal">
-    <h3>Create API key</h3>
-    <p class="subtitle">此密钥用于认证 OpenAI / Anthropic 兼容接口的请求。完整密钥仅显示一次——请立即复制保存。创建后可在密钥列表中点击"使用密钥"查看客户端配置示例。</p>
+    <h3>创建 API Key</h3>
+    <p class="subtitle">此密钥用于认证 OpenAI / Anthropic 兼容接口的请求。创建后可在密钥列表中点击「复制」或「使用」查看客户端配置示例。</p>
     <form onsubmit="createKey(event)">
       <div class="form-group">
-        <label class="form-label">Name</label>
+        <label class="form-label">名称</label>
         <input class="form-input" id="keyName" value="default" autofocus>
-        <div class="form-hint">用于标识此密钥的标签（如"my-laptop"、"claude-code"）</div>
+        <div class="form-hint">用于标识此密钥的标签（如"我的电脑"、"claude-code"）</div>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn" onclick="closeKeyModal()">Cancel</button>
-        <button type="submit" class="btn primary">Create</button>
+        <button type="button" class="btn" onclick="closeKeyModal()">取消</button>
+        <button type="submit" class="btn primary">创建</button>
       </div>
     </form>
     <div id="keyResult" style="display:none">
-      <div class="highlight-box"><b>Copy and save this key now</b><div class="copy-field"><input class="form-input" id="keyValue" readonly><button class="btn-sm btn" onclick="copyKey()">Copy</button></div></div>
+      <div class="highlight-box"><b>密钥已创建，请复制保存</b><div class="copy-field"><input class="form-input" id="keyValue" readonly><button class="btn-sm btn" onclick="copyKey()">复制</button></div></div>
     </div>
   </div>
 </div>
@@ -730,23 +725,23 @@ if (response.output_text) {
 <!-- Edit Key Modal -->
 <div class="modal-overlay" id="editKeyModal">
   <div class="modal">
-    <h3>Edit API key</h3>
-    <p class="subtitle">Change the key name and quotas</p>
+    <h3>编辑 API Key</h3>
+    <p class="subtitle">修改密钥名称与额度限制</p>
     <div class="form-group">
-      <label class="form-label">Name</label>
+      <label class="form-label">名称</label>
       <input class="form-input" id="editKeyName">
     </div>
     <div class="form-group">
-      <label class="form-label">Daily quota (requests / day, 0 = unlimited)</label>
+      <label class="form-label">每日额度（请求数 / 天，0 = 不限）</label>
       <input class="form-input" id="editKeyDaily" type="number" min="0" value="0">
     </div>
     <div class="form-group">
-      <label class="form-label">Total quota (requests all-time, 0 = unlimited)</label>
+      <label class="form-label">总额度（累计请求数，0 = 不限）</label>
       <input class="form-input" id="editKeyTotal" type="number" min="0" value="0">
     </div>
     <div class="modal-actions">
-      <button class="btn" onclick="closeEditKeyModal()">Cancel</button>
-      <button class="btn primary" onclick="saveEditKey()">Save</button>
+      <button class="btn" onclick="closeEditKeyModal()">取消</button>
+      <button class="btn primary" onclick="saveEditKey()">保存</button>
     </div>
   </div>
 </div>
@@ -1385,25 +1380,30 @@ function cmpVer(a,b){
 async function checkUpdate(){
   const el=document.getElementById('verFoot');
   if(!el)return;
+  const ghLink=()=>{const a=document.createElement('a');a.href='https://github.com/my788525/M365-Copilot2API-FNOS';a.target='_blank';a.rel='noopener';a.textContent='GitHub';a.title='在 GitHub 查看项目仓库';a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';return a;};
   let cur='';
   try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
-  el.textContent=cur?('v'+cur):'';
+  el.textContent='';
+  if(cur&&cur!=='dev'){
+    const vt=document.createElement('span');vt.textContent='v'+cur;el.appendChild(vt);
+    el.appendChild(document.createTextNode(' · '));el.appendChild(ghLink());
+  }
   if(!cur||cur==='dev')return;
   try{
     const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
     const latest=String(rel.tag_name||'').replace(/^v/,'');
     if(latest&&cmpVer(latest,cur)>0){
-      el.innerHTML='';
+      el.textContent='';
       const a=document.createElement('a');
       a.href=(rel.html_url)||('https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest);
       a.target='_blank';a.rel='noopener';
-      a.textContent='v'+cur+' → v'+latest+' 可更新，点击下载';
-      a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';
+      a.textContent='v'+cur+' → v'+latest+' 可更新';
       a.title='打开 GitHub Release 下载最新 fpk';
-      el.textContent='';
+      a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';
       el.appendChild(a);
+      el.appendChild(document.createTextNode(' · '));el.appendChild(ghLink());
     }
-  }catch(e){/* GitHub 不可达：仅显示当前版本 */}
+  }catch(e){/* GitHub 不可达：仅显示当前版本 + GitHub 链接 */}
 }
 document.addEventListener('DOMContentLoaded', checkUpdate);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') loadAccounts(); });
@@ -1433,13 +1433,13 @@ let lastRedirectUri='';
 let lastPKCEState='';
 
 function switchAuthTab(tab){
-  ['auto','manual','device'].forEach(t=>{
-    const pane=$(t==='auto'?'authAuto':t==='manual'?'authManual':'authDevice');
+  ['manual','device'].forEach(t=>{
+    const pane=$(t==='manual'?'authManual':'authDevice');
     const btn=$('tab'+t[0].toUpperCase()+t.slice(1));
     if(pane)pane.classList.add('hidden');
     if(btn)btn.classList.remove('active');
   });
-  const pane=$(tab==='auto'?'authAuto':tab==='manual'?'authManual':'authDevice');
+  const pane=$(tab==='manual'?'authManual':'authDevice');
   const btn=$('tab'+tab[0].toUpperCase()+tab.slice(1));
   if(pane)pane.classList.remove('hidden');
   if(btn)btn.classList.add('active');
@@ -1548,7 +1548,7 @@ async function loadKeys(){
     k.forEach(x=>{
       const raw=x.raw||x.prefix||'';
       const tr=document.createElement('tr');
-      tr.innerHTML=`<td><b></b></td><td><code class="key-raw" title="${esc(raw)}">${esc(raw)}</code></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'Disabled':'Active'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td class="key-quota" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="copy">Copy</button><button class="btn-sm btn" data-key-action="use">Use</button><button class="btn-sm btn" data-key-action="edit">Edit</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'Enable':'Disable'}</button><button class="btn-sm btn danger" data-key-action="delete">Delete</button></td>`;
+      tr.innerHTML=`<td><b></b></td><td><code class="key-raw" title="${esc(raw)}">${esc(raw)}</code></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'已停用':'正常'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td class="key-quota" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="copy">复制</button><button class="btn-sm btn" data-key-action="use">使用</button><button class="btn-sm btn" data-key-action="edit">编辑</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'启用':'停用'}</button><button class="btn-sm btn danger" data-key-action="delete">删除</button></td>`;
       tr.querySelector('b').textContent=x.name||'';
       tr.querySelector('.key-created').textContent=new Date(x.createdAt).toLocaleString();
       tr.querySelector('.key-last-used').textContent=x.lastUsedAt?new Date(x.lastUsedAt).toLocaleString():'-';
@@ -1583,7 +1583,7 @@ async function saveEditKey(){
   catch(e){showNotice(e.message,'error');}
 }
 async function toggleKey(id,revoked){
-  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id,revoked:!revoked})});showNotice(revoked?'Enabled':'Disabled','success');loadKeys();}
+  try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id,revoked:!revoked})});showNotice(revoked?'已启用':'已停用','success');loadKeys();}
   catch(e){showNotice(e.message,'error');}
 }
 

@@ -204,7 +204,17 @@ async function checkUpdate(){
   if(!el)return;
   let cur='';
   try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
-  el.textContent=cur?('v'+cur):'';
+  el.textContent='';
+  if(cur&&cur!=='dev'){
+    const vt=document.createElement('span');vt.textContent='v'+cur;el.appendChild(vt);
+    el.appendChild(document.createTextNode(' · '));
+  }
+  const gh=document.createElement('a');
+  gh.href='https://github.com/my788525/M365-Copilot2API-FNOS';
+  gh.target='_blank';gh.rel='noopener';
+  gh.textContent='GitHub';
+  gh.title='在 GitHub 查看项目仓库';
+  el.appendChild(gh);
   if(!cur||cur==='dev')return;
   try{
     const rel=await fetch('https://api.github.com/repos/my788525/M365-Copilot2API-FNOS/releases/latest',{headers:{'Accept':'application/vnd.github+json'}}).then(r=>r.json());
@@ -218,7 +228,7 @@ async function checkUpdate(){
       a.title='打开 GitHub Release 下载最新 fpk';
       el.appendChild(a);
     }
-  }catch(e){/* GitHub 不可达：仅显示当前版本 */}
+  }catch(e){/* GitHub 不可达：仅显示当前版本 + GitHub 链接 */}
 }
 
 /* ---------- auth ---------- */
