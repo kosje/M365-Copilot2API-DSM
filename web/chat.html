@@ -208,6 +208,26 @@ input,textarea,select{font:inherit;color:inherit}
   .side.open{transform:none}
   .mob-bar{display:flex}
   #jumpBtn{bottom:150px;right:18px}
+  /* ---- 移动端底部操作栏适配 ---- */
+  html,body{overflow-x:hidden;max-width:100vw}
+  .msgs{padding-top:14px}
+  .msg-wrap{padding:0 12px}
+  .composer{padding:0 10px}
+  .composer-wrap{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .input-box{padding:10px 12px 8px;border-radius:16px}
+  /* 16px 及以上字号避免 iOS 聚焦时自动放大页面 */
+  #input,#sysInput{font-size:16px}
+  .input-foot{flex-wrap:wrap;gap:6px}
+  .mode-btn{flex-shrink:0;white-space:nowrap;padding:6px 9px;font-size:12px;gap:4px}
+  .mode-btn.pic{padding:6px 8px}
+  #modelSel{flex:1 1 110px;min-width:0;max-width:none}
+  .send{flex-shrink:0;width:36px;height:36px}
+  /* 欢迎页卡片两列铺满、不溢出 */
+  .welcome{padding-top:5vh}
+  .welcome .tips{gap:8px;padding:0 12px}
+  .welcome .tip{min-width:0;width:calc(50% - 4px);padding:11px 12px;font-size:12.5px}
+  /* 固定角标在手机上遮挡输入区，隐藏 */
+  #verFoot{display:none}
 }
 </style>
 </head>
@@ -935,6 +955,13 @@ $('fileInput').addEventListener('change',e=>{
   const files=e.target.files;
   if(files&&files.length)addFiles(files);
 });
+// 手机端缩短输入框占位文案（快捷键提示在触屏上无意义且容易溢出）
+function fitPlaceholder(){
+  const mob=window.innerWidth<=720;
+  $('input').placeholder=mob?'给 M365 发送消息…':'给 M365 发送消息（Enter 发送 / Shift+Enter 换行）';
+}
+window.addEventListener('resize',fitPlaceholder);
+fitPlaceholder();
 
 async function streamChat(opts){
   opts=opts||{};
