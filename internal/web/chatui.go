@@ -846,6 +846,9 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	upReq := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(upBody))
 	upReq.Header.Set("Content-Type", "application/json")
+	// Tag the request so openaiChat can record the M365 conversation context
+	// needed to later re-emit and proxy any generated files.
+	upReq.Header.Set("X-M365-Internal-Conv", convID)
 	if u.APIKey != "" {
 		upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
 	}
@@ -856,6 +859,9 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	// extract assistant text (and any upstream-generated images) and persist
 	if tw.code == http.StatusOK {
 		text := extractUpstreamText(tw.buf.Bytes(), in.Stream)
+		// Rewrite unreachable Microsoft asyncgw file links to local proxy URLs
+		// so the user can actually download generated PDF/Word/Excel/PPTX/ZIP.
+		text = s.rewriteAsyncGWToProxy(text, convID)
 		var gen []string
 		var failed []string
 		for _, iu := range extractUpstreamImages(tw.buf.Bytes(), in.Stream) {
