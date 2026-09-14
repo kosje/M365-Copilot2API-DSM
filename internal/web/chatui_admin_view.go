@@ -156,7 +156,9 @@ func (s *Server) chatAdminImages(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		id := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		// id = full file name (extension included): openImage derives the content
+		// type from the extension and refs in conversations store full names too.
+		id := e.Name()
 		item := imgItem{ID: id, URL: "/api/chatui/admin/image?id=" + id, Size: info.Size(), ModAt: info.ModTime()}
 		if rs, ok := refs[id]; ok {
 			item.Refs = rs
@@ -257,15 +259,12 @@ func (s *Server) chatAdminDeleteImage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// delete the file
+	// delete the file (id is the full file name, extension included)
 	removed := false
-	for _, ext := range []string{".png", ".jpg", ".jpeg", ".webp", ".gif"} {
-		p := filepath.Join(s.chatUI.Dir, "images", id+ext)
-		if _, err := os.Stat(p); err == nil {
-			if os.Remove(p) == nil {
-				removed = true
-			}
-			break
+	p := filepath.Join(s.chatUI.Dir, "images", id)
+	if _, err := os.Stat(p); err == nil {
+		if os.Remove(p) == nil {
+			removed = true
 		}
 	}
 	s.chatUI.mu.Unlock()

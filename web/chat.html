@@ -469,6 +469,8 @@ async function openConv(id){
     const c=await api('/api/chatui/conv?id='+encodeURIComponent(id));
     $('mobTitle').textContent=c.title||'对话';
     const ms=c.messages||[];
+    // backend persists generated image refs under "gen_images"; normalize for renderMsg/export
+    for(const m of ms){if(!m.gen&&m.gen_images)m.gen=m.gen_images;}
     curMsgs=ms;
     if(!ms.length)renderWelcome();
     for(const m of ms)renderMsg(m,false);
