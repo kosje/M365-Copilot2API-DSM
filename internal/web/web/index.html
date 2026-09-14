@@ -1416,7 +1416,7 @@ function cmpVer(a,b){
 async function checkUpdate(){
   const el=document.getElementById('verFoot');
   if(!el)return;
-  const ghLink=()=>{const a=document.createElement('a');a.href='https://github.com/my788525/M365-Copilot2API-FNOS';a.target='_blank';a.rel='noopener';a.textContent='GitHub';a.title='在 GitHub 查看项目仓库';a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';return a;};
+  const ghLink=()=>{const a=document.createElement('a');a.href='https://github.com/kosje/M365-Copilot2API-DSM';a.target='_blank';a.rel='noopener';a.textContent='GitHub';a.title='在 GitHub 查看项目仓库';a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';return a;};
   let cur='';
   try{const v=await fetch('/api/version').then(r=>r.json());cur=String(v.version||'').replace(/^v/,'');}catch(e){}
   el.textContent='';
@@ -1434,18 +1434,28 @@ async function checkUpdate(){
     if(u.updateAvailable&&latest&&cmpVer(latest,cur)>0){
       el.textContent='';
       const a=document.createElement('a');
-      a.href='https://github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v'+latest;
+      a.href='https://github.com/kosje/M365-Copilot2API-DSM/releases/tag/v'+latest;
       a.target='_blank';a.rel='noopener';
       a.textContent='v'+cur+' → v'+latest+' 可更新';
       a.title='查看 GitHub Release 更新说明';
       a.style.color='var(--ok,#22c55e)';a.style.textDecoration='underline';a.style.cursor='pointer';
       el.appendChild(a);
       el.appendChild(document.createTextNode(' · '));
-      const btn=document.createElement('button');
-      btn.className='btn-sm btn primary';btn.textContent='⚡ 一键更新';
-      btn.title='服务端下载官方二进制并原地重启（数据与端口保留）';
-      btn.onclick=()=>applySelfUpdate(latest,btn);
-      el.appendChild(btn);
+      // Only offer the one-click button when the server actually accepts it.
+      // On the DSM build applying is disabled (upgrades go through Package
+      // Center), and rendering the button anyway just yields a 403 on click.
+      if(u.applyEnabled!==false){
+        const btn=document.createElement('button');
+        btn.className='btn-sm btn primary';btn.textContent='⚡ 一键更新';
+        btn.title='服务端下载官方二进制并原地重启（数据与端口保留）';
+        btn.onclick=()=>applySelfUpdate(latest,btn);
+        el.appendChild(btn);
+      }else{
+        const hint=document.createElement('span');
+        hint.textContent=u.upgradeHint||'请在套件中心安装新版 SPK 完成升级';
+        hint.style.color='var(--muted)';
+        el.appendChild(hint);
+      }
       el.appendChild(document.createTextNode(' · '));el.appendChild(ghLink());
     }
   }catch(e){/* 检测失败：仅显示当前版本 + GitHub 链接 */}

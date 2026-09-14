@@ -178,7 +178,17 @@ func semverAtLeast(latest, current string) bool {
 		return out
 	}
 	a, b := num(latest), num(current)
-	for i := 0; i < 3; i++ {
+	// Compare every component, not just the first three. The DSM build carries
+	// a fourth component for packaging-only revisions (1.5.2.1 fixes the
+	// packaging of 1.5.2 without an upstream release); stopping at three made
+	// those compare equal, so the console banner never fired for them. The
+	// frontend's cmpVer already compares all components — this brings the two
+	// into agreement.
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
 		x, y := 0, 0
 		if i < len(a) {
 			x = a[i]
