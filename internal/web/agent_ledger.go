@@ -93,6 +93,8 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 	l := agentLedger{}
 	seenCall := map[string]int{}
 	seenFailure := map[string]int{}
+	sameLimit := loopSameLimit()
+	repeatLimit := loopRepeatLimit()
 	for _, id := range order {
 		e := calls[id]
 		l.ToolRounds++
@@ -102,7 +104,7 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 			l.RepeatedCall = true
 			l.RepetitionSignature = sig
 		}
-		if seenCall[sig] >= 3 {
+		if seenCall[sig] >= sameLimit {
 			l.StuckLoop = true
 		}
 		if e.Result == "" {
@@ -112,11 +114,11 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 			if e.Failed {
 				fs := e.Name + "\x00" + e.Arguments + "\x00" + normalizeFailure(e.Result)
 				seenFailure[fs]++
-				if seenFailure[fs] >= 2 {
+				if seenFailure[fs] >= repeatLimit {
 					l.RepeatedFailure = true
 					l.RepetitionSignature = fs
 				}
-				if seenFailure[fs] >= 3 {
+				if seenFailure[fs] >= repeatLimit {
 					l.StuckLoop = true
 				}
 			}
@@ -194,7 +196,7 @@ func (l agentLedger) CanContinue(maxRounds int) error {
 		return fmt.Errorf("tool round limit reached: %d", maxRounds)
 	}
 	if l.StuckLoop {
-		return fmt.Errorf("stuck tool loop detected: same call repeated 3+ times")
+		return fmt.Errorf("stuck tool loop detected: same call repeated %d+ times or same failure repeated %d+ times", loopSameLimit(), loopRepeatLimit())
 	}
 	if l.RepeatedFailure {
 		return fmt.Errorf("repeated tool failure detected: %s", l.RepetitionSignature)
@@ -215,6 +217,30 @@ func maxToolRounds() int {
 		return n
 	}
 	return 32
+}
+func loopSameLimit() int {
+	if raw, ok := os.LookupEnv("M365_LOOP_SAME_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 3
+	}
+	if n := currentSettings().LoopSameLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 3
+}
+func loopRepeatLimit() int {
+	if raw, ok := os.LookupEnv("M365_LOOP_REPEAT_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 5
+	}
+	if n := currentSettings().LoopRepeatLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 5
 }
 func activeMessages(messages []oaiMsg) []oaiMsg {
 	last := -1

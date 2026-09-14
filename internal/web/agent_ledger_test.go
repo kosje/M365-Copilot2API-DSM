@@ -20,6 +20,12 @@ func TestAgentLedgerDetectsRepeatedFailure(t *testing.T) {
 		{Role: "tool", ToolCallID: "c1", Content: "exit code 1: failed"},
 		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c2", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
 		{Role: "tool", ToolCallID: "c2", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c3", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c3", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c4", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c4", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c5", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c5", Content: "exit code 1: failed"},
 	}
 	l := buildAgentLedger(msgs)
 	if !l.RepeatedFailure {

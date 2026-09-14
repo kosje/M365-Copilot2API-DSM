@@ -317,6 +317,7 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
       <button data-page="proxies" onclick="showPage('proxies')"><i data-lucide="globe" style="width:16px;height:16px;flex-shrink:0"></i><span>Proxy Pool</span></button>
       <button data-page="modeltest" onclick="showPage('modeltest')"><i data-lucide="flask-conical" style="width:16px;height:16px;flex-shrink:0"></i><span>Model Test</span></button>
       <button data-page="settings" onclick="showPage('settings')"><i data-lucide="settings" style="width:16px;height:16px;flex-shrink:0"></i><span>Settings</span></button>
+      <button data-page="advanced" onclick="showPage('advanced')"><i data-lucide="sliders-horizontal" style="width:16px;height:16px;flex-shrink:0"></i><span>Advanced</span></button>
     </nav>
     <div class="sidebar-foot" id="verFoot">…</div>
   </aside>
@@ -697,6 +698,39 @@ if (response.output_text) {
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
         <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label">Quota refresh interval (seconds, 0=off)</label><input class="form-input" id="setQuotaRefresh" type="number" placeholder="300"><p class="form-hint">自动探测并刷新所有账号的 M365 额度（剩余用量）。默认 300 秒；设为 0 关闭定时刷新。账号新增时也会立即刷新一次。</p></div><div class="form-group"><label class="form-label">Token 主动刷新间隔（秒，0=off）</label><input class="form-input" id="setTokenRefresh" type="number" placeholder="21600"><p class="form-hint">Token 即将到期前主动刷新（默认 21600 秒 = 6 小时），避免高峰期集中失效。刷新失败会触发告警通知。</p></div><div class="form-group"><label class="form-label"><input type="checkbox" id="setAutoCompact" style="margin-right:6px">启用 Auto-Compact（上下文自动压缩）</label><p class="form-hint">请求超过上下文预算时，把被挤掉的历史用一次上游调用压缩成摘要并注入回上下文（而不是静默丢弃），适合整站审计等超长任务。响应头 <code>X-M365-Context-Compacted: 1</code> 标识生效。</p></div><div class="form-group"><label class="form-label">Auto-Compact 最小压缩 token 数</label><input class="form-input" id="setCompactMin" type="number" placeholder="4000"><p class="form-hint">被丢弃历史低于该值时直接截断，不消耗一次上游调用做摘要。默认 4000。</p></div><div class="form-group"><label class="form-label">模型别名映射（每行一条：别名=目标模型）</label><textarea class="form-input" id="setAliases" rows="4" placeholder="gpt-4o=gpt-5.6-sol&#10;claude-sonnet-4=gpt-5.6-luna"></textarea><p class="form-hint">客户端写死 gpt-4o / claude-sonnet-4 等模型名时自动映射到已配置的公开模型，无需改客户端。目标必须是「模型管理」里已存在的公开模型。</p></div><div class="form-group"><label class="form-label">告警 Webhook URL（留空 = 关闭）</label><input class="form-input" id="setAlertUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hint/... 或 https://api.day.app/你的key 或 https://api.telegram.org/bot&lt;token&gt;/sendMessage"><p class="form-hint">支持飞书 bot / Bark / Telegram / 通用 JSON。触发事件：账号鉴权失败、Token 刷新失败、密钥配额耗尽、错误率超阈值。同类告警 1 小时内只发一次。</p></div><div class="form-group"><label class="form-label">Telegram Chat ID（仅 Telegram webhook 需要）</label><input class="form-input" id="setAlertChatId" placeholder="-1001234567890"></div><div class="form-group"><label class="form-label">错误率告警阈值（%，0=off）</label><input class="form-input" id="setAlertRate" type="number" min="0" max="100" placeholder="30"><p class="form-hint">最近 60 分钟错误率超过该值（且样本 ≥ 20）时告警。每 10 分钟检查一次。</p></div><div class="form-group"><button class="btn" onclick="testAlertWebhook()">发送测试通知</button></div><div class="form-group"><label class="form-label">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
+
+      <!-- Advanced Parameters -->
+      <section id="page-advanced" style="display:none">
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:8px">Advanced Parameters</h2>
+        <div class="card" style="border-color:#f59e0b;background:rgba(245,158,11,.05)">
+          <div class="card-body" style="padding:12px 16px">
+            <p style="margin:0;color:#b45309;font-size:13px;line-height:1.6"><strong>⚠️ 高级参数。</strong> 下列数值会影响 Agent 调度、上下文预算与并发行为。除特殊说明外，修改后<strong>保存即生效</strong>，无需重启。建议先用默认值跑通，再按实际负载微调；数值越界会被后端校验拒绝（见每项下方范围）。</p>
+          </div>
+        </div>
+        <div class="card"><div class="card-body">
+          <h3 style="font-size:14px;font-weight:700;margin:4px 0 12px;color:#6366f1">Agent 调度</h3>
+          <div class="form-group"><label class="form-label">每轮最大工具调用数 (maxToolCallsPerTurn)</label><input class="form-input" id="advMaxToolCalls" type="number" min="1" max="64" placeholder="32"><p class="form-hint">单个回复轮次内最多允许并行发起的工具调用数量。范围 1-64，<strong>默认 32</strong>。并发仅对只读类工具（read/list/get/…）放开，写类工具（exec/write/edit/…）一律串行，因此该值主要决定「同时读多少源」。调太高可能被上游限流，调太低长任务会变慢。</p></div>
+          <div class="form-group"><label class="form-label">最大工具轮次 (maxToolRounds)</label><input class="form-input" id="advMaxRounds" type="number" min="1" max="512" placeholder="512"><p class="form-hint">一次对话请求内 Agent 循环迭代（工具调用→观察→再决策）的最大轮次。范围 1-512，<strong>默认 512</strong>。这是单条消息的「思考步数」硬上限，到达即停止。复杂多步任务建议保持较大值，简单任务可下调以省额度。</p></div>
+          <div class="form-group"><label class="form-label">同一调用循环检测阈值 (loopSameLimit)</label><input class="form-input" id="advLoopSame" type="number" min="1" max="64" placeholder="3"><p class="form-hint">Agent Ledger 检测到<strong>同一工具调用重复出现</strong>达到该次数即判定「卡死循环」并强制停止。范围 1-64，<strong>默认 3</strong>。原版硬编码为 2/3，易误杀长任务；调高可容忍更多重复步骤，调低能更快止损。</p></div>
+          <div class="form-group"><label class="form-label">同一失败循环检测阈值 (loopRepeatLimit)</label><input class="form-input" id="advLoopRepeat" type="number" min="1" max="64" placeholder="5"><p class="form-hint">同一个错误<strong>连续失败</strong>达到该次数即判定「重复失败死循环」并停止。范围 1-64，<strong>默认 5</strong>。与 loopSameLimit 配合：前者防「原地打转」，后者防「反复撞同一错」。调高更宽容，调低更早放弃。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">上下文与输出预算</h3>
+          <div class="form-group"><label class="form-label">上下文窗口 (contextWindow, tokens)</label><input class="form-input" id="advCtx" type="number" min="1024" placeholder="128000"><p class="form-hint">传给上游模型的总上下文 token 预算（含历史 + 系统提示 + 本轮请求）。范围 ≥1024，<strong>默认 128000</strong>。需与所选上游模型的实际窗口匹配；设得过大而模型不支持会被上游截断。Auto-Compact 在此预算溢出时触发。</p></div>
+          <div class="form-group"><label class="form-label">单次最大输出 token (maxOutputTokens)</label><input class="form-input" id="advMaxOut" type="number" min="1" placeholder="16384"><p class="form-hint">单次回复允许生成的最大 token 数。范围 1 ~ 小于上下文窗口，<strong>默认 16384</strong>。长文/代码生成可上调，但受上游模型上限与上下文窗口共同约束。</p></div>
+          <div class="form-group"><label class="form-label">单对话最大消息数 (maxConversationMessages)</label><input class="form-input" id="advMaxConv" type="number" min="1" max="10000" placeholder="600"><p class="form-hint">单个会话保留的最大消息条数，超出部分从上下文头部丢弃（被丢弃历史若达到 Auto-Compact 阈值会先压缩）。范围 1-10000，<strong>默认 600</strong>。调高保留更长记忆，调低更省 token。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">超时与并发</h3>
+          <div class="form-group"><label class="form-label">图片生成超时 (imageTimeoutSeconds, 秒)</label><input class="form-input" id="advImgTimeout" type="number" min="5" max="3600" placeholder="300"><p class="form-hint">一次画图/图生图请求的最长等待时间。范围 5-3600，<strong>默认 300</strong>。多图、高分辨率或生图队列繁忙时可能需要更久，超时返回 504。</p></div>
+          <div class="form-group"><label class="form-label">限流冷却时间 (rateLimitCooldownSeconds, 秒)</label><input class="form-input" id="advCooldown" type="number" min="5" max="3600" placeholder="30"><p class="form-hint">命中上游限流（429）后，账号进入冷却、暂停派发新请求的最短等待。范围 5-3600，<strong>默认 30</strong>。调高可减少对限流账号的无效重试，调低恢复更快但更易再撞限流。</p></div>
+          <div class="form-group"><label class="form-label">单账号并发上限 (accountConcurrencyLimit)</label><input class="form-input" id="advConcur" type="number" min="1" max="64" placeholder="8"><p class="form-hint">单个 M365 账号同时处理的请求数上限。范围 1-64，<strong>默认 8</strong>。多账号池会按此值放大总吞吐；调太高可能触发账号级限流，调太低浪费账号额度。</p></div>
+
+          <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+            <button class="btn primary" onclick="saveAdvanced()">保存高级参数</button>
+            <button class="btn" onclick="loadAdvanced()">重置为已保存值</button>
+            <span id="advStatus" style="font-size:13px;color:#64748b"></span>
+          </div>
+        </div></div>
+      </section>
     </div>
   </main>
 </div>
@@ -805,7 +839,7 @@ if (response.output_text) {
 
 <script>
 const $=id=>document.getElementById(id);
-const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',chat:'Chat Users',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings'};
+const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',chat:'Chat Users',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings',advanced:'Advanced Parameters'};
 const localeStorageKey='m365_locale';
 const localeSelectionKey='m365_locale_selected';
 const SUPPORTED_LOCALES=['en','zh-CN','zh-TW','ja','ko','es','fr','de','pt-BR','ru','ar'];
@@ -1120,7 +1154,7 @@ function showNotice(msg,type='info'){
 }
 
 function showPage(p){
-  ['dashboard','usage','accounts','apikeys','conversations','chat','proxies','modeltest','settings'].forEach(k=>{
+  ['dashboard','usage','accounts','apikeys','conversations','chat','proxies','modeltest','settings','advanced'].forEach(k=>{
     $('page-'+k).style.display=k===p?'block':'none';
     document.querySelector('[data-page="'+k+'"]')?.classList.toggle('active',k===p);
   });
@@ -1134,6 +1168,7 @@ function showPage(p){
   if(p==='proxies')loadProxies();
   if(p==='modeltest')loadModelTest();
   if(p==='settings')loadSettings();
+  if(p==='advanced')loadAdvanced();
 }
 
 let onboardingHidden=false;
@@ -2368,6 +2403,44 @@ async function saveSettings(){
 async function testAlertWebhook(){
   try{await api('/api/admin/alerts/test',{method:'POST'});showNotice('测试通知已发送，请查收','success');}
   catch(e){showNotice(e.message,'error');}
+}
+
+// Advanced Parameters page: expose all tunable constants for live editing.
+const advFields=[
+  {id:'advMaxToolCalls', key:'maxToolCallsPerTurn', def:32},
+  {id:'advMaxRounds',    key:'maxToolRounds',       def:512},
+  {id:'advLoopSame',     key:'loopSameLimit',       def:3},
+  {id:'advLoopRepeat',   key:'loopRepeatLimit',     def:5},
+  {id:'advCtx',          key:'contextWindow',       def:128000},
+  {id:'advMaxOut',       key:'maxOutputTokens',     def:16384},
+  {id:'advMaxConv',      key:'maxConversationMessages', def:600},
+  {id:'advImgTimeout',   key:'imageTimeoutSeconds', def:300},
+  {id:'advCooldown',     key:'rateLimitCooldownSeconds', def:30},
+  {id:'advConcur',       key:'accountConcurrencyLimit', def:8},
+];
+async function loadAdvanced(){
+  try{
+    const d=await api('/api/admin/settings');
+    const v=d.settings||{};
+    advFields.forEach(f=>{ const el=$(f.id); if(el) el.value = (v[f.key]!=null && v[f.key]!==0) ? v[f.key] : f.def; });
+    $('advStatus').textContent='';
+  }catch(e){showNotice(e.message,'error');}
+}
+async function saveAdvanced(){
+  try{
+    const body={};
+    advFields.forEach(f=>{
+      const el=$(f.id); if(!el) return;
+      const raw=(el.value||'').trim();
+      if(raw==='') return;            // 留空 = 沿用已保存值
+      const n=parseInt(raw,10);
+      if(!Number.isNaN(n)) body[f.key]=n;
+    });
+    if(Object.keys(body).length===0){ $('advStatus').textContent='未改动任何值'; return; }
+    await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
+    $('advStatus').textContent='✓ 已保存';
+    showNotice('高级参数已保存','success');
+  }catch(e){ $('advStatus').textContent='✗ 保存失败'; showNotice(e.message,'error'); }
 }
 
 setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);

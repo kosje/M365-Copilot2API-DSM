@@ -95,6 +95,12 @@ type runtimeSettings struct {
 	// history via an upstream call instead of silently truncating.
 	EnableAutoCompact       bool `json:"enableAutoCompact"`
 	AutoCompactMinTokens    int  `json:"autoCompactMinTokens,omitempty"`    // only compact when dropped history >= this many tokens (default 4000)
+	// Agent loop detection thresholds: how many identical tool calls / identical
+	// failures before the agent ledger flags a stuck loop (hard stop) or a
+	// repeated failure (hard stop). Raised from the old hardcoded 2/3 so that
+	// long multi-step agent tasks are not aborted prematurely.
+	LoopSameLimit   int `json:"loopSameLimit,omitempty"`   // identical calls before StuckLoop stop (default 3)
+	LoopRepeatLimit int `json:"loopRepeatLimit,omitempty"` // identical failures before RepeatedFailure stop (default 5)
 }
 
 type settingsStore struct {
@@ -138,6 +144,8 @@ func defaultRuntimeSettings() runtimeSettings {
 		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
 		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
 		AutoCompactMinTokens:       envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
+		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 3),
+		LoopRepeatLimit:            envInt("M365_LOOP_REPEAT_LIMIT", 5),
 	}
 }
 func settingsPath() string {
@@ -271,6 +279,12 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.AutoCompactMinTokens < 0 || v.AutoCompactMinTokens > 100000 {
 		return fmt.Errorf("自动压缩最小 token 数必须为 0-100000")
+	}
+	if v.LoopSameLimit != 0 && (v.LoopSameLimit < 1 || v.LoopSameLimit > 64) {
+		return fmt.Errorf("同一调用循环上限(loopSameLimit)必须为 1-64")
+	}
+	if v.LoopRepeatLimit != 0 && (v.LoopRepeatLimit < 1 || v.LoopRepeatLimit > 64) {
+		return fmt.Errorf("同一失败循环上限(loopRepeatLimit)必须为 1-64")
 	}
 	if strings.TrimSpace(v.Scenario) == "" {
 		return fmt.Errorf("场景标识不能为空")
