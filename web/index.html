@@ -1547,12 +1547,25 @@ async function loadKeys(){
     if(!k.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=7;td.className='empty';td.textContent='No API keys';tr.append(td);rows.append(tr);return;}
     k.forEach(x=>{
       const raw=x.raw||x.prefix||'';
+      const mask=raw.length>16?(raw.slice(0,8)+'…'+raw.slice(-4)):raw;
       const tr=document.createElement('tr');
-      tr.innerHTML=`<td><b></b></td><td><code class="key-raw" title="${esc(raw)}">${esc(raw)}</code></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'已停用':'正常'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td class="key-quota" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="copy">复制</button><button class="btn-sm btn" data-key-action="use">使用</button><button class="btn-sm btn" data-key-action="edit">编辑</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'启用':'停用'}</button><button class="btn-sm btn danger" data-key-action="delete">删除</button></td>`;
+      tr.innerHTML=`<td><b></b></td><td style="max-width:230px"><code class="key-raw" style="display:inline-block;vertical-align:middle;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(mask)}">${esc(mask)}</code><button class="btn-sm btn" data-key-action="reveal" style="margin-left:6px">查看</button></td><td class="key-created" style="font-size:12px;color:var(--muted)"></td><td><span class="status ${x.revoked?'offline':'online'}"><i></i>${x.revoked?'已停用':'正常'}</span></td><td class="key-last-used" style="font-size:12px;color:var(--muted)"></td><td class="key-quota" style="font-size:12px;color:var(--muted)"></td><td style="text-align:right;white-space:nowrap"><button class="btn-sm btn" data-key-action="copy">复制</button><button class="btn-sm btn" data-key-action="use">使用</button><button class="btn-sm btn" data-key-action="edit">编辑</button><button class="btn-sm btn ${x.revoked?'success':'danger'}" data-key-action="toggle">${x.revoked?'启用':'停用'}</button><button class="btn-sm btn danger" data-key-action="delete">删除</button></td>`;
       tr.querySelector('b').textContent=x.name||'';
       tr.querySelector('.key-created').textContent=new Date(x.createdAt).toLocaleString();
       tr.querySelector('.key-last-used').textContent=x.lastUsedAt?new Date(x.lastUsedAt).toLocaleString():'-';
       tr.querySelector('.key-quota').textContent=`${x.dailyQuota>0?'日 '+x.dailyQuota:'日∞'} · ${x.totalQuota>0?'总 '+x.totalQuota:'总∞'}`;
+      const codeEl=tr.querySelector('.key-raw');
+      const revBtn=tr.querySelector('[data-key-action="reveal"]');
+      let shown=false;
+      revBtn.addEventListener('click',()=>{
+        shown=!shown;
+        codeEl.textContent=shown?raw:mask;
+        codeEl.title=shown?raw:mask;
+        codeEl.style.whiteSpace=shown?'normal':'nowrap';
+        codeEl.style.wordBreak=shown?'break-all':'';
+        codeEl.style.maxWidth=shown?'220px':'170px';
+        revBtn.textContent=shown?'隐藏':'查看';
+      });
       tr.querySelector('[data-key-action="copy"]').addEventListener('click',()=>safeCopyText(raw,'API Key 已复制'));
       tr.querySelector('[data-key-action="use"]').addEventListener('click',()=>openUseKey(x.id));
       tr.querySelector('[data-key-action="edit"]').addEventListener('click',()=>editKey(x.id,x.name,x.dailyQuota||0,x.totalQuota||0));
@@ -1856,17 +1869,6 @@ POST ${base}/v1/chat/completions
 收到后请回复"配置完成"。之后我要求你调用该 API 时，请按上述说明直接发起请求。`;
     html=`<div style="font-size:12.5px;line-height:1.7;color:var(--muted);margin-bottom:10px">适用于 ChatBox、NextChat、LobeChat、沉浸式翻译等国内 AI 工具：将下方提示词整体复制，直接发送到该工具的对话框即可完成适配（提示词内已含真实 API Key 与网关地址）。</div>`;
     html+=ukeFile('提示词 · 复制后发送到 AI 工具对话框',promptText);
-    html+=ukeFile('OpenAI 请求体（POST /v1/chat/completions）',`{
-  "model": "auto",
-  "messages": [
-    {"role": "user", "content": "你好"}
-  ],
-  "stream": true
-}
-
-# 请求头
-Content-Type: application/json
-Authorization: Bearer ${key}`);
   }else if(ukeClient==='curl'){
     html=ukeFile('Terminal',`curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\

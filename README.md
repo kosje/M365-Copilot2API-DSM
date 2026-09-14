@@ -17,9 +17,9 @@ M365 Copilot2API 是一个用 Go 编写的自托管网关，把微软 365 Copilo
 
 项目自带完整 Web 管理控制台，覆盖账号授权（OAuth/PKCE）、API Key 管理、代理池、云端对话管理、用量统计与模型测试，适合个人自部署、自托管使用。
 
-> 🌟 **关于本仓库（增强版 Fork）**
+> 🌟 **关于本仓库（飞牛 fnOS 专版 Fork）**
 >
-> 本仓库是 [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) 的增强分支，保留了上游全部提交历史与署名，在此之上新增了大量面向**飞牛 fnOS 家庭私有部署**与**日常易用性**的功能：
+> 本仓库是 [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) 的增强分支，保留了上游全部提交历史与署名，**定位为飞牛 fnOS 专用发行版：仅提供 fpk 安装包这一种安装方式**（多平台二进制 / Docker 等部署方式请用上游仓库）。在此之上新增了大量面向**飞牛 fnOS 家庭私有部署**与**日常易用性**的功能：
 >
 > - **`/chat` 网页对话端**——仿 DeepSeek 风格的轻量对话页：文字流式对话、上传图片理解、AI 画图、实时额度显示，可直接当轻应用或测试入口使用；
 > - **独立 Chat 账户体系**——管理员在后台创建/管理对话用户，每人可设每日对话与画图额度（0 = 不限）；
@@ -97,195 +97,39 @@ M365 Copilot2API 是一个用 Go 编写的自托管网关，把微软 365 Copilo
 - **会话解析（`internal/web/session_resolver.go`）**：多账号场景下把每个客户端请求稳定解析到固定账号与云端对话，并实现内容键会话复用（见下文原理）。
 - **账号轮询与故障转移**：多账号间轮询均衡流量；账号故障（鉴权失效、连接断开等）自动切换到下一个可用账号重试。
 
-## 快速开始
+## 安装（飞牛 fnOS 专版）
 
-### 一行命令启动
+> 📦 **本仓库为飞牛 fnOS 专版，仅提供 fpk 安装包这一种安装方式**。上游的多平台二进制、systemd / launchd / Docker 等部署指引不再适用；如需在非 fnOS 平台部署，请前往上游仓库 [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API)。
 
-从 GitHub Releases 下载对应平台的二进制并直接运行（自动拉取最新版）。默认监听 `127.0.0.1:4141`，默认管理员密码 `admin123`（首次登录强制修改）。
+### 安装
 
-**Linux**
+1. 在本仓库 [Releases](https://github.com/my788525/M365-Copilot2API-FNOS/releases/latest) 下载最新的 `m365-copilot2api.fpk` 安装包；
+2. 打开飞牛 fnOS 的「应用中心」→「手动安装」，上传该 fpk 文件；
+3. 按安装向导完成安装（向导中可设置监听地址与管理员密码）；
+4. 安装完成后，从应用中心点击应用图标进入管理控制台（默认端口 `8080`）。
 
-```bash
-# x86_64
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-linux-amd64 && chmod +x m365-copilot2api && ./m365-copilot2api
-```
+> 也可通过 fnOS 命令行安装：`sudo appcenter-cli install-fpk /path/to/m365-copilot2api.fpk -e <向导env文件>`。
+> 注意：对已安装的应用重复执行 `install-fpk` 不会升级；CLI 升级需先卸载再安装，**推荐直接在应用中心 UI 上传新版 fpk 完成升级**。
 
-```bash
-# arm64
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-linux-arm64 && chmod +x m365-copilot2api && ./m365-copilot2api
-```
+### 升级
 
-```bash
-# x86_32
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-linux-386 && chmod +x m365-copilot2api && ./m365-copilot2api
-```
+- 下载新版 fpk 后，在应用中心「手动安装」中上传同名应用的新版包，fnOS 会提示升级；
+- 升级会保留数据目录（已授权账号、API Key、用量统计等），无需重新授权。
 
-```bash
-# arm32
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-linux-arm && chmod +x m365-copilot2api && ./m365-copilot2api
-```
+### 卸载
 
-**macOS**
-
-```bash
-# Apple Silicon (M 系列)
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-darwin-arm64 && chmod +x m365-copilot2api && ./m365-copilot2api
-```
-
-```bash
-# Intel
-curl -fL -o m365-copilot2api https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-darwin-amd64 && chmod +x m365-copilot2api && ./m365-copilot2api
-```
-
-**Windows** (PowerShell)
-
-```powershell
-# x86_64
-irm -OutFile m365-copilot2api.exe https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-windows-amd64.exe; .\m365-copilot2api.exe
-```
-
-```powershell
-# arm64
-irm -OutFile m365-copilot2api.exe https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-windows-arm64.exe; .\m365-copilot2api.exe
-```
-
-```powershell
-# x86_32
-irm -OutFile m365-copilot2api.exe https://github.com/HEXUXIU/M365-Copilot2API/releases/latest/download/m365-copilot2api-windows-386.exe; .\m365-copilot2api.exe
-```
-
-> 首次运行 macOS 可能提示「无法验证开发者」：系统设置 → 隐私与安全性 → 仍要打开，或执行 `xattr -d com.apple.quarantine m365-copilot2api`。
->
-> Windows SmartScreen 拦截时点「更多信息 → 仍要运行」。
-
-### 后台运行与开机自启（可选）
-
-需要持久化部署时再配置：
-
-<details>
-<summary><b>Linux — systemd</b></summary>
-
-```bash
-sudo tee /etc/systemd/system/m365-copilot2api.service <<'EOF'
-[Unit]
-Description=M365 Copilot2API Gateway
-After=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/m365-copilot2api
-Environment=M365_LISTEN=0.0.0.0:4141
-Environment=M365_ADMIN_PASSWORD=你的密码
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now m365-copilot2api
-journalctl -u m365-copilot2api -f   # 看日志
-EOF
-```
-
-</details>
-
-<details>
-<summary><b>Windows — 开机自启（任务计划）</b></summary>
-
-```powershell
-$pw = "你的密码"
-$action = New-ScheduledTaskAction -Execute "$PWD\m365-copilot2api.exe"
-Register-ScheduledTask M365Copilot2API -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn) -RunLevel Highest -Settings (New-ScheduledTaskSettingsSet -RestartCount 3 -ExecutionTimeLimit 0)
-Start-ScheduledTask M365Copilot2API
-$env:M365_ADMIN_PASSWORD = $pw; $env:M365_LISTEN = "0.0.0.0:4141"  # 或写入系统环境变量后重启任务
-```
-
-</details>
-
-<details>
-<summary><b>macOS — launchd</b></summary>
-
-```bash
-cat > ~/Library/LaunchAgents/com.m365copilot2api.plist <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.m365copilot2api</string>
-  <key>ProgramArguments</key><array><string>/usr/local/bin/m365-copilot2api</string></array>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-</dict></plist>
-EOF
-launchctl load ~/Library/LaunchAgents/com.m365copilot2api.plist
-```
-
-</details>
-
-### 环境要求
-
-- Go 1.23+（`go.mod` 声明的最低版本）
-- Windows / Linux 均可；Windows 上推荐用仓库自带的 `manage.py` 管理生命周期
-
-### 预编译二进制（推荐）
-
-从 [GitHub Releases](https://github.com/HEXUXIU/M365-Copilot2API/releases) 下载对应平台的二进制：
-
-| 平台 | 架构 | 文件 |
-|------|------|------|
-| Linux | x86_64 / arm64 / i386 / arm32 | `m365-copilot2api-linux-{amd64,arm64,386,arm}` |
-| Windows | x86_64 / arm64 / i386 / arm32 | `m365-copilot2api-windows-{amd64,arm64,386,arm}.exe` |
-| macOS | x86_64 / arm64 | `m365-copilot2api-darwin-{amd64,arm64}` |
-
-> 其余平台（FreeBSD、NetBSD、OpenBSD、Solaris/Illumos、AIX、Android、DragonFly BSD，及 MIPS/PPC/RISCV/S390x/LoongArch 等架构）同样提供预编译产物，见 [Releases](https://github.com/HEXUXIU/M365-Copilot2API/releases) 页面。
-
-### 源码编译
-
-```powershell
-git clone https://github.com/HEXUXIU/M365-Copilot2API.git
-cd M365-Copilot2API
-
-# 设置管理员密码（可选，默认 admin123），生产环境务必设置强密码
-$env:M365_ADMIN_PASSWORD = "your_strong_password"
-
-go build -o m365-copilot2api.exe ./cmd/server
-```
-
-```bash
-# Linux / macOS
-export M365_ADMIN_PASSWORD=your_strong_password
-go build -o m365-copilot2api ./cmd/server
-```
-
-### 启动
-
-Windows 上用 `manage.py` 启动（默认后台上运行，日志写入 `server.log` / `server-error.log`）：
-
-```powershell
-python manage.py start    # 后台运行，默认监听 0.0.0.0:4141
-python manage.py status   # 查看运行状态
-python manage.py logs     # 查看最近日志（可加参数 N 指定行数）
-python manage.py err      # 查看错误日志
-python manage.py stop     # 停止服务
-```
-
-> `manage.py` 内部硬编码了仓库绝对路径（`D:\M365-Copilot2API\m365-copilot2api.exe` 等），克隆到其他目录时请先修改脚本顶部的路径常量，并确保先完成编译。
-
-直接运行二进制则默认只监听内网 `http://127.0.0.1:4141`，可通过环境变量 `M365_LISTEN` 覆盖。
-
-### Docker 部署
-
-> 官方不提供 Dockerfile。如需容器化部署，可自行基于预编译二进制或源码构建镜像，或在 Discussions 交流社区方案。
+- 在应用中心卸载即可。**注意：卸载会连同应用数据目录一起删除**（含已授权账号与 API Key），卸载前请先在控制台「账号」页导出 `accounts.json` 备份。
 
 ### 初始化与第一次调用
 
-浏览器打开控制台（默认 `http://127.0.0.1:4141`）：
+浏览器打开控制台（fnOS 安装后默认 `http://NAS的IP:8080`，也可从应用中心图标进入）：
 
 1. 用管理员密码登录（首次登录**强制要求修改密码**，默认密码 `admin123`）。
-2. 在「账号」页点击**开始授权**：
-   - 浏览器会弹出新窗口，跳转到 Microsoft 登录页。
-   - 用你的 M365 账号完成登录。
-   - 登录完成后弹出窗口会显示空白页或错误页——**这是正常的**，因为回调端点不是真正的网站，授权**尚未完成**。
-   - 从弹出窗口的**地址栏**复制完整 URL（包含 `code=...&state=...` 参数）。
-   - 回到控制台，将 URL 粘贴到「Callback URL」输入框，点击「Confirm and add」。
-   - 如果浏览器拦截了弹窗，请允许本站弹窗后重试。
+2. 在「账号」页授权添加 M365 账号，**推荐使用「设备码登录」（默认方式，无需在 Entra 注册回调地址）**：
+   - 点击「开始设备码登录」，页面会显示一组用户代码与微软验证入口（`https://microsoft.com/link`）；
+   - 在任意设备浏览器打开验证入口，输入用户代码并用你的 M365 账号完成登录；
+   - 页面自动轮询，授权成功后账号即添加完成，无需手动粘贴回调 URL。
+   - 备选「手动粘贴」方式：适用于无法使用设备码的场景，点击「开始手动授权」后把弹出窗口地址栏的完整 URL（含 `code=...&state=...`）粘贴回控制台即可。
 3. 授权成功后，在「API Key」页**创建第一个 API Key**。
 4. 用下面的 API 示例验证调用。
 
