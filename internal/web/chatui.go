@@ -65,6 +65,7 @@ type chatMessage struct {
 	Content string   `json:"content"`
 	Images  []string `json:"images,omitempty"` // uploaded image file IDs
 	Gen     []string `json:"gen_images,omitempty"` // generated image file IDs
+	Model   string   `json:"model,omitempty"` // upstream model used for assistant replies
 	Time    time.Time `json:"time"`
 }
 
@@ -543,12 +544,37 @@ func (s *Server) chatConvs(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, map[string]any{"conversations": s.chatUI.listConvs(u.ID)})
 		return
 	}
-	// POST delete
+	// POST delete / rename
 	var b struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Action string `json:"action"`
+		Title  string `json:"title"`
 	}
 	if json.NewDecoder(r.Body).Decode(&b) != nil || b.ID == "" {
 		writeOpenAIError(w, 400, "invalid_request_error", "bad json")
+		return
+	}
+	if b.Action == "rename" {
+		s.chatUI.mu.Lock()
+		defer s.chatUI.mu.Unlock()
+		c := s.chatUI.loadConv(u.ID, b.ID)
+		if c == nil {
+			writeOpenAIError(w, 404, "not_found", "conversation not found")
+			return
+		}
+		t := strings.TrimSpace(b.Title)
+		if t == "" {
+			writeOpenAIError(w, 400, "invalid_request_error", "title required")
+			return
+		}
+		r := []rune(t)
+		if len(r) > 60 {
+			r = r[:60]
+		}
+		c.Title = string(r)
+		c.UpdatedAt = time.Now()
+		s.chatUI.saveConv(c)
+		jsonOut(w, map[string]any{"status": "renamed", "title": c.Title})
 		return
 	}
 	s.chatUI.mu.Lock()
@@ -557,6 +583,31 @@ func (s *Server) chatConvs(w http.ResponseWriter, r *http.Request) {
 		_ = os.Remove(s.chatUI.convPath(u.ID, b.ID))
 	}
 	jsonOut(w, map[string]any{"status": "deleted"})
+}
+
+// chatModels returns the model list available to the chat UI ("auto" first).
+func (s *Server) chatModels(w http.ResponseWriter, r *http.Request) {
+	u := s.chatAuth(r)
+	if u == nil {
+		writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "chat login required")
+		return
+	}
+	type chatModel struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	out := []chatModel{{ID: "auto", Name: "智能路由（推荐）"}}
+	for _, g := range gatewayModels {
+		if g.ID == "gpt-image-2" {
+			continue
+		}
+		name := g.DisplayName
+		if name == "" {
+			name = g.ID
+		}
+		out = append(out, chatModel{ID: g.ID, Name: name})
+	}
+	jsonOut(w, map[string]any{"models": out})
 }
 
 func (s *Server) chatConvGet(w http.ResponseWriter, r *http.Request) {
@@ -696,6 +747,12 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 		Model          string          `json:"model"`
 		Stream         bool            `json:"stream"`
 		Messages       json.RawMessage `json:"messages"`
+		// Regenerate rewinds trailing assistant reply(ies) so the model can
+		// answer the same last user message again; TruncateUser additionally
+		// drops the last user message (edit & resend). History for both modes
+		// is supplied by the client.
+		Regenerate   bool `json:"regenerate"`
+		TruncateUser bool `json:"truncateUser"`
 	}
 	if json.Unmarshal(raw, &in) != nil || len(in.Messages) == 0 {
 		writeOpenAIError(w, 400, "invalid_request_error", "bad json")
@@ -711,6 +768,17 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	conv := s.chatUI.loadConv(u.ID, in.ConversationID)
 	if conv == nil {
 		conv = &chatConv{ID: uuid.NewString(), UserID: u.ID, Title: "新对话", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	}
+	// Regenerate / edit-resend: rewind the persisted conversation to match the
+	// client-side history before the new reply (and possibly edited user
+	// message) is appended below.
+	if in.Regenerate || in.TruncateUser {
+		for len(conv.Messages) > 0 && conv.Messages[len(conv.Messages)-1].Role == "assistant" {
+			conv.Messages = conv.Messages[:len(conv.Messages)-1]
+		}
+		if in.TruncateUser && len(conv.Messages) > 0 && conv.Messages[len(conv.Messages)-1].Role == "user" {
+			conv.Messages = conv.Messages[:len(conv.Messages)-1]
+		}
 	}
 	var userMsg chatMessage
 	var upMsgs []any
@@ -766,7 +834,7 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 		if text != "" {
 			s.chatUI.mu.Lock()
 			if c := s.chatUI.loadConv(u.ID, convID); c != nil {
-				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Time: time.Now()})
+				c.Messages = append(c.Messages, chatMessage{Role: "assistant", Content: text, Model: model, Time: time.Now()})
 				c.UpdatedAt = time.Now()
 				s.chatUI.saveConv(c)
 			}
