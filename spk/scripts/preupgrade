@@ -1,0 +1,17 @@
+#!/bin/sh
+# Snapshot the data directory before DSM replaces the package payload, so a
+# failed or partial upgrade cannot take the M365 accounts with it.
+
+set -u
+
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+DATA_DIR="$VAR_DIR/data"
+BACKUP="$VAR_DIR/data-preupgrade"
+
+if [ -d "$DATA_DIR" ]; then
+    rm -rf "$BACKUP"
+    cp -a "$DATA_DIR" "$BACKUP" 2>/dev/null
+    chmod 700 "$BACKUP" 2>/dev/null
+fi
+
+exit 0

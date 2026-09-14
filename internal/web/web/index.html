@@ -428,7 +428,7 @@ if (response.output_text) {
           <div class="card-head"><span class="card-title">Quick actions</span></div>
           <div class="card-body">
             <div class="quick-grid">
-              <div class="quick-action" onclick="showPage('accounts');setTimeout(startPKCE,200)">
+              <div class="quick-action" onclick="showPage('accounts');setTimeout(startDeviceCode,200)">
                 <div class="quick-action-icon blue"><i data-lucide="plus" style="width:18px;height:18px"></i></div>
                 <div class="quick-action-text"><h4>Add account</h4><p>Sign in via Microsoft OAuth</p></div>
               </div>
@@ -504,14 +504,15 @@ if (response.output_text) {
           <div class="card-head"><span class="card-title">Add account</span></div>
           <div class="card-body">
             <div class="tabs" style="display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
-              <button class="btn btn-sm" id="tabManual" onclick="switchAuthTab('manual')" style="flex:1">手动粘贴</button>
-              <button class="btn btn-sm active" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录</button>
+              <button class="btn btn-sm active" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录（推荐）</button>
+              <button class="btn btn-sm" id="tabManual" onclick="switchAuthTab('manual')" style="flex:1">手动粘贴（备用）</button>
             </div>
 
             <div id="authManual" class="hidden">
               <div class="highlight-box" style="margin-bottom:12px">
-                <div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i> 手动粘贴方式说明</div>
-                <p style="margin:0">适合在浏览器拦截弹出窗口、或无法使用设备码时使用。登录后 Microsoft 会跳转到一个空白页面，<b>地址栏里已经带了授权码</b>，把它整段复制回来即可。</p>
+                <div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i> 手动粘贴方式说明（备用方案）</div>
+                <p style="margin:0">优先使用设备码登录。当设备码不可用时改用本方式——例如浏览器拦截弹出窗口，或所在租户已阻止设备码流程（微软自 2026 年 7 月 1 日起对新建租户默认阻止，现有租户的管理员也可通过安全默认值或条件访问策略关闭）。登录后 Microsoft 会跳转到一个空白页面，<b>地址栏里已经带了授权码</b>，把它整段复制回来即可。</p>
+                <p style="margin:8px 0 0">本方式需要在 Microsoft Entra 应用注册中配置<b>重定向 URI</b>，若弹出页报「重定向 URI」错误，请按页面下方提示添加。</p>
               </div>
               <p class="page-sub" style="margin:0 0 12px"><b>操作步骤：</b>① 点击下方「开始手动授权」→ ② 在弹出页登录 Microsoft 账号 → ③ 页面变空白后，<b>复制浏览器地址栏里的完整网址</b>（形如 <code>https://login.microsoftonline.com/common/oauth2/nativeclient?code=M.C5...&state=...</code>）→ ④ 粘贴到下方输入框，点「确认添加」。</p>
               <button class="btn primary" onclick="startPKCE('manual')" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> 开始手动授权</button>
@@ -751,6 +752,12 @@ if (response.output_text) {
     <div class="form-group">
       <label class="form-label">模型白名单（逗号分隔，留空 = 全部模型）</label>
       <input class="form-input" id="editKeyModels" placeholder="gpt-5.6-sol, gpt-5.6-luna">
+    </div>
+    <div class="form-group">
+      <label class="form-label">智能路由（auto）模型池与优先级</label>
+      <div id="editKeyAutoOrder" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>
+      <div id="editKeyAutoChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      <p class="form-hint">该密钥的 <code>auto</code>/智能路由请求将固定路由到池中<b>优先级最高</b>的模型（① 为最高）；未加入池中的模型不会被 auto 选中，从而排除不想被调用的模型。点击下方模型名加入/移出池，↑↓ 调整优先级。留空 = 保持上游原生智能路由。若同时配置了模型白名单，请保证池内模型也在白名单内。</p>
     </div>
     <div class="form-group">
       <label class="form-label">IP 白名单（逗号分隔，支持 CIDR，留空 = 不限制）</label>
@@ -1136,7 +1143,7 @@ function toggleOnboarding(){
   $('onboarding').style.display=onboardingHidden?'none':'block';
   try{localStorage.setItem('onb_hidden',onboardingHidden?'1':'0');}catch(e){}
 }
-function onbStep1(){showPage('accounts');setTimeout(()=>{startPKCE();document.querySelector('#page-accounts')?.scrollIntoView({behavior:'smooth'});},150);}
+function onbStep1(){showPage('accounts');setTimeout(()=>{startDeviceCode();document.querySelector('#page-accounts')?.scrollIntoView({behavior:'smooth'});},150);}
 function onbStep2(){openKeyModal();}
 function onbStep3(){document.querySelector('#page-dashboard .onb-curl')?.scrollIntoView({behavior:'smooth',block:'center'});}
 
@@ -1653,7 +1660,9 @@ function safeCopyText(text,msg){
 }
 
 let editKeyId=null;
-function editKey(rec){
+let editKeyAutoPool=[];       // ordered model IDs, index 0 = highest priority
+let editKeyAvailableModels=[]; // all public models from /api/admin/models
+async function editKey(rec){
   rec=rec||{};
   editKeyId=rec.id;
   $('editKeyName').value=rec.name||'';
@@ -1664,8 +1673,44 @@ function editKey(rec){
   $('editKeyModels').value=(rec.modelWhitelist||[]).join(', ');
   $('editKeyIPs').value=(rec.ipWhitelist||[]).join(', ');
   editKeyRecord=rec;
+  editKeyAutoPool=(rec.autoModels||[]).slice();
   $('editKeyModal').classList.add('open');
+  renderKeyAutoPool();
+  try{
+    const md=await api('/api/admin/models');
+    editKeyAvailableModels=(md.data||[]).map(m=>m.id).filter(id=>id&&id!=='gpt-image-2');
+  }catch(e){editKeyAvailableModels=[];}
+  renderKeyAutoPool();
   setTimeout(()=>$('editKeyName').focus(),50);
+}
+function renderKeyAutoPool(){
+  const orderEl=$('editKeyAutoOrder'),chipEl=$('editKeyAutoChips');
+  if(!orderEl||!chipEl)return;
+  // ordered pool rows with priority + move/remove controls
+  orderEl.replaceChildren(...editKeyAutoPool.map((id,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 10px;background:var(--surface,#f5f6f8);border:1px solid var(--border,#e3e5ea);border-radius:8px;font-size:13px';
+    const prio=document.createElement('span');
+    prio.textContent=`${i+1}`;
+    prio.style.cssText='display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:50%;background:var(--accent,#4f6ef7);color:#fff;font-size:11px;font-weight:700';
+    const name=document.createElement('b');name.textContent=id;name.style.flex='1';
+    const up=document.createElement('button');up.textContent='↑';up.className='btn-sm btn';up.disabled=i===0;up.onclick=()=>{[editKeyAutoPool[i-1],editKeyAutoPool[i]]=[editKeyAutoPool[i],editKeyAutoPool[i-1]];renderKeyAutoPool();};
+    const down=document.createElement('button');down.textContent='↓';down.className='btn-sm btn';down.disabled=i===editKeyAutoPool.length-1;down.onclick=()=>{[editKeyAutoPool[i+1],editKeyAutoPool[i]]=[editKeyAutoPool[i],editKeyAutoPool[i+1]];renderKeyAutoPool();};
+    const rm=document.createElement('button');rm.textContent='✕';rm.className='btn-sm btn';rm.onclick=()=>{editKeyAutoPool.splice(i,1);renderKeyAutoPool();};
+    row.append(prio,name,up,down,rm);
+    return row;
+  }));
+  if(!editKeyAutoPool.length){const p=document.createElement('span');p.textContent='（未配置 — auto 走上游原生智能路由）';p.style.cssText='font-size:12px;color:var(--muted)';orderEl.append(p);}
+  // candidate chips: available models not already in the pool
+  const inPool=new Set(editKeyAutoPool.map(s=>s.toLowerCase()));
+  const cands=editKeyAvailableModels.filter(id=>!inPool.has(id.toLowerCase()));
+  chipEl.replaceChildren(...cands.map(id=>{
+    const b=document.createElement('button');
+    b.textContent='+ '+id;b.className='btn-sm btn';
+    b.onclick=()=>{editKeyAutoPool.push(id);renderKeyAutoPool();};
+    return b;
+  }));
+  if(!cands.length){const s=document.createElement('span');s.textContent='全部模型已在池中';s.style.cssText='font-size:12px;color:var(--muted)';chipEl.append(s);}
 }
 function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;editKeyRecord=null;}
 let editKeyRecord=null;
@@ -1679,7 +1724,8 @@ async function saveEditKey(){
     totalQuota:Math.max(0,parseInt($('editKeyTotal').value)||0),
     perMinuteRate:Math.max(0,parseInt($('editKeyRate').value)||0),
     modelWhitelist:$('editKeyModels').value.split(',').map(s=>s.trim()).filter(Boolean),
-    ipWhitelist:$('editKeyIPs').value.split(',').map(s=>s.trim()).filter(Boolean)
+    ipWhitelist:$('editKeyIPs').value.split(',').map(s=>s.trim()).filter(Boolean),
+    autoModels:editKeyAutoPool.map(s=>s.trim()).filter(Boolean)
   };
   const expVal=$('editKeyExpires').value;
   if(expVal){payload.expiresAt=new Date(expVal).toISOString();}

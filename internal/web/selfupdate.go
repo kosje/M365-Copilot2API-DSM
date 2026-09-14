@@ -33,10 +33,21 @@ import (
 // ============================================================
 
 const (
-	updateRepo       = "my788525/M365-Copilot2API-FNOS"
+	updateRepo       = "kosje/M365-Copilot2API-DSM"
 	updateAssetName  = "m365-copilot2api-linux-amd64"
 	alertEventUpdate = "update_available"
 )
+
+// selfUpdateApplyEnabled gates in-place binary replacement.
+//
+// On the Synology DSM build it is off. Two reasons: the package directory is
+// owned by root while the service runs as the package user, so the rename
+// would fail anyway unless the app directory were handed to the service (which
+// would let the service rewrite its own code); and a swapped binary desyncs
+// from the version Package Center records in INFO, so a later Package Center
+// action could silently roll it back. Detection stays on — the console shows a
+// banner and the admin installs the new SPK through Package Center.
+const selfUpdateApplyEnabled = false
 
 // Mirrors tried in order when direct GitHub access fails. Each
 // entry is prefixed to the full github.com URL (ghproxy style).
@@ -233,10 +244,25 @@ func (s *Server) updateHandler(w http.ResponseWriter, r *http.Request) {
 	info := cachedUpdateInfo()
 	if info.Error != "" {
 		// Keep the response useful even when GitHub is unreachable.
-		jsonOut(w, map[string]any{"current": info.Current, "updateAvailable": false, "error": info.Error, "checkedAt": info.CheckedAt})
+		jsonOut(w, map[string]any{"current": info.Current, "updateAvailable": false, "error": info.Error, "checkedAt": info.CheckedAt, "applyEnabled": selfUpdateApplyEnabled})
 		return
 	}
-	jsonOut(w, info)
+	// applyEnabled lets the console hide the one-click button on builds where
+	// upgrading is the package manager's job (see selfUpdateApplyEnabled).
+	out := map[string]any{
+		"current":         info.Current,
+		"latest":          info.Latest,
+		"updateAvailable": info.UpdateAvailable,
+		"notes":           info.Notes,
+		"checkedAt":       info.CheckedAt,
+		"applyEnabled":    selfUpdateApplyEnabled,
+	}
+	if selfUpdateApplyEnabled {
+		out["assetUrl"] = info.AssetURL
+	} else {
+		out["upgradeHint"] = "请在群晖「套件中心」安装新版 SPK 完成升级"
+	}
+	jsonOut(w, out)
 }
 
 // adminUpdateApply serves POST /api/admin/update/apply — downloads the
@@ -244,6 +270,11 @@ func (s *Server) updateHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
+		return
+	}
+	if !selfUpdateApplyEnabled {
+		writeOpenAIError(w, 403, "invalid_request_error",
+			"此版本为群晖 DSM 套件，应用内更新已停用；请在「套件中心」安装新版 SPK 完成升级")
 		return
 	}
 	var in struct {

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Runs after files are laid down, as root, with wizard variables in the
+# environment. Everything the service needs at runtime is prepared here
+# because the service itself runs unprivileged.
+
+set -u
+
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+DATA_DIR="$VAR_DIR/data"
+BOOTSTRAP_PW="$VAR_DIR/admin-password-bootstrap"
+KEEP_DIR="/var/packages/m365-copilot2api/keep"
+
+mkdir -p "$DATA_DIR"
+
+# Restore user data left behind by a previous uninstall, without ever
+# clobbering files this install already produced.
+if [ -d "$KEEP_DIR" ] && [ -f "$KEEP_DIR/accounts.json" ]; then
+    cp -an "$KEEP_DIR/." "$DATA_DIR/" 2>/dev/null
+    echo "restored retained data from $KEEP_DIR on $(date)" >> "$DATA_DIR/restore.log" 2>/dev/null
+fi
+
+# Hand the wizard password to the app as a one-shot bootstrap file. The app
+# only consumes it when no password is stored yet, or when the value differs
+# from the last bootstrap — matching the fnOS wizard's "reinstall to reset a
+# forgotten password" behaviour. A password changed in the console is not
+# overwritten by an ordinary restart.
+if [ -n "${pkgwizard_admin_password:-}" ]; then
+    printf '%s' "$pkgwizard_admin_password" > "$BOOTSTRAP_PW"
+    chmod 600 "$BOOTSTRAP_PW"
+fi
+
+# The service account is created by DSM from conf/privilege (run-as package).
+PKG_USER="${SYNOPKG_PKGNAME:-m365-copilot2api}"
+if id "$PKG_USER" >/dev/null 2>&1; then
+    chown -R "$PKG_USER:$PKG_USER" "$VAR_DIR" 2>/dev/null
+fi
+chmod 700 "$DATA_DIR" 2>/dev/null
+
+exit 0

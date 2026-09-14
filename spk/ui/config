@@ -1,0 +1,14 @@
+{
+    ".url": {
+        "com.kosje.m365copilot2api": {
+            "type": "url",
+            "title": "Copilot2API",
+            "desc": "M365 Copilot2API 网关管理控制台",
+            "icon": "images/icon_{0}.png",
+            "protocol": "http",
+            "port": "4141",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Put back anything the payload swap removed, then hand ownership back to the
+# service account. Existing files win: the new package must never overwrite
+# live account data with defaults.
+
+set -u
+
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+DATA_DIR="$VAR_DIR/data"
+BACKUP="$VAR_DIR/data-preupgrade"
+
+mkdir -p "$DATA_DIR"
+
+if [ -d "$BACKUP" ]; then
+    cp -an "$BACKUP/." "$DATA_DIR/" 2>/dev/null
+    rm -rf "$BACKUP"
+fi
+
+PKG_USER="${SYNOPKG_PKGNAME:-m365-copilot2api}"
+if id "$PKG_USER" >/dev/null 2>&1; then
+    chown -R "$PKG_USER:$PKG_USER" "$VAR_DIR" 2>/dev/null
+fi
+chmod 700 "$DATA_DIR" 2>/dev/null
+
+exit 0

@@ -428,7 +428,7 @@ if (response.output_text) {
           <div class="card-head"><span class="card-title">Quick actions</span></div>
           <div class="card-body">
             <div class="quick-grid">
-              <div class="quick-action" onclick="showPage('accounts');setTimeout(startPKCE,200)">
+              <div class="quick-action" onclick="showPage('accounts');setTimeout(startDeviceCode,200)">
                 <div class="quick-action-icon blue"><i data-lucide="plus" style="width:18px;height:18px"></i></div>
                 <div class="quick-action-text"><h4>Add account</h4><p>Sign in via Microsoft OAuth</p></div>
               </div>
@@ -504,14 +504,15 @@ if (response.output_text) {
           <div class="card-head"><span class="card-title">Add account</span></div>
           <div class="card-body">
             <div class="tabs" style="display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
-              <button class="btn btn-sm" id="tabManual" onclick="switchAuthTab('manual')" style="flex:1">手动粘贴</button>
-              <button class="btn btn-sm active" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录</button>
+              <button class="btn btn-sm active" id="tabDevice" onclick="switchAuthTab('device')" style="flex:1">设备码登录（推荐）</button>
+              <button class="btn btn-sm" id="tabManual" onclick="switchAuthTab('manual')" style="flex:1">手动粘贴（备用）</button>
             </div>
 
             <div id="authManual" class="hidden">
               <div class="highlight-box" style="margin-bottom:12px">
-                <div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i> 手动粘贴方式说明</div>
-                <p style="margin:0">适合在浏览器拦截弹出窗口、或无法使用设备码时使用。登录后 Microsoft 会跳转到一个空白页面，<b>地址栏里已经带了授权码</b>，把它整段复制回来即可。</p>
+                <div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i> 手动粘贴方式说明（备用方案）</div>
+                <p style="margin:0">优先使用设备码登录。当设备码不可用时改用本方式——例如浏览器拦截弹出窗口，或所在租户已阻止设备码流程（微软自 2026 年 7 月 1 日起对新建租户默认阻止，现有租户的管理员也可通过安全默认值或条件访问策略关闭）。登录后 Microsoft 会跳转到一个空白页面，<b>地址栏里已经带了授权码</b>，把它整段复制回来即可。</p>
+                <p style="margin:8px 0 0">本方式需要在 Microsoft Entra 应用注册中配置<b>重定向 URI</b>，若弹出页报「重定向 URI」错误，请按页面下方提示添加。</p>
               </div>
               <p class="page-sub" style="margin:0 0 12px"><b>操作步骤：</b>① 点击下方「开始手动授权」→ ② 在弹出页登录 Microsoft 账号 → ③ 页面变空白后，<b>复制浏览器地址栏里的完整网址</b>（形如 <code>https://login.microsoftonline.com/common/oauth2/nativeclient?code=M.C5...&state=...</code>）→ ④ 粘贴到下方输入框，点「确认添加」。</p>
               <button class="btn primary" onclick="startPKCE('manual')" style="width:100%;margin-bottom:12px;"><i data-lucide="link" style="width:15px;height:15px"></i> 开始手动授权</button>
@@ -1142,7 +1143,7 @@ function toggleOnboarding(){
   $('onboarding').style.display=onboardingHidden?'none':'block';
   try{localStorage.setItem('onb_hidden',onboardingHidden?'1':'0');}catch(e){}
 }
-function onbStep1(){showPage('accounts');setTimeout(()=>{startPKCE();document.querySelector('#page-accounts')?.scrollIntoView({behavior:'smooth'});},150);}
+function onbStep1(){showPage('accounts');setTimeout(()=>{startDeviceCode();document.querySelector('#page-accounts')?.scrollIntoView({behavior:'smooth'});},150);}
 function onbStep2(){openKeyModal();}
 function onbStep3(){document.querySelector('#page-dashboard .onb-curl')?.scrollIntoView({behavior:'smooth',block:'center'});}
 

@@ -165,7 +165,20 @@ func TestConfiguredModelMappingsDriveCatalogAndRouting(t *testing.T) {
 		t.Fatalf("tone=%q ok=%t", tone, ok)
 	}
 	override := configuredModelSpecs([]modelMapping{{PublicModel: "gpt-5.5", UpstreamTone: "Gpt_5_5_Reasoning", DisplayName: "GPT-5.5", DefaultReasoningLevel: "high"}})
-	if len(override) != len(gatewayModels) || override[5].DefaultReasoningLevel != "high" {
+	// Look the entry up by ID rather than by position: the point of the check
+	// is that mapping a built-in model replaces it in place instead of
+	// appending a duplicate, which holds regardless of catalog ordering.
+	if len(override) != len(gatewayModels) {
+		t.Fatalf("built-in override changed catalog size: %#v", override)
+	}
+	var overridden *modelSpec
+	for i := range override {
+		if override[i].ID == "gpt-5.5" {
+			overridden = &override[i]
+			break
+		}
+	}
+	if overridden == nil || overridden.DefaultReasoningLevel != "high" {
 		t.Fatalf("built-in override=%#v", override)
 	}
 }

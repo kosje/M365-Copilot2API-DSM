@@ -100,8 +100,12 @@ func TestPublicIdentityAnswerDetectsSelfQuestionsOnly(t *testing.T) {
 
 func TestPublicIdentityAnswerUsesRequestedModelForAllAdvertisedModels(t *testing.T) {
 	models := configuredModelSpecs(defaultModelMappings)
-	if len(models) != 14 {
-		t.Fatalf("advertised models=%d, want 22", len(models))
+	// Bumped from 14 when "auto" (smart routing) was added to the catalog so
+	// ordinary OpenAI clients can select it. The guard exists to force a look
+	// at the identity answer whenever the advertised set changes.
+	const wantModels = 15
+	if len(models) != wantModels {
+		t.Fatalf("advertised models=%d, want %d", len(models), wantModels)
 	}
 	for _, model := range models {
 		answer, detected := publicIdentityAnswer([]oaiMsg{{Role: "user", Content: "你是什么模型？"}}, model.ID)

@@ -1,0 +1,26 @@
+[
+    {
+        "step_title": "M365 Copilot2API 配置",
+        "items": [
+            {
+                "type": "password",
+                "desc": "设置网页管理后台的管理员密码（建议 ≥8 位，含字母和数字）。忘记密码时，卸载后重新安装并填入新密码即可重置；日常重启不会覆盖你在网页端改过的密码。",
+                "subitems": [
+                    {
+                        "key": "pkgwizard_admin_password",
+                        "desc": "管理员密码",
+                        "validator": {
+                            "allowBlank": false,
+                            "minLength": 8,
+                            "minLengthText": "密码至少 8 位"
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "textfield",
+                "desc": "服务端口固定为 4141。安装完成后在浏览器访问 http://群晖IP:4141 进入管理页，添加 Microsoft 365 账号并生成 API Key。账号与配置保存在套件数据目录，卸载时默认保留。升级请在套件中心安装新版 SPK（应用内一键更新已停用，仅保留新版本提示）。"
+            }
+        ]
+    }
+]

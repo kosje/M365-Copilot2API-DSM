@@ -60,6 +60,13 @@ func codexModelMessages() map[string]any {
 }
 
 var gatewayModels = []modelSpec{
+	// "auto" is smart routing. With a per-key auto pool configured it resolves
+	// to the pool's highest-priority entry (requestAutoModel); without one it
+	// falls through modelTone's default to the upstream "magic" tone. Listing
+	// it here is what lets ordinary OpenAI clients pick it from their model
+	// dropdown — the routing itself already worked, it was just undiscoverable
+	// outside the built-in /chat page.
+	{ID: "auto", Owner: "microsoft-365", DisplayName: "智能路由", Tools: true},
 	{ID: "gpt-5.2", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.2-reasoning", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.3", Owner: "microsoft-365", Tools: true},

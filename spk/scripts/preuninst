@@ -1,0 +1,30 @@
+#!/bin/sh
+# Retain account data across an uninstall unless the admin explicitly ticked
+# "delete data" in Package Center. DSM sets SYNOPKG_PKG_STATUS=UNINSTALL and
+# exposes the checkbox through SYNOPKG_PKGDEST_VOL / wizard variables; the
+# reliable signal is $SYNOPKG_PKG_STATUS plus the user's choice in
+# $pkgwizard_delete_data, so default to keeping.
+
+set -u
+
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+DATA_DIR="$VAR_DIR/data"
+KEEP_DIR="/var/packages/m365-copilot2api/keep"
+
+# An upgrade also fires the uninstall hooks on some DSM builds; never discard
+# data there.
+if [ "${SYNOPKG_PKG_STATUS:-}" = "UPGRADE" ]; then
+    exit 0
+fi
+
+if [ "${pkgwizard_delete_data:-}" = "true" ]; then
+    exit 0
+fi
+
+if [ -f "$DATA_DIR/accounts.json" ]; then
+    mkdir -p "$KEEP_DIR"
+    cp -a "$DATA_DIR/." "$KEEP_DIR/" 2>/dev/null
+    chmod 700 "$KEEP_DIR" 2>/dev/null
+fi
+
+exit 0

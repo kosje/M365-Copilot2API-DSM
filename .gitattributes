@@ -1,0 +1,13 @@
+# DSM 在安装/启停时直接执行 spk/scripts/ 下的脚本。一旦带上 CRLF，
+# shebang 会变成 "#!/bin/sh\r"，DSM 报 bad interpreter 并把套件置为损坏。
+# 强制这些文件始终以 LF 检出，不受 core.autocrlf 影响。
+*.sh            text eol=lf
+spk/scripts/*   text eol=lf
+spk/INFO        text eol=lf
+spk/conf/*      text eol=lf
+spk/ui/config   text eol=lf
+spk/WIZARD_UIFILES/*  text eol=lf
+
+# 图标是二进制，别做任何换行处理
+*.png           binary
+*.PNG           binary

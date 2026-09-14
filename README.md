@@ -1,37 +1,29 @@
-# M365 Copilot2API
+# M365 Copilot2API — 群晖 DSM 套件版
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/HEXUXIU/M365-Copilot2API" alt="License">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License">
   <img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go" alt="Go Version">
-  <img src="https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai" alt="OpenAI Compatible">
-  <img src="https://img.shields.io/badge/API-Anthropic%20Compatible-FF6B6B?logo=anthropic" alt="Anthropic Compatible">
+  <img src="https://img.shields.io/badge/DSM-7.0%2B-1a73e8" alt="DSM 7.0+">
+  <img src="https://img.shields.io/badge/API-OpenAI%20%2F%20Anthropic%20Compatible-412991" alt="OpenAI Compatible">
 </p>
 
-<p align="center">
-  <strong>Microsoft 365 Copilot → OpenAI / Anthropic 兼容 API 网关</strong>
-</p>
+把 Microsoft 365 Copilot 背后的 **ChatHub 私有协议**翻译成标准的 **OpenAI / Anthropic 兼容 API**，打包成可直接在**群晖 DSM 套件中心安装**的 SPK。装好后 Claude Code、Cherry Studio、OpenWebUI、ChatBox 等任意 OpenAI 客户端都能直接调用。
 
-M365 Copilot2API 是一个用 Go 编写的自托管网关，把微软 365 Copilot 商业订阅背后的 **ChatHub 私有协议**（WebSocket）翻译成标准的 **OpenAI / Anthropic 兼容 API**。Claude Code、OpenCode、Cursor 以及任何 OpenAI 客户端都可以直接用熟悉的格式调用 M365 Copilot。
-
-工作原理概括：**ChatHub 私有协议 ⇄ OpenAI / Anthropic 兼容 API**。连接握手、心跳保活、事件流解析、工具调用转换全部封装在 `internal/chathub` 层，对外只暴露 `/v1/chat/completions`、`/v1/messages` 等标准端点。
-
-项目自带完整 Web 管理控制台，覆盖账号授权（OAuth/PKCE）、API Key 管理、代理池、云端对话管理、用量统计与模型测试，适合个人自部署、自托管使用。
-
-> 🌟 **关于本仓库（飞牛 fnOS 专版 Fork）**
+> ### 关于本仓库（群晖 DSM 专版）
 >
-> 本仓库是 [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) 的增强分支，保留了上游全部提交历史与署名，**定位为飞牛 fnOS 专用发行版：仅提供 fpk 安装包这一种安装方式**（多平台二进制 / Docker 等部署方式请用上游仓库）。在此之上新增了大量面向**飞牛 fnOS 家庭私有部署**与**日常易用性**的功能：
+> 本仓库的定位是**只做一件事：提供群晖 DSM 的 SPK 安装包**。核心能力全部来自上游，本分支在其上做群晖适配。
 >
-> - **`/chat` 网页对话端**——仿 DeepSeek 风格的轻量对话页：文字流式对话、上传图片理解、AI 画图、实时额度显示，可直接当轻应用或测试入口使用；
-> - **独立 Chat 账户体系**——管理员在后台创建/管理对话用户，每人可设每日对话与画图额度（0 = 不限）；
-> - **API Key 每日 / 总额度**——每个密钥可单独限次，超限返回 429，留 0 表示不限；
-> - **账号网页端导入 / 导出**——Accounts 页一键上传或下载 `accounts.json`，实例间迁移全程无需 SSH；
-> - **飞牛 fnOS FPK 深度适配**——安装向导设置管理员密码（重装时改密码即生效）、桌面图标入口（局域网/公网域名自动适配）、应用数据目录独立存储；
-> - **存储管理**——会话与图片缓存的保留天数 / 容量上限设置、空间占用统计与一键清理；
-> - **国内 AI 工具一键适配**——后台「使用密钥」弹窗内置 WorkBuddy、Trae、豆包、通义千问、Kimi 等客户端的接入提示词，复制粘贴即完成配置。
+> **传承关系**
 >
-> 详细使用说明见 **[docs/FORK_GUIDE.md](docs/FORK_GUIDE.md)**（新功能完整手册）。上游原有文档在本 README 中保持完整。
+> | 层级 | 仓库 | 贡献 |
+> |---|---|---|
+> | 原始项目 | [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) | ChatHub 协议层、Web 控制台、账号体系、会话复用等全部核心能力 |
+> | 增强分支 | [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) | `/chat` 对话端、Chat 账户与额度、账号网页导入导出、存储管理、飞牛 fnOS FPK |
+> | **本仓库** | kosje/M365-Copilot2API-DSM | **群晖 DSM SPK 打包**与若干 DSM 适配（见下方「与上游的差异」） |
+>
+> 其它部署方式（多平台二进制 / Docker / 飞牛 FPK）请前往对应上游仓库。
 
-> ⚠️ **免责声明（请务必阅读）**
+> ### 免责声明（请务必阅读）
 >
 > - 本项目**不是微软官方产品**，与 Microsoft、OpenAI、Anthropic 及其关联公司**均无任何从属或合作关系**。
 > - 使用第三方账号池、代理转发等方式接入 M365 服务**可能违反服务商服务条款**，由此产生的一切后果由使用者自行承担。
@@ -39,443 +31,168 @@ M365 Copilot2API 是一个用 Go 编写的自托管网关，把微软 365 Copilo
 > - 本项目**仅供个人学习与研究**，**禁止用于商业转售或规模化运营**。
 > - 账号被封禁、数据丢失等任何损失，本项目维护者与贡献者**概不负责**。
 
-## 界面预览
+---
 
-<p align="center"><img src="docs/screenshots/02-dashboard.png" alt="仪表盘" style="max-width:860px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.18)"></p>
+## 安装
 
-<table>
-  <tr>
-    <td align="center" width="33%"><img src="docs/screenshots/01-login.png" alt="登录页" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>登录</b></sub></td>
-    <td align="center" width="33%"><img src="docs/screenshots/03-usage.png" alt="用量统计" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>用量统计</b></sub></td>
-    <td align="center" width="33%"><img src="docs/screenshots/04-accounts.png" alt="账号管理" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>账号管理</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="33%"><img src="docs/screenshots/05-apikeys.png" alt="API Keys" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>API Keys</b></sub></td>
-    <td align="center" width="33%"><img src="docs/screenshots/06-conversations.png" alt="对话管理" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>对话管理</b></sub></td>
-    <td align="center" width="33%"><img src="docs/screenshots/07-proxies.png" alt="代理池" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>代理池</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="33%"><img src="docs/screenshots/08-modeltest.png" alt="模型测试" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>模型测试</b></sub></td>
-    <td align="center" width="33%"><img src="docs/screenshots/09-settings.png" alt="设置" style="border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)"><br><sub><b>设置</b></sub></td>
-    <td align="center" width="33%"><sub><i>更多功能，等你发现</i></sub></td>
-  </tr>
-</table>
+### 环境要求
 
-## 功能特性
+| 项 | 要求 |
+|---|---|
+| DSM 版本 | 7.0 及以上（`os_min_ver=7.0-40000`） |
+| CPU 架构 | x86-64。SPK 标为 `noarch` 以确保各型号都能装，但二进制是 `linux/amd64`，**ARM 机型无法运行** |
+| 端口 | 4141（固定，安装时无需填写） |
+| 依赖 | 无。静态编译，Web 控制台已 `go:embed` 内嵌 |
 
-| 功能 | 说明 |
-|------|------|
-| OpenAI 兼容 `/v1/chat/completions` | 支持流式输出与 function calling |
-| OpenAI Responses `/v1/responses` | 兼容 Responses 协议（Codex 等客户端） |
-| Anthropic 兼容 `/v1/messages` | Claude Code / Cursor 直连 |
-| SSE 流式输出 | 逐字实时返回，`stream: true` |
-| 工具调用转换 | OpenAI function calling ⇄ M365 工具协议，`router` / `native` 两种规划模式 |
-| 内容键会话复用 | 以对话上下文为键复用云端对话，命中时只发送增量消息（类似 DeepSeek 上下文缓存） |
-| 会话显式绑定 | `X-M365-Session-Id` 请求头精确指定要继续的会话 |
-| 自动清理 | 按闲置时间（默认 2h）或保留数量回收云端对话 |
-| 多账号管理 | PKCE 授权 + 账号轮询 + 故障自动转移 |
-| API Key 管理 | 控制台创建 / 撤销 / 回读 |
-| 代理池 | HTTP / HTTPS / SOCKS5 代理轮换、健康检查、失败冷却 |
-| 用量统计 | 按 key / 账号 / 模型 / 端点聚合（`usage.jsonl`） |
-| 缓存命中统计 | 命中率、节省 token 仪表盘 |
-| 多模态输入 | 支持图片等附件（base64 data URL / https URL），自动完成 M365 上传与消息注解注入 |
-| 图像生成 | `/v1/images/generations` |
-| Web 控制台 | 账号、密钥、代理池、模型、对话、日志一屏管理 |
+已实测：**DS918+ / DSM 7.2.1-69057 Update 12 / Intel J1900**。
 
-## 架构
+### 步骤
+
+1. 到 [Releases](https://github.com/kosje/M365-Copilot2API-DSM/releases) 下载 `m365-copilot2api-*.spk`
+2. 套件中心 → 右上角**手动安装** → 选择该 SPK
+3. 会提示「由第三方开发者提供，未经 Synology 验证」→ 点**确定**
+   > DSM 7 取消了 DSM 6 时代的「任何发布者」信任级别开关，所有社区套件都会弹这个提示，**签名也无法消除**，属正常现象。
+4. 在安装向导中设置**管理员密码**（≥8 位）
+5. 安装完成后访问 `http://群晖IP:4141`，或点击桌面上的 **Copilot2API** 图标
+
+### 首次配置
+
+1. 用向导中设置的密码登录控制台
+2. **账号管理** → **设备码登录（推荐）** → 按提示在浏览器完成 Microsoft 登录 → 账号自动加入
+3. **API Key** 页创建密钥（前缀 `m365_`）
+4. 在客户端填入 `http://群晖IP:4141/v1` 与该密钥
+
+## 升级与卸载
+
+**升级**：直接在套件中心手动安装新版 SPK 即可，**无需卸载**。`preupgrade` / `postupgrade` 钩子会在替换前快照数据目录、替换后回填，账号与 API Key 不会丢失。
+
+**卸载**：默认**保留数据**到 `/var/packages/m365-copilot2api/keep`，重新安装时自动回填。要彻底清除请在卸载时勾选「删除数据」。
+
+**数据位置**：
 
 ```
-┌──────────────┐    OpenAI / Anthropic    ┌──────────────────┐    ChatHub    ┌──────────────┐
-│ Claude Code  │ ───────────────────────► │      网关         │ ────────────► │ M365 Copilot │
-│ OpenCode     │   /v1/chat/completions   │ (Go, m365-copilot2api) │  WebSocket    │  (云端对话)   │
-│ 任意 OpenAI  │   /v1/messages           │  internal/web     │  internal/    │              │
-│ 客户端        │   /v1/responses          │                   │  chathub      │              │
-└──────────────┘                          └──────────────────┘               └──────────────┘
+/var/packages/m365-copilot2api/var/data/     账号、API Key、用量、会话缓存
+/var/packages/m365-copilot2api/target/bin/   二进制
+/var/packages/m365-copilot2api/keep/         卸载留存
 ```
 
-- **协议层（`internal/chathub`）**：封装 M365 Copilot ChatHub 的 WebSocket 私有协议——连接建立、心跳保活、事件流解析（流式 token、工具调用、多模态输入）。对上层只暴露统一的事件接口。
-- **会话解析（`internal/web/session_resolver.go`）**：多账号场景下把每个客户端请求稳定解析到固定账号与云端对话，并实现内容键会话复用（见下文原理）。
-- **账号轮询与故障转移**：多账号间轮询均衡流量；账号故障（鉴权失效、连接断开等）自动切换到下一个可用账号重试。
+## 与上游 fnOS 版的差异
 
-## 安装（飞牛 fnOS 专版）
+本分支基于 [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) `v1.5.2`，改动如下（依 AGPL-3.0 第 5(a) 条标注）：
 
-> 📦 **本仓库为飞牛 fnOS 专版，仅提供 fpk 安装包这一种安装方式**。上游的多平台二进制、systemd / launchd / Docker 等部署指引不再适用；如需在非 fnOS 平台部署，请前往上游仓库 [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API)。
+### 1. 群晖 SPK 打包（新增）
 
-### 安装
+FPK 与 SPK 结构高度对应，按 DSM 规范重写：
 
-1. 在本仓库 [Releases](https://github.com/my788525/M365-Copilot2API-FNOS/releases/latest) 下载最新的 `m365-copilot2api.fpk` 安装包；
-2. 打开飞牛 fnOS 的「应用中心」→「手动安装」，上传该 fpk 文件；
-3. 按安装向导完成安装（向导中可设置监听地址与管理员密码）；
-4. 安装完成后，从应用中心点击应用图标进入管理控制台（默认端口 `8080`）。
+| 文件 | 作用 |
+|---|---|
+| `INFO` | 套件元数据（`arch=noarch`、`adminport=4141`、`dsmuidir`、`dsmappname`） |
+| `scripts/start-stop-status` | 启停与状态。用 **PID 文件 + `/proc/<pid>/exe` 校验**判断存活，避免 PID 复用误判；`stop` 先 TERM 等 20 秒再 KILL |
+| `scripts/postinst` | 建数据目录、落盘向导密码、回填卸载留存数据 |
+| `scripts/preuninst` | 卸载前保留账号数据 |
+| `scripts/preupgrade` / `postupgrade` | 升级前快照、升级后回填 |
+| `conf/privilege` | `run-as: package`，符合 DSM 7 禁止 root 的要求 |
+| `WIZARD_UIFILES/install_uifile` | 安装向导（设置管理员密码） |
+| `ui/config` + `ui/images/icon_{16,24,32,48,64,72,256}.png` | DSM 桌面图标 |
 
-> 也可通过 fnOS 命令行安装：`sudo appcenter-cli install-fpk /path/to/m365-copilot2api.fpk -e <向导env文件>`。
-> 注意：对已安装的应用重复执行 `install-fpk` 不会升级；CLI 升级需先卸载再安装，**推荐直接在应用中心 UI 上传新版 fpk 完成升级**。
+### 2. 应用内一键更新已停用，仅保留新版本检测
 
-### 升级
+`internal/web/selfupdate.go`：`selfUpdateApplyEnabled = false`，`POST /api/admin/update/apply` 返回 403 并提示走套件中心；`GET /api/update` 增加 `applyEnabled` 字段供前端隐藏按钮。检测逻辑保留。
 
-- 下载新版 fpk 后，在应用中心「手动安装」中上传同名应用的新版包，fnOS 会提示升级；
-- 升级会保留数据目录（已授权账号、API Key、用量统计等），无需重新授权。
+**为什么**：套件目录归 root 所有而服务以套件用户运行，原地替换二进制会失败——除非把应用目录交给服务，那等于允许它改写自己的代码；且换掉的二进制与套件中心记录的版本会脱节，后续任何套件操作都可能把它悄悄回滚。**升级请走套件中心。**
 
-### 卸载
+更新源已指向本仓库（`updateRepo = "kosje/M365-Copilot2API-DSM"`）。
 
-- 在应用中心卸载即可。**用户数据自动保留**：卸载前安装脚本会把数据目录（账号配置 `accounts.json`、密钥 `api-keys.json`、设置、密码、用量/审计记录、聊天会话等）完整复制到留存目录 `/vol1/@appdata/m365-copilot2api-keep`，重新安装后自动恢复，无需手动备份。
-- 如需彻底清除全部数据，卸载后手动删除留存目录 `/vol1/@appdata/m365-copilot2api-keep`。
+### 3. 授权方式的主次调整
 
-### 初始化与第一次调用
+`web/index.html`：**设备码登录（推荐）** 置于首位并默认打开，**手动粘贴（备用）** 保留为后备。仪表盘「Add account」快捷入口与新手引导第一步改为直接启动设备码登录。
 
-浏览器打开控制台（fnOS 安装后固定 `http://NAS的IP:4141`，也可从应用中心图标进入）：
+**为什么保留手动粘贴**：微软**自 2026 年 7 月 1 日起对所有新建 Entra 租户在安全默认值下阻止设备码流程**（原因是设备码钓鱼），现有租户的管理员也可随时通过安全默认值或条件访问策略关闭。设备码一旦不可用，手动粘贴是唯一退路。
 
-1. 用管理员密码登录（首次登录**强制要求修改密码**，默认密码 `admin123`）。
-2. 在「账号」页授权添加 M365 账号，**推荐使用「设备码登录」（默认方式，无需在 Entra 注册回调地址）**：
-   - 点击「开始设备码登录」，页面会显示一组用户代码与微软验证入口（`https://microsoft.com/link`）；
-   - 在任意设备浏览器打开验证入口，输入用户代码并用你的 M365 账号完成登录；
-   - 页面自动轮询，授权成功后账号即添加完成，无需手动粘贴回调 URL。
-   - 备选「手动粘贴」方式：适用于无法使用设备码的场景，点击「开始手动授权」后把弹出窗口地址栏的完整 URL（含 `code=...&state=...`）粘贴回控制台即可。
-3. 授权成功后，在「API Key」页**创建第一个 API Key**。
-4. 用下面的 API 示例验证调用。
+> 手动粘贴方式**需要在 Microsoft Entra 应用注册中配置重定向 URI**。建议提前配好，不要等设备码被关了才去弄。
 
-> 有多个 M365 账号时可以重复授权，网关会以轮询 + 故障转移的方式自动调度全部账号。
+### 4. `auto` 智能路由开放给外部 API 客户端
 
-## 配置说明
+`internal/web/codex_catalog.go`：把 `auto` 加入 `/v1/models` 目录。
 
-全部通过环境变量配置，也可以用 `.env.example` 作为起点。应用启动时会优先读取显式设置的环境变量。
+上游 v1.5.2 新增了「按密钥配置 auto 模型池与优先级」，但 `auto` 只出现在内置 `/chat` 页面的模型列表里，**外部客户端的下拉框看不到它**。路由逻辑本身（`requestAutoModel`）已作用于 `/v1/chat/completions`，而 `/v1/responses`、`/v1/messages` 内部都以 `r.Clone(r.Context())` 转发给它，context 完整保留——所以只缺目录里的一行声明。
 
-### 核心
+行为：
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `M365_LISTEN` | `127.0.0.1:4141` | 监听地址（`manage.py` 与 Docker 内置为 `0.0.0.0:4141`） |
-| `M365_ADMIN_PASSWORD` | `admin123` | 管理员密码（首次登录强制修改） |
-| `M365_DATA_DIR` | `~/.config/m365-copilot2api` | 数据目录（token、密钥、用量等集中存储；`manage.py` 内置为 `data/`） |
-| `M365_CONFIG` | `~/.config/m365-copilot2api/accounts.json` | 账号配置文件路径 |
-| `M365_SESSION_TTL_MINUTES` | `120` | 会话绑定存活时间（分钟），过期从 `sessions.json` 清除 |
-| `M365_CONTEXT_TTL_MINUTES` | `120` | 上下文指纹复用窗口（分钟） |
-| `M365_CONTEXT_SIMILARITY` | `0.6` | 上下文相似度复用阈值（0~1，Jaccard 相似度） |
-| `M365_LOG_LEVEL` | `info` | 日志级别 |
-| `M365_ACCOUNT_DEFAULT_CONCURRENCY` | `8` | 每个账号同时进行的上游调用上限；其余账号仍可继续接收请求 |
-| `M365_PUBLIC_IDENTITY_POLICY` | `false` | 公开身份策略总开关；仅在微软反代渠道显式设为 `true` 时启用身份预设及正文、推理、引用和流式清洗 |
+- 该密钥**配了** auto 模型池 → 确定性路由到池内最高优先级模型，响应头带 `X-M365-Auto-Model`
+- 该密钥**没配** → 回落到上游智能路由（`modelTone` 的 `magic`），与原行为一致
 
-### 自动清理
+相应调整了两处测试：`public_identity_test.go` 的模型数量守卫 14 → 15；`codex_catalog_test.go` 原先用硬编码下标定位 `gpt-5.5`，改为按 ID 查找（该测试的本意是验证「映射内置模型时原地替换而非追加」，与位置无关）。
 
-云端对话被视为「缓存条目」：会话命中时自动刷新存活时间，长期闲置或超出数量上限的对话由后台循环回收。
+## 功能概览
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `M365_AUTO_CLEANUP` | 开启 | 云端对话自动清理开关（设为 `0` / `false` / `no` / `off` 关闭） |
-| `M365_AUTO_CLEANUP_INTERVAL_MINUTES` | `30` | 扫描周期（分钟） |
-| `M365_AUTO_CLEANUP_MAX_AGE_HOURS` | `2` | 闲置超过即回收（小时） |
-| `M365_AUTO_CLEANUP_KEEP_N` | `100` | 最多保留的云端对话数 |
+完整功能文档见上游 [README](https://github.com/my788525/M365-Copilot2API-FNOS#readme) 与 [FORK_GUIDE](https://github.com/my788525/M365-Copilot2API-FNOS/blob/main/docs/FORK_GUIDE.md)，此处仅列要点：
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `M365_CLEANUP_MODE` | `after_response` | 本地对话索引清理模式（`after_response` / `keep_n` / `max_age`） |
-| `M365_CLEANUP_KEEP_N` | `5` | `keep_n` 模式的保留量 |
-| `M365_CLEANUP_MAX_AGE_HOURS` | `24` | `max_age` 模式的时限 |
+- **OpenAI / Anthropic 双兼容**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/images/generations`
+- **多账号轮询 + 故障自动转移**，账号可网页端导入导出（`accounts.json`）
+- **API Key 管理**：每日 / 总量额度、模型白名单、IP 白名单、auto 模型池
+- **`/chat` 轻量对话端**：流式对话、图片理解与生成、文件分析（CSV / Excel / PDF / 代码）、每用户额度
+- **用量统计、代理池、云端会话清理**
 
-### 工具与推理
+## 客户端对接
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `M365_TOOL_PLANNING_MODE` | `router` | 工具规划模式：`router`（网关路由规划）/ `native`（云端原生规划） |
-| `M365_MAX_TOOL_CALLS_PER_TURN` | `1` | 单轮最多并行工具调用数（有副作用操作自动降为串行） |
-| `M365_MAX_TOOL_ROUNDS` | `16` | 单次请求最大工具轮次 |
-| `M365_CONTEXT_WINDOW` | `128000` | 上下文窗口 |
-| `M365_MAX_OUTPUT_TOKENS` | `16384` | 最大输出 Token |
-| `M365_CHAT_TIMEOUT_SECONDS` | `120` | 聊天超时（秒） |
-| `M365_IMAGE_TIMEOUT_SECONDS` | `150` | 图片处理超时（秒） |
-
-### 代理池与认证
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `M365_PROXY_POOL` | 空 | 代理列表（逗号或换行分隔，支持 http / https / socks5） |
-| `M365_PROXY_INSECURE_TLS` | — | 信任自签代理证书（`1` / `true`） |
-| `M365_PROXY_HEALTH_URL` | 默认探测地址 | 代理健康检查目标 |
-| `M365_BROWSER_CLIENT_ID` / `M365_BROWSER_AUTHORITY` / `M365_BROWSER_REDIRECT_URI` / `M365_BROWSER_SCOPE` | 内置 | 浏览器 PKCE 的 OAuth 配置 |
-| `M365_DEVICE_CLIENT_ID` / `M365_DEVICE_AUTHORITY` / `M365_DEVICE_SCOPE` | 内置 | Device Code 的 OAuth 配置 |
-| `M365_CLIENT_ID` / `M365_AUTHORITY` / `M365_REDIRECT_URI` / `M365_SCOPE` | 内置 | 兼容旧配置；流程专用变量未设置时作为回退 |
-
-### 数据文件
-
-| 变量 | 说明 |
-|------|------|
-| `M365_TOKEN_CACHE` | Token 缓存文件（未设置时落到数据目录） |
-| `M365_SESSION_CACHE` | 会话绑定缓存文件（默认 `sessions.json`） |
-| `M365_CONVERSATION_CACHE` | 本地对话索引（默认 `conversations.json`） |
-| `M365_API_KEYS` | API Key 存储文件 |
-| `M365_USAGE_LOG` | 用量统计日志（默认 `{data_dir}/usage.jsonl`） |
-| `M365_DEBUG_LOG` | 调试日志文件（请求 / 响应元数据） |
-
-## 使用示例
-
-### 基础聊天（OpenAI 格式）
-
-```bash
-curl http://127.0.0.1:4141/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.6-sol",
-    "messages": [{"role": "user", "content": "你好"}]
-  }'
-```
-
-### 流式输出
-
-```bash
-curl http://127.0.0.1:4141/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.6-sol",
-    "messages": [{"role": "user", "content": "1+1=?"}],
-    "stream": true
-  }'
-```
-
-### 显式指定会话（内容键复用 + 增量发送）
-
-携带同一 `X-M365-Session-Id` 的请求会被绑定到同一条云端对话，命中时网关只把新增历史部分发送给上游：
-
-```bash
-curl http://127.0.0.1:4141/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-M365-Session-Id: my-project-session" \
-  -d '{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"继续我们刚才的讨论"}]}'
-```
-
-### 多模态图片输入（OpenAI 格式）
-
-客户端用标准的 OpenAI `image_url` 格式传图即可，网关会自动把图片上传到 M365 的 `UploadFile` 端点，并在 ChatHub 消息里注入文件注解（无需客户端感知上游细节）：
-
-```bash
-# base64 data URL 方式
-curl http://127.0.0.1:4141/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.6-sol",
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "text", "text": "这张图里是什么颜色？"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB..."}}
-      ]
-    }]
-  }'
-```
-
-也可以直接传 https 图片 URL（仅公网地址，带 SSRF 防护；本地图请用 data URL）。Responses 协议的 `input_image` / `input_file` 同样支持。
-
-### Anthropic 格式（Claude Code / Cursor）
-
-```bash
-curl http://127.0.0.1:4141/v1/messages \
-  -H "x-api-key: YOUR_API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.6-sol","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
-```
-
-上游返回的推理内容（ChainOfThought）会映射为 Anthropic `thinking` block，Claude Code 中可正常显示与使用。
-
-## 对接 Claude Code
-
-在 `~/.claude/settings.json` 的 `env` 中指向网关：
+**Claude Code** — `~/.claude/settings.json`：
 
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4141",
+    "ANTHROPIC_BASE_URL": "http://群晖IP:4141",
     "ANTHROPIC_MODEL": "gpt-5.6-sol",
     "ANTHROPIC_API_KEY": "m365_你的密钥"
   }
 }
 ```
 
-其他任何支持 OpenAI / Anthropic `base_url` 配置的客户端（OpenCode、Cursor、Codex 等）同理，把 `BASE_URL` 指向网关即可。
+> 注意系统里若已存在 `ANTHROPIC_API_KEY` 或同时配了 `ANTHROPIC_AUTH_TOKEN`，会触发鉴权告警，**只保留一个**。
 
-> 作者不针对任何第三方 Agent 框架的兼容性提供适配与排查。如有需要，自行适配。
-
-控制台「API Keys」页的「使用 API 密钥」弹窗可直接生成 Claude Code 的 `settings.json` 配置与终端环境变量，复制即可。
-
-> ⚠️ **认证冲突提醒**：如果系统环境变量残留了 `ANTHROPIC_API_KEY`，或同时配置了 `ANTHROPIC_AUTH_TOKEN`，Claude Code 会告警「认证可能不工作」。请二选一：让 `settings.json` 的 `env` 覆盖系统级变量，或删除系统级 `ANTHROPIC_*`。
-
-## 可用模型
-
-网关默认内置模型映射（可在控制台「设置」页增删与调整默认推理级别）：
-
-| 模型 | 默认推理级别 | 说明 |
-|------|-------------|------|
-| `gpt-5.6-sol` | `low` | 默认模型 |
-| `gpt-5.6-terra` | `medium` | 推理折中 |
-| `gpt-5.6-luna` | `medium` | 推理折中 |
-
-- 模型映射把公开模型名翻译成上游 tone；控制台可增删映射、调整默认推理级别。
-- 推理强度还可通过请求内的 `reasoning_effort` 参数调整。
-- M365 订阅会上线的新模型名（如 `gpt-5.2`、`gpt-5.4`、`codex` 系）以实际目录为准，可在控制台配置导入。
-
-## 内容键会话复用原理
-
-多账号场景下，网关会用「内容键（context key）」把请求复用到已有云端对话上，机制对标 DeepSeek 式上下文缓存：**同一个对话上下文只维护一条云端会话，命中时只把增量新消息发给上游**，不仅省去重建上下文的开销，也更贴近多轮工具的体验。核心实现在 `internal/web/session_resolver.go`。
-
-客户端请求到达后，`.Resolve()` 按以下优先级决定重用哪个会话：
-
-1. **显式会话（`X-M365-Session-Id`）**：请求头显式指定的会话 ID 优先级最高，不参与任何身份判定，由调用方主动决定要连接到哪条云端对话。
-2. **内容键前缀命中**：当请求的消息序列与某条已记录会话的历史**完全一致**（按最近 3 条消息计算内容指纹）时，直接复用该会话及其云端对话。此时返回的 `HistoryLen` 表示「云端对话已包含的消息条数」，上层据此只发送 `messages[HistoryLen:]` 增量。
-3. **相似度兜底**：若消息不是严格前缀，但与某条最近活跃（`M365_CONTEXT_TTL_MINUTES` 窗口内）会话的最后消息相似度超过阈值（`M365_CONTEXT_SIMILARITY`，默认 0.6），仍复用该会话（此时增量边界未知，发送全量）。
-4. **兜底新建**：都未命中时，按 `user` 字段 / IP+UA 指纹或轮询绑到合适的账号与轮询逻辑新建会话。
-
-几个特性由此而来：
-
-- **跨 IP / 跨账号复用**：内容指纹作为键全局唯一主键，不关心发起方是谁——换一台机器、换一个 M365 账号，只要对话上下文一致就能接上同一条云端会话。
-- **只发增量**：严格前缀命中时上层只补发新消息，等价于把云端对话当作上下文缓存用。
-- **线程与清理联动**：会话绑定持久化在 `sessions.json`（0600），过期时间由 `M365_SESSION_TTL_MINUTES` 控制；长期无命中的会话会随自动清理按同一窗口（默认 2 小时）被回收。
-
-## 内容自动清理
-
-云端对话被视作「缓存条目」：**会话命中 = 刷新存活时间；空闲 = 过期**。后台循环默认每 30 分钟回收：
-
-- 空闲超过 `M365_AUTO_CLEANUP_MAX_AGE_HOURS`（默认 2 小时）的云端对话；
-- 或超出数量上限 `M365_AUTO_CLEANUP_KEEP_N`（默认 100）的最老对话。
-
-**以下对话永不回收**：白名单对话、有活跃会话绑定正在引用的对话、最近使用过的用户会话。删除云端对话时会联动清理本地索引与会话绑定，杜绝幽灵会话，防止后续请求复用已删除的对话导致串号或报错。详见 `internal/web/auto_cleanup.go`。
-
-## API 端点参考
-
-### 对外兼容端点（`/v1/*`）
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/v1/models` | GET | 模型目录 |
-| `/v1/chat/completions` | POST | 聊天补全（流式 / 工具调用） |
-| `/v1/responses` | POST | OpenAI Responses 协议 |
-| `/v1/messages` | POST | Anthropic Messages（需 `x-api-key` + `anthropic-version`） |
-| `/v1/images/generations` | POST | 图像生成 |
-| `/v1/sessions` | GET / POST | 查询会话绑定 / 按 `session_id` 查询或创建 |
-| `/v1/sessions/{id}` | DELETE | 解除会话绑定 |
-
-### 管理 API（`/api/*`，需管理员登录态）
-
-| 端点 | 说明 |
-|------|------|
-| `/api/admin/login` · `/logout` · `/session` | 管理端登录态 |
-| `/api/admin/change-password` | 修改管理员密码（首次登录强制） |
-| `/api/admin/keys` | API Key 管理（创建 / 撤销 / 回读） |
-| `/api/admin/models` · `/models/test` | 模型目录 / 单模型连通测试（不依赖明文 Key） |
-| `/api/admin/settings` | 运行时设置查看与修改 |
-| `/api/admin/proxy-pool` | 代理池管理 |
-| `/api/accounts` · `/refresh` · `/delete` | 账号管理 |
-| `/api/auth/start` · `status` · `callback` | PKCE 授权流程 |
-| `/api/conversations` · `/api/m365/conversations` | 本地 / 云端对话列表、删除、清理、白名单 |
-| `/api/stats` · `/stats/reset` | 缓存命中统计 |
-| `/api/usage` · `/usage/logs` | 用量统计仪表盘与明细 |
-| `/api/chat` · `/chat/stream` | 控制台内即时对话 |
-| `/api/health` · `/api/version` | 健康检查 / 版本 |
-
-## 错误码与故障转移
-
-所有 `/v1/*` 与 `/api/chat*` 失败均返回 OpenAI 兼容的 JSON 错误体 `{"error":{"message","type","code","param":null}}`（`code` 与 `type` 同值），并附带 `X-M365-*` 诊断头。`type/code` 取值即 OpenAI 标准错误类型，便于 `openai` / `anthropic` SDK 直接识别：
-
-| `error.type` / `error.code` | HTTP | 何时出现 | 客户端应如何处理 |
-|---|---|---|---|
-| `rate_limit_error` | 429 | 上游限流：HTTP 429、`result.value=Throttled`、`meteringInformation.hasAccess=false`、文本限流提示 | 遵守 `Retry-After` 退避；客户端重试时网关会自动切到下一个健康账号 |
-| `image_limit_error` | 429 | 图片配额当日耗尽 | 次日 UTC 0 点后重试；纯文本请求不受影响 |
-| `upstream_content_blocked` | 503 | 内容策略拦截 | 修改提示词或换号重试 |
-| `upstream_error` | 502 | 上游空回复或未知失败 | 换号重试或稍后重试 |
-
-额外响应头：`X-M365-Proxy-Error`（`QUOTA_429 / OVERLOAD_503 / FORBIDDEN_403 / AUTH_EXPIRED_401 / UPSTREAM_STRUCTURED / IMAGE_LIMIT` 等）、`X-M365-RateLimit-Remaining`、`Retry-After` / `X-M365-Retry-After` / `X-M365-RateLimit-Reset`、`X-M365-Global-Circuit`。多账号部署下，`429/401` 在未指定 `AccountID` 且未携带固定会话时会自动故障转移到下一个健康账号（OpenAI / Anthropic / Responses 均生效）。
-
-示例（429）：
-
-```json
-{"error":{"message":"upstream is rate limiting; try again shortly","type":"rate_limit_error","code":"rate_limit_error","param":null}}
-```
-
-## 测试
-
-仓库自带完整单元测试（会话解析、自动清理、工具路由、协议兼容、用量统计等），运行：
-
-```bash
-go test ./...
-```
-
-例如会验证：默认自动清理闲置窗口为 2 小时（`internal/web/auto_cleanup_test.go`）、内容键前缀命中只发送增量（`session_resolver_test.go`）、Responses / Anthropic 协议事件序列等。
-
-## 目录结构
-
-```
-M365-Copilot2API/
-├── cmd/server/            # 入口，HTTP 服务启动
-├── internal/
-│   ├── web/               # HTTP 路由、会话解析器、自动清理、管理 API、用量统计
-│   │   ├── session_resolver.go   # 内容键会话复用（四重指纹）
-│   │   ├── auto_cleanup.go        # 云端对话自动清理
-│   │   ├── usage.go               # usage.jsonl 用量统计
-│   │   └── ...                    # 工具调用、协议转换、代理池、密钥管理等
-│   ├── chathub/           # M365 Copilot ChatHub WebSocket 客户端
-│   ├── auth/              # OAuth / PKCE
-│   ├── mcp/               # MCP 工具网关（SSE / JSON-RPC）
-│   └── outbound/          # HTTP 代理池
-├── web/                   # 管理控制台（纯 HTML / JS 单页）
-├── scripts/               # 运维脚本
-│   ├── e2e_test.py        # 端到端测试
-│   ├── chathub_probe.py   # ChatHub 协议探针
-│   ├── genprobe.py        # 图像生成协议探针（原始帧 dump）
-│   ├── multimodal_probe.py # 多模态图片输入探针（上传 + 注解流程）
-│   ├── test-recorder.ps1  # Windows 测试录制
-│   └── m365-upload-forensic-trace.user.js  # 上传取证脚本
-├── docs/screenshots/      # 界面截图
-├── manage.py              # start / stop / status / logs / err 进程管理
-├── docker-compose.yml · Dockerfile
-└── data/                  # 运行数据（由 M365_DATA_DIR 指定）
-```
-
-## 安全说明
-
-- **默认仅监听内网**：直接运行二进制默认 `M365_LISTEN=127.0.0.1:4141`；对外提供服务务必通过 TLS 终泄反向代理（Nginx / Caddy），并为 SSE 与 WebSocket 开启长连接与 `proxy_buffering off`。
-- **首次登录强制改密**：使用默认密码或引导密码完成首次登录后必须修改管理员密码。
-- **密钥最小暴露**：API Key 控制台创建后即可回读，请妥善保护控制台访问权限。
-- **数据落盘权限**：账号凭据、Token 缓存、会话绑定、API Key 等数据文件以 `0600` 权限写入，数据目录建议 `0700`。请定期备份数据目录。
+**通用 OpenAI 客户端**：Base URL 填 `http://群晖IP:4141/v1`，API Key 填 `m365_...`，模型选 `auto` 或具体型号。
 
 ## 常见问题
 
-**Q1：为什么云端对话越来越多？**
+**安装报「无法修复」或直接失败**
+先在套件中心把处于错误状态的旧套件**卸载**，再装新包。同时确认下载的是完整 SPK（比对 Release 页的 SHA256）。
 
-后台每 30 分钟自动清理一次：回收闲置超过 2 小时（`M365_AUTO_CLEANUP_MAX_AGE_HOURS`，默认 2）或超出数量上限（`M365_AUTO_CLEANUP_KEEP_N`，默认 100）的云端对话；被活跃会话引用、白名单中的对话永不回收。调低这两个值可以清理得更激进；彻底关闭用 `M365_AUTO_CLEANUP=0`（不推荐，云端对话会无限膨胀，可能触发风控）。
+**桌面图标不见了**
+DSM 的机制是套件**启动时**才把 `ui` 目录软链到 `/usr/syno/synoman/webman/3rdparty/`，**停止时移除**。套件停了图标就消失，属正常行为。
 
-**Q2：如何切换 M365 账号？**
+**设备码登录报错 / 无法使用**
+多半是租户侧已阻止设备码流程（见上文）。改用「手动粘贴（备用）」，并在 Entra 应用注册里配好重定向 URI。
 
-不需要切换。多账号场景下网关自动轮询所有可用账号，单账号故障自动转移到下一个。要增加账号，直接在控制台发起新的 PKCE 授权即可。
+**控制台左下角显示 v0.4.0 之类的旧版本号**
+上游 `web/index.html` 的侧边栏页脚是写死的字符串，历史遗留，与实际版本无关。以 `/api/version` 或套件中心显示为准。
 
-**Q3：Claude Code 提示「认证可能不工作」怎么办？**
+**访问不了 4141 端口**
+本包未声明防火墙规则。群晖防火墙默认关闭；若你手动开启过，请自行放行 `4141/tcp`。
 
-通常是系统环境变量残留了 `ANTHROPIC_API_KEY`，或同时配置了 `ANTHROPIC_AUTH_TOKEN` 导致两种认证方式冲突。只保留 `~/.claude/settings.json` 中的 `ANTHROPIC_API_KEY`（settings 会覆盖系统级变量），并删除系统级残留或 `AUTH_TOKEN`。
+## 从源码构建
 
-**Q4：X-M365-Session-Id 是什么？**
+```bash
+git clone https://github.com/kosje/M365-Copilot2API-DSM.git
+cd M365-Copilot2API-DSM
 
-网关默认按内容（上下文前缀 / 相似度）自动复用会话；当你希望在客户端侧显式控制会话与云端对话的对应关系时，携带 `X-M365-Session-Id` 请求头，网关直接绑定到该 ID（本地内容指纹不再参与优先级判定）。
+# go:embed 读的是 internal/web/web/，构建前先同步前端
+cp -f web/*.html internal/web/web/
 
-**Q5：对话出现串号 / 上下文错乱？**
+VER=1.5.2
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -trimpath \
+  -ldflags="-s -w -X m365-copilot2api/internal/web.Version=${VER}" \
+  -o spk/package/bin/m365-copilot2api ./cmd/server
+```
 
-会话绑定在到期后会自动清除。若本地缓存与云端不同步，可在控制台「对话」页手动删除该云端对话，网关会连同本地绑定一起清理重建。
+SPK 为纯静态二进制，用 `tar` 手工组装即可，无需 Synology `pkgscripts-ng` 工具链：`package.tgz` 打包 `bin/` 与 `ui/`，再把 `INFO`、`package.tgz`、`scripts/`、`conf/`、`WIZARD_UIFILES/`、两个图标一起打成**不压缩**的 tar，扩展名改 `.spk`。
 
-## 贡献指南
-
-PRs Welcome！提交前请留意：
-
-1. Fork 仓库并创建独立分支，一个 PR 聚焦一个问题。
-2. 切勿提交任何凭据、cookie、账号缓存、日志或构建产物。
-3. 改动 Go 文件前先 `gofmt -w`，提交前跑完 `go test ./...`、`go vet ./...` 与 `go build ./...`。
-4. 描述行为变化，涉及新逻辑时附上对应测试。
-
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+> **打包自检**：务必确认 `INFO` 里声明的 `dsmuidir` 目录真实存在于 `package.tgz` 内、`ui/config` 的主键与 `dsmappname` 一致、`icon_{0}.png` 模板涉及的 7 个尺寸齐全。声明了却没交付，DSM 会在安装末尾失败并把套件置为损坏状态。
 
 ## 致谢与维护
 
 - **原作者 / 上游项目**：[HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) —— 本仓库的全部核心能力（ChatHub 协议层、Web 控制台、账号体系、会话复用等）均来自上游的杰出工作，敬请前往原作者仓库 star 支持。
-- **增强版 Fork 维护**：[my788525](https://github.com/my788525)，聚焦飞牛 fnOS 私有部署体验与国内 AI 工具适配（详见 [docs/FORK_GUIDE.md](docs/FORK_GUIDE.md) 与 Release 说明）。
+- **增强版 Fork**：[my788525](https://github.com/my788525) —— `/chat` 对话端、账户额度体系、账号导入导出、存储管理等，详见其 [FORK_GUIDE.md](https://github.com/my788525/M365-Copilot2API-FNOS/blob/main/docs/FORK_GUIDE.md)。
+- **群晖 DSM 适配**：[kosje](https://github.com/kosje) —— SPK 打包与上述 DSM 适配改动。
 - 上游合入记录：issue #93 / PR #68 流式截断修复已包含在本分支中。
 
 ## 许可证
@@ -485,3 +202,5 @@ PRs Welcome！提交前请留意：
 **本项目禁止作为付费 API 中继服务使用。** 请勿将本项目用于任何形式的商业 API 转售、付费代理、按量计费服务等。如果你有大量生产级需求，请直接订阅 [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) —— 那才是正途。
 
 这条限制纯粹是为了项目存活。一旦出现商业转售，极易引来法律风险导致项目被下架。我不想看到这个项目 GG，希望大家理解并遵守。
+
+依 AGPL-3.0 第 13 条：若你修改本程序并将其作为网络服务提供给他人使用，必须向这些使用者提供对应源码。仅自己使用不触发该义务。
