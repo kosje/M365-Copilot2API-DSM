@@ -91,20 +91,40 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 		}
 	}
 	l := agentLedger{}
-	seenCall := map[string]int{}
-	seenFailure := map[string]int{}
 	sameLimit := loopSameLimit()
 	repeatLimit := loopRepeatLimit()
+	// Adjacency-aware, progress-aware loop detection. The old logic counted
+	// identical calls globally across the whole history, which aborted long
+	// multi-step agent chains that legitimately re-issue reads/searches/checks.
+	// Now a call only extends a "stuck" run when it is *consecutive* (the
+	// immediately preceding call had the same name+args) AND returns the *same*
+	// result (no progress). A re-read that yields different content breaks the
+	// run instead of triggering a false positive.
+	prevSig := ""
+	consecSame := 0
+	lastResult := map[string]string{}
+	prevFail := ""
+	consecFail := 0
 	for _, id := range order {
 		e := calls[id]
 		l.ToolRounds++
 		sig := e.Name + "\x00" + e.Arguments
-		seenCall[sig]++
-		if seenCall[sig] >= 2 {
+		if sig == prevSig {
+			if e.Result != "" && e.Result == lastResult[sig] {
+				consecSame++
+			} else {
+				consecSame = 1
+			}
+		} else {
+			consecSame = 1
+			prevSig = sig
+		}
+		lastResult[sig] = e.Result
+		if consecSame >= 2 {
 			l.RepeatedCall = true
 			l.RepetitionSignature = sig
 		}
-		if seenCall[sig] >= sameLimit {
+		if consecSame >= sameLimit {
 			l.StuckLoop = true
 		}
 		if e.Result == "" {
@@ -112,15 +132,26 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 		} else {
 			l.Completed = append(l.Completed, e)
 			if e.Failed {
+				// Consecutive identical failures (same name+args+result) signal a
+				// dead-end retry loop. A successful call, or a failure whose result
+				// differs (the situation is changing), resets the run.
 				fs := e.Name + "\x00" + e.Arguments + "\x00" + normalizeFailure(e.Result)
-				seenFailure[fs]++
-				if seenFailure[fs] >= repeatLimit {
+				if fs == prevFail {
+					consecFail++
+				} else {
+					consecFail = 1
+					prevFail = fs
+				}
+				if consecFail >= 2 {
 					l.RepeatedFailure = true
 					l.RepetitionSignature = fs
 				}
-				if seenFailure[fs] >= repeatLimit {
+				if consecFail >= repeatLimit {
 					l.StuckLoop = true
 				}
+			} else {
+				consecFail = 0
+				prevFail = ""
 			}
 		}
 	}

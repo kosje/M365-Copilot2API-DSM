@@ -2739,6 +2739,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			return nil
 		}
 		onReasoning := func(reasoning string) error {
+			if s.settings.get().HideReasoning {
+				return nil
+			}
 			if reasoning = reasoningFilter.Push(reasoning); reasoning != "" {
 				return writeChunk(map[string]any{"reasoning_content": reasoning})
 			}
@@ -3123,7 +3126,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		"role":    "assistant",
 		"content": content,
 	}
-	if res.Reasoning != "" {
+	if res.Reasoning != "" && !s.settings.get().HideReasoning {
 		assistant["reasoning_content"] = res.Reasoning
 	}
 	// 上游 ChatHub 不返回 token 计数，按请求/回复文本本地估算填充

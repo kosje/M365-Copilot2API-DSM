@@ -105,3 +105,48 @@ func TestCompletionGuardRejectsUnsupportedSuccess(t *testing.T) {
 		t.Fatal("honest incomplete response rejected")
 	}
 }
+
+// Non-adjacent identical calls (e.g. re-reading the same file after an edit)
+// must NOT be flagged as a stuck loop, even when they outnumber the threshold.
+func TestAgentLedgerNonAdjacentSameCallsNotStuck(t *testing.T) {
+	var msgs []oaiMsg
+	steps := []struct {
+		id, name, args, res string
+	}{
+		{"c1", "read", `{"f":"a"}`, "v1"},
+		{"c2", "edit", `{"f":"a"}`, "ok"},
+		{"c3", "read", `{"f":"a"}`, "v2"},
+		{"c4", "run", `{"x":1}`, "out1"},
+		{"c5", "read", `{"f":"a"}`, "v3"},
+	}
+	for _, s := range steps {
+		msgs = append(msgs,
+			oaiMsg{Role: "assistant", ToolCalls: []map[string]any{{"id": s.id, "type": "function", "function": map[string]any{"name": s.name, "arguments": s.args}}}},
+			oaiMsg{Role: "tool", ToolCallID: s.id, Content: s.res},
+		)
+	}
+	l := buildAgentLedger(msgs)
+	if l.StuckLoop {
+		t.Fatalf("non-adjacent identical read calls wrongly flagged as stuck: %+v", l)
+	}
+	if l.RepeatedFailure {
+		t.Fatalf("non-adjacent calls must not be a repeated failure: %+v", l)
+	}
+}
+
+// Six consecutive identical calls returning the same result must still trigger
+// a stuck loop (default loopSameLimit is 6).
+func TestAgentLedgerConsecutiveSameCallsStuck(t *testing.T) {
+	var msgs []oaiMsg
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("c%d", i)
+		msgs = append(msgs,
+			oaiMsg{Role: "assistant", ToolCalls: []map[string]any{{"id": id, "type": "function", "function": map[string]any{"name": "poll", "arguments": `{"id":1}`}}}},
+			oaiMsg{Role: "tool", ToolCallID: id, Content: "still pending"},
+		)
+	}
+	l := buildAgentLedger(msgs)
+	if !l.StuckLoop {
+		t.Fatalf("expected stuck loop after 6 consecutive identical calls, got %+v", l)
+	}
+}

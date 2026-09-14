@@ -624,21 +624,29 @@ function mdRender(src){
   const lines=src.split('\n');
   let html='',para=[];
   const closePara=()=>{if(para.length){html+='<p>'+para.map(inline).join('<br>')+'</p>';para=[];}};
-  let i=0;
+  // A single blank line is treated as a soft break (<br>) so short consecutive
+  // lines are not split into many tall paragraphs. Two or more consecutive
+  // blank lines still start a new paragraph.
+  let i=0, blankRun=0;
+  const flushBlank=()=>{
+    if(blankRun>=2){ closePara(); }
+    else if(blankRun===1 && para.length){ para.push(''); }
+    blankRun=0;
+  };
   while(i<lines.length){
     const line=lines[i];
     const ph=line.trim().match(/^\u0001(\d+)\u0001$/);
-    if(ph){closePara();html+=codeBlockHtml(codeBlocks[+ph[1]]);i++;continue;}
+    if(ph){flushBlank();closePara();html+=codeBlockHtml(codeBlocks[+ph[1]]);i++;continue;}
     const h=line.match(/^(#{1,4})\s+(.*)/);
-    if(h){closePara();const lv=Math.min(h[1].length+1,4);html+='<h'+lv+'>'+inline(h[2])+'</h'+lv+'>';i++;continue;}
-    if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)){closePara();html+='<hr>';i++;continue;}
+    if(h){flushBlank();closePara();const lv=Math.min(h[1].length+1,4);html+='<h'+lv+'>'+inline(h[2])+'</h'+lv+'>';i++;continue;}
+    if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)){flushBlank();closePara();html+='<hr>';i++;continue;}
     if(/^\s*>\s?/.test(line)){
-      closePara();const q=[];
+      flushBlank();closePara();const q=[];
       while(i<lines.length&&/^\s*>\s?/.test(lines[i])){q.push(lines[i].replace(/^\s*>\s?/,''));i++;}
       html+='<blockquote>'+q.map(inline).join('<br>')+'</blockquote>';continue;
     }
     if(/^\s*\|.*\|\s*$/.test(line)&&i+1<lines.length&&/^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1])&&lines[i+1].includes('-')){
-      closePara();
+      flushBlank();closePara();
       const parseRow=l=>l.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
       const head=parseRow(line);i+=2;
       const rows=[];
@@ -648,8 +656,9 @@ function mdRender(src){
       continue;
     }
     const lm=line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)/);
-    if(lm){closePara();const res=parseList(lines,i,lm[1].length);html+=res.html;i=res.i;continue;}
-    if(!line.trim()){closePara();i++;continue;}
+    if(lm){flushBlank();closePara();const res=parseList(lines,i,lm[1].length);html+=res.html;i=res.i;continue;}
+    if(!line.trim()){blankRun++;i++;continue;}
+    flushBlank();
     para.push(line);i++;
   }
   closePara();

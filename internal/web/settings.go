@@ -113,8 +113,13 @@ type runtimeSettings struct {
 	// failures before the agent ledger flags a stuck loop (hard stop) or a
 	// repeated failure (hard stop). Raised from the old hardcoded 2/3 so that
 	// long multi-step agent tasks are not aborted prematurely.
-	LoopSameLimit   int `json:"loopSameLimit,omitempty"`   // identical calls before StuckLoop stop (default 3)
-	LoopRepeatLimit int `json:"loopRepeatLimit,omitempty"` // identical failures before RepeatedFailure stop (default 5)
+	LoopSameLimit   int `json:"loopSameLimit,omitempty"`   // consecutive identical calls (same result) before StuckLoop stop (default 6)
+	LoopRepeatLimit int `json:"loopRepeatLimit,omitempty"` // consecutive identical failures before RepeatedFailure stop (default 5)
+	// HideReasoning suppresses the reasoning_content / thinking stream from the
+	// OpenAI/Anthropic response so clients do not render a tall, fragmented
+	// reasoning panel. The upstream call still runs; only the client-visible
+	// reasoning is dropped. Default false (reasoning is forwarded as before).
+	HideReasoning bool `json:"hideReasoning,omitempty"`
 }
 
 type settingsStore struct {
@@ -172,8 +177,9 @@ func defaultRuntimeSettings() runtimeSettings {
 		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
 		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
 		AutoCompactMinTokens:       envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
-		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 3),
+		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 6),
 		LoopRepeatLimit:            envInt("M365_LOOP_REPEAT_LIMIT", 5),
+		HideReasoning:              os.Getenv("M365_HIDE_REASONING") == "true",
 	}
 }
 func settingsPath() string {
