@@ -188,11 +188,11 @@ type Server struct {
 	settings             *settingsStore
 	responseMu           sync.Mutex
 	responseMessages     map[string]map[string]*RespNode
-		usage                *usageLog
-		generatedImages      map[string]generatedImage
-		convCache            *conversationCache
-		chatUI               *chatUIStore
-		lastHealthyAccount   string
+	usage                *usageLog
+	generatedImages      map[string]generatedImage
+	convCache            *conversationCache
+	chatUI               *chatUIStore
+	lastHealthyAccount   string
 	// File proxy: Microsoft 365 Copilot generated files (PDF/Word/Excel/PPTX/
 	// ZIP/py/etc.) are hosted in the ephemeral asyncgw/AMS store and are NOT
 	// directly downloadable via any bearer token (verified 404 for every
@@ -1235,8 +1235,8 @@ func (s *Server) startPKCE(w http.ResponseWriter, r *http.Request) {
 		note = "Manual flow: after login, copy the final URL/code from the address bar into /api/auth/callback."
 	}
 	jsonOut(w, map[string]any{
-		"status":     "pkce_ready",
-		"state":      state,
+		"status": "pkce_ready",
+		"state":  state,
 		"url": auth.AuthorizationURL(
 			auth.AuthorizeEndpoint(),
 			auth.ClientID(),
@@ -2255,7 +2255,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
 					return
 				}
-				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID, body.User)
+				// OpenAI's `user` field is an end-user identifier, not an M365
+				// account selector. Only accountId may pin image generation to an
+				// account; otherwise retain normal account rotation/failover.
+				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID)
 				if ierr == nil && len(imgs) > 0 {
 					var sb strings.Builder
 					sb.WriteString("已为你生成图片：\n\n")
@@ -2324,22 +2327,22 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			if resolved.HistoryLen > 0 && resolved.HistoryLen < len(body.Messages) {
 				incPrompt, incAtt := flattenPromptMessages(body.Messages[resolved.HistoryLen:], nil)
 				incPrompt = strings.TrimSpace(incPrompt)
-			if incPrompt != "" {
-				answerPrompt = incPrompt
-				body.Attachments = incAtt
+				if incPrompt != "" {
+					answerPrompt = incPrompt
+					body.Attachments = incAtt
+				}
 			}
 		}
-	}
-	// Ground the model on the caller's real workspace. When the caller uses a
-	// local coding client (WorkBuddy/Trae) the conversation carries Windows
-	// paths like D:\work\GitHub\Insurtool; tell the upstream model those files
-	// are on the local machine and directly usable so it never hallucinates a
-	// /mnt/data sandbox. Only injected when the caller actually passed tools.
-	if len(body.Tools) > 0 {
-		if g := workspaceGrounding(prompt); g != "" {
-			answerPrompt += "\n\n" + g
+		// Ground the model on the caller's real workspace. When the caller uses a
+		// local coding client (WorkBuddy/Trae) the conversation carries Windows
+		// paths like D:\work\GitHub\Insurtool; tell the upstream model those files
+		// are on the local machine and directly usable so it never hallucinates a
+		// /mnt/data sandbox. Only injected when the caller actually passed tools.
+		if len(body.Tools) > 0 {
+			if g := workspaceGrounding(prompt); g != "" {
+				answerPrompt += "\n\n" + g
+			}
 		}
-	}
 	}
 	accountID := body.AccountID
 	acc, err := s.resolveAccount(accountID)
@@ -2645,15 +2648,15 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	// Record the finalized M365 conversation context so generated-file retrieval
-	// can continue the exact session that produced the file.
-	fpAccID = acc.ID
-	fpConv = res.ConversationID
-	fpSess = res.SessionID
-	fpAccount = chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}
+		// Record the finalized M365 conversation context so generated-file retrieval
+		// can continue the exact session that produced the file.
+		fpAccID = acc.ID
+		fpConv = res.ConversationID
+		fpSess = res.SessionID
+		fpAccount = chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}
 
-	if err != nil {
-		log.Printf("[req-trace] id=%s stage=stream_error err=%v", requestID, err)
+		if err != nil {
+			log.Printf("[req-trace] id=%s stage=stream_error err=%v", requestID, err)
 			if errors.Is(err, chathub.ErrImageLimit) && s.accountPool != nil {
 				s.accountPool.MarkImageLimited(acc.ID)
 			}
@@ -2736,20 +2739,20 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				s.userSessions.Put(tenantFromRequest(r), body.User, res.ConversationID, res.SessionID, acc.ID)
 			}
 			s.bindConversation(acc, &body, r, res, answerPrompt, startedAt)
-		s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
-		return
-	}
-	// No tool call was extracted. If nothing was streamed to the client yet
-	// (e.g. the whole answer arrived without incremental text events, or was
-	// withheld behind a tool-candidate fence that turned out not to be a tool
-	// call), flush the buffered assistant text now. Otherwise the client sees an
-	// empty or truncated assistant message. (See issue #93 / PR #68.)
-	if first && text.Len() > 0 {
-		if ferr := emitText(text.String()); ferr != nil {
-			log.Printf("[req-trace] id=%s stage=flush_text err=%v", requestID, ferr)
+			s.storeConvCache(acc.ID, convCacheModel, res, tone, body.Messages, convReused)
+			return
 		}
-	}
-	finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+		// No tool call was extracted. If nothing was streamed to the client yet
+		// (e.g. the whole answer arrived without incremental text events, or was
+		// withheld behind a tool-candidate fence that turned out not to be a tool
+		// call), flush the buffered assistant text now. Otherwise the client sees an
+		// empty or truncated assistant message. (See issue #93 / PR #68.)
+		if first && text.Len() > 0 {
+			if ferr := emitText(text.String()); ferr != nil {
+				log.Printf("[req-trace] id=%s stage=flush_text err=%v", requestID, ferr)
+			}
+		}
+		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
 		if res.Throttling != nil {
 			finishChunk["x_m365_throttling"] = res.Throttling
 		}

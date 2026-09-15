@@ -702,7 +702,7 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 // upstream GPT Image 2 call, download/store) and returns served image URLs
 // suitable for inline embedding in a chat completion. Used by the chat-endpoint
 // image-intent router so callers do not need a separate image endpoint.
-func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, size string, attachments []chathub.Attachment, accountID, user string) ([]string, string, error) {
+func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, size string, attachments []chathub.Attachment, accountID string) ([]string, string, error) {
 	if n <= 0 {
 		n = 1
 	}
@@ -710,7 +710,7 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 		size = "1024x1024"
 	}
 	prompt := fmt.Sprintf("Generate an image with GPT Image 2. Size: %s. Description: %s. Return the image URL directly.", size, userPrompt)
-	explicit := firstNonEmpty(accountID, user) != ""
+	explicit := strings.TrimSpace(accountID) != ""
 	var res chathub.Result
 	found := false
 	prevID := ""
@@ -720,7 +720,7 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 		var acc auth.AccountToken
 		var err error
 		if attempt == 0 {
-			acc, err = s.resolveAccount(firstNonEmpty(accountID, user))
+			acc, err = s.resolveAccount(accountID)
 			if err == nil && !explicit && !s.accountPool.ImageGenAvailable(acc.ID) {
 				if next, nerr := s.nextImageGenAccount(acc.ID); nerr == nil {
 					acc = next
@@ -820,15 +820,27 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 			urls = append(urls, sourceURL)
 			continue
 		}
-		designerToken, derr := s.designerAccessToken(successAcc)
-		if derr != nil {
-			urls = append(urls, sourceURL)
-			continue
+		// The normal M365 access token works for some Designer URLs while the
+		// dedicated Designer scope works for others. Try both, matching the
+		// proven chat-image download path, so external clients receive a stable
+		// local /v1/images/files URL instead of an upstream URL they cannot open.
+		b64, contentType, derr := downloadImageAsBase64WithToken(sourceURL, successAcc.AccessToken)
+		var imageData []byte
+		if derr == nil {
+			imageData, derr = base64.StdEncoding.DecodeString(b64)
 		}
-		dlCtx, dlCancel := context.WithTimeout(r.Context(), dlTimeout)
-		imageData, contentType, derr := downloadDesignerImage(dlCtx, sourceURL, designerToken)
-		dlCancel()
-		if derr != nil {
+		if derr != nil || len(imageData) == 0 {
+			designerToken, tokenErr := s.designerAccessToken(successAcc)
+			if tokenErr == nil {
+				dlCtx, dlCancel := context.WithTimeout(r.Context(), dlTimeout)
+				imageData, contentType, derr = downloadDesignerImage(dlCtx, sourceURL, designerToken)
+				dlCancel()
+			} else {
+				derr = tokenErr
+			}
+		}
+		if derr != nil || len(imageData) == 0 {
+			log.Printf("[image-route-download] err=%v (fallback to upstream URL)", derr)
 			urls = append(urls, sourceURL)
 			continue
 		}
