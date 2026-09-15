@@ -51,12 +51,20 @@ type imageGenerationRequest struct {
 // 与 nextHealthyAccount 的区别：额外检查 ImageGenAvailable（画图每日上限冷却），
 // 避免把请求反复打到已耗尽画图配额的账号上。
 func (s *Server) nextImageGenAccount(avoidID string) (auth.AccountToken, error) {
+	seen := map[string]bool{}
+	if avoidID != "" {
+		seen[avoidID] = true
+	}
+	return s.nextUntriedImageGenAccount(seen)
+}
+
+func (s *Server) nextUntriedImageGenAccount(seen map[string]bool) (auth.AccountToken, error) {
 	for i := 0; i < maxAccountProbe; i++ {
 		acc, ok := s.tokens.Next()
 		if !ok {
 			return auth.AccountToken{}, fmt.Errorf("no accounts; login first")
 		}
-		if avoidID != "" && acc.ID == avoidID {
+		if seen[acc.ID] {
 			continue
 		}
 		if !s.accountAvailable(acc.ID) {
@@ -116,9 +124,9 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 	explicit := firstNonEmpty(b.AccountID, b.User) != ""
 	var res chathub.Result
 	found := false
-	prevID := ""
 	var successAcc auth.AccountToken
 	var lastErr error
+	tried := map[string]bool{}
 	for attempt := 0; attempt < maxAccountProbe; attempt++ {
 		var acc auth.AccountToken
 		var err error
@@ -132,7 +140,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			acc, err = s.nextImageGenAccount(prevID)
+			acc, err = s.nextUntriedImageGenAccount(tried)
 		}
 		if err != nil {
 			if attempt == 0 {
@@ -144,7 +152,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
-		prevID = acc.ID
+		tried[acc.ID] = true
 		if acc.OID == "" || acc.TID == "" {
 			acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
 		}
@@ -165,8 +173,8 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 				// 后续画图请求选号时直接跳过它。
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
 			}
-			limited := errors.Is(err, chathub.ErrImageLimit) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests
-			if explicit || !limited {
+			retryable := errors.Is(err, chathub.ErrImageLimit) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
+			if explicit || !retryable {
 				writeUpstreamError(w, err)
 				return
 			}
@@ -720,9 +728,9 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 	explicit := strings.TrimSpace(accountID) != ""
 	var res chathub.Result
 	found := false
-	prevID := ""
 	var successAcc auth.AccountToken
 	var lastErr error
+	tried := map[string]bool{}
 	for attempt := 0; attempt < maxAccountProbe; attempt++ {
 		if err := totalCtx.Err(); err != nil {
 			return nil, "", chatImageContextError(err, totalTimeout)
@@ -737,7 +745,7 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 				}
 			}
 		} else {
-			acc, err = s.nextImageGenAccount(prevID)
+			acc, err = s.nextUntriedImageGenAccount(tried)
 		}
 		if err != nil {
 			if attempt == 0 {
@@ -748,7 +756,7 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 			}
 			break
 		}
-		prevID = acc.ID
+		tried[acc.ID] = true
 		if acc.OID == "" || acc.TID == "" {
 			acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
 		}
@@ -786,10 +794,11 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 			if errors.Is(err, chathub.ErrImageLimit) {
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
 			}
-			limited := errors.Is(err, chathub.ErrImageLimit) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests
-			if explicit || !limited {
+			retryable := errors.Is(err, chathub.ErrImageLimit) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
+			if explicit || !retryable {
 				return nil, "", err
 			}
+			log.Printf("[image-route] account=%s retryable failure=%s; rotating", acc.ID, ClassifyError(err))
 			continue
 		}
 		if len(res.Images) == 0 {
