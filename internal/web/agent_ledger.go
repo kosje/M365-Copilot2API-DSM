@@ -309,6 +309,18 @@ func completionEvidenceAllows(answer string, l agentLedger) bool {
 	}
 	return true
 }
+
+func guardCompletionEvidence(answer string, l agentLedger, planningMode string, hasTools bool) string {
+	// Agentic clients own the native tool loop and decide when their task is
+	// complete. Applying the gateway's legacy router guard to those responses
+	// can replace a valid final answer merely because the request advertised
+	// tools, even when no tool call was needed in the final turn.
+	if !hasTools || planningMode == "native" || completionEvidenceAllows(answer, l) {
+		return answer
+	}
+	return "I cannot confirm completion because no matching tool results were returned. No external action has been verified."
+}
+
 func completedCallIDs(l agentLedger) []string {
 	o := make([]string, 0, len(l.Completed))
 	for _, e := range l.Completed {

@@ -106,6 +106,21 @@ func TestCompletionGuardRejectsUnsupportedSuccess(t *testing.T) {
 	}
 }
 
+func TestCompletionGuardDoesNotOverwriteNativeAgentAnswer(t *testing.T) {
+	answer := "Implemented the requested change and verified the build."
+	emptyLedger := buildAgentLedger(nil)
+
+	if got := guardCompletionEvidence(answer, emptyLedger, "native", true); got != answer {
+		t.Fatalf("native agent answer was overwritten: %q", got)
+	}
+	if got := guardCompletionEvidence(answer, emptyLedger, "router", true); got == answer {
+		t.Fatal("legacy router answer without evidence was not guarded")
+	}
+	if got := guardCompletionEvidence(answer, emptyLedger, "router", false); got != answer {
+		t.Fatalf("answer without caller tools was overwritten: %q", got)
+	}
+}
+
 // Non-adjacent identical calls (e.g. re-reading the same file after an edit)
 // must NOT be flagged as a stuck loop, even when they outnumber the threshold.
 func TestAgentLedgerNonAdjacentSameCallsNotStuck(t *testing.T) {
