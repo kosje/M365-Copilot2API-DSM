@@ -3083,7 +3083,12 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			s.accountPool.MarkImageLimited(acc.ID)
 		}
 	}
-	if len(toolMaps) > 0 && !completionEvidenceAllows(res.Text, ledger) {
+	// Agentic clients (WorkBuddy / Trae) own the agent loop and decide when a
+	// task is done; never overwrite their final answer with a synthetic
+	// "cannot confirm" message. The completion-evidence guard is only meant for
+	// the legacy router flow where the gateway babysits tool usage. When the
+	// caller supplies its own tools we run native, so skip the guard.
+	if len(toolMaps) > 0 && planningMode != "native" && !completionEvidenceAllows(res.Text, ledger) {
 		res.Text = "I cannot confirm completion because no matching tool results were returned. No external action has been verified."
 	}
 	res.Text = sanitizePublicAssistantTextForModel(res.Text, body.Model)
