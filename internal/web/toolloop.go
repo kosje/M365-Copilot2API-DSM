@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"m365-copilot2api/internal/chathub"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -206,11 +207,19 @@ var sandboxHallucinationPatterns = []string{
 	"code interpreter",
 	"python sandbox",
 	"sandbox environment",
+	"sandbox 环境",
+	"code interpreter 环境",
 	"/mnt/data",
 	"linux container",
 	"linux sandbox",
 	"cloud sandbox",
+	"云沙箱",
+	"云容器",
+	"container directory",
+	"容器内目录",
+	"容器目录",
 	"execution environment has changed",
+	"执行环境已经切换",
 	"cannot access the Windows path",
 	"only provides Linux",
 	"只提供 Linux 容器",
@@ -223,10 +232,151 @@ var sandboxHallucinationPatterns = []string{
 	"cannot run commands on",
 	"don't have command execution",
 	"无法执行命令",
-	"执行环境已经切换",
+	"当前运行环境里没有",
+	"运行环境只有",
+	"执行环境只有",
+	"无法直接访问你的",
+	"无法访问你的 D:",
 	"I don't have SSH access tools",
 	"I don't have any tools",
 	"none of which can reach",
+}
+
+// windowsPathRe matches absolute Windows paths (drive letter + backslash tree).
+var windowsPathRe = regexp.MustCompile(`[A-Za-z]:\\[^\s"<>|*?]+`)
+
+// workspaceRoot collapses a Windows path to a stable up-to-3-level root so that
+// "D:\work\GitHub\Insurtool\file.ts" becomes "D:\work\GitHub\Insurtool".
+func workspaceRoot(p string) string {
+	p = strings.TrimRight(p, `\`)
+	parts := strings.Split(p, `\`)
+	if len(parts) <= 1 {
+		return p
+	}
+	if len(parts) > 4 {
+		parts = parts[:4]
+	}
+	return strings.Join(parts, `\`)
+}
+
+// workspaceGrounding scans a flattened prompt for Windows absolute paths the
+// caller supplied (e.g. a WorkBuddy workspace like D:\work\GitHub\Insurtool) and
+// returns a grounding paragraph asserting those files live on the local machine
+// and are directly usable by the model's tools. Returns "" when no path is found.
+func workspaceGrounding(text string) string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, m := range windowsPathRe.FindAllString(text, -1) {
+		root := workspaceRoot(m)
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local Windows machine. Your Read/Write/Edit/Bash tools operate on them DIRECTLY — there is no separate sandbox, no Linux container, and no /mnt/data. Do NOT claim you cannot access them or can only see container directories. Use the exact paths with your tools.\n")
+	for i, r := range roots {
+		if i >= 6 {
+			break
+		}
+		b.WriteString("- " + r + "\n")
+	}
+	return b.String()
+}
+
+// toolNames returns the function names declared in the caller's tool list.
+func toolNames(tools []chathub.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		var f struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(t.Function, &f) == nil && f.Name != "" {
+			names = append(names, f.Name)
+		}
+	}
+	return names
+}
+
+// imageGenIntentPatterns: phrases that clearly ask the model to generate or
+// draw an image. Used to auto-route a chat request to the image pipeline so the
+// caller does not need a separate image endpoint.
+var imageGenIntentPatterns = []string{
+	"生成图片", "生成一张图", "生成一张", "生成插画", "生成海报", "生成logo", "生成 logo",
+	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图",
+	"生图", "出图", "配图", "配张图", "插图", "插画", "海报", "头像", "封面图",
+	"帮我画", "给我画", "创作一张图", "设计一张图", "文生图", "文字生成图片",
+	"做个图", "来张图", "一张图", "ai绘画", "ai 绘画",
+	"generate an image", "generate image", "draw an image", "create an image",
+	"make an image", "text to image", "generate a picture", "an image of",
+	"paint a picture", "generate me an", "ai image",
+}
+
+// codingIntentPatterns: phrases that signal the user wants code/editing work
+// rather than an image. When present we must NOT auto-route to image gen,
+// otherwise a coding request containing the word "图" would be hijacked.
+var codingIntentPatterns = []string{
+	"修改", "编辑", "改一下", "读取", "读一下", "新建文件", "创建文件", "重构",
+	"实现", "函数", "方法", "类 ", "代码", "code", "bug", "编译", "运行", "终端",
+	"命令行", "bash", "修复", "调试", "测试", "pytest", "npm ", "go build", "git ",
+	"脚本", "部署",
+}
+
+// isImageGenIntent reports whether text clearly asks to generate/draw an image.
+func isImageGenIntent(text string) bool {
+	t := strings.ToLower(text)
+	for _, p := range imageGenIntentPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// codingIntent reports whether text is about code/editing work.
+func codingIntent(text string) bool {
+	t := strings.ToLower(text)
+	for _, p := range codingIntentPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastUserContent returns the content of the most recent user-role message.
+func lastUserContent(messages []oaiMsg) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return contentToString(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// lastMessageRole returns the role of the final message in the conversation.
+func lastMessageRole(messages []oaiMsg) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	return messages[len(messages)-1].Role
+}
+
+// sanitizeImageAlt makes text safe to embed inside a markdown image alt.
+func sanitizeImageAlt(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "]", "")
+	s = strings.ReplaceAll(s, "(", "")
+	s = strings.ReplaceAll(s, ")", "")
+	if len(s) > 60 {
+		s = s[:60]
+	}
+	return s
 }
 
 func isSandboxHallucination(text string) bool {
