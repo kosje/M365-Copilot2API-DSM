@@ -2322,9 +2322,16 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// route to the image pipeline and return the result inline in the chat
 	// completion — so the caller does not need a separate image endpoint.
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
-	if responseFormat == nil && os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
+	forceImageModel := strings.EqualFold(strings.TrimSpace(body.Model), "gpt-image-2")
+	if responseFormat == nil && (forceImageModel || os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true") {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
-			if ut := lastUserContent(body.Messages); shouldRouteChatImage(ut) || (hasImageAttachment(body.Attachments) && isImageEditIntent(ut)) {
+			ut := lastUserContent(body.Messages)
+			// Selecting gpt-image-2 is an explicit protocol-level request for
+			// image generation. Do not send it through the normal ChatHub text
+			// path: that path can return a plausible "image generated" sentence
+			// without any image resource, which is what several CLI clients show.
+			// For ordinary models, retain the intent-based routing behavior.
+			if shouldUseChatImageRoute(body.Model, ut, body.Attachments) {
 				if !requestModelAllowed(r, "gpt-image-2") {
 					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
 					return

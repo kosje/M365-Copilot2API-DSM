@@ -397,6 +397,17 @@ func shouldRouteChatImage(text string) bool {
 	return isImageGenIntent(t)
 }
 
+// shouldUseChatImageRoute centralizes chat-endpoint image routing. Selecting
+// gpt-image-2 is an explicit image-generation request and must not depend on
+// natural-language keyword detection; ordinary chat models remain opt-in via
+// a clear generation/editing intent.
+func shouldUseChatImageRoute(model, text string, attachments []chathub.Attachment) bool {
+	if strings.EqualFold(strings.TrimSpace(model), "gpt-image-2") {
+		return true
+	}
+	return shouldRouteChatImage(text) || (hasImageAttachment(attachments) && isImageEditIntent(text))
+}
+
 func isImageEditIntent(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	for _, p := range imageGenNonActionPatterns {

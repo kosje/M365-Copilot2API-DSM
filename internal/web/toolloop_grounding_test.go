@@ -78,6 +78,21 @@ func TestShouldRouteChatImageAvoidsFalsePositives(t *testing.T) {
 	}
 }
 
+func TestExplicitImageModelAlwaysUsesImageRoute(t *testing.T) {
+	for _, text := range []string{
+		"东方仙侠女主海报",
+		"请处理这个请求",
+		"这个接口是否支持生图？",
+	} {
+		if !shouldUseChatImageRoute("gpt-image-2", text, nil) {
+			t.Fatalf("explicit image model did not route prompt %q", text)
+		}
+	}
+	if shouldUseChatImageRoute("gpt-5.6-sol", "东方仙侠女主海报", nil) {
+		t.Fatal("ordinary model routed a noun-only prompt without generation intent")
+	}
+}
+
 func TestImageEditIntentRequiresAnEditAction(t *testing.T) {
 	cases := map[string]bool{
 		"把这张图改成水彩风格":            true,
