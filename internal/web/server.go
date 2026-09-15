@@ -994,6 +994,16 @@ func writeChatImageRouteError(w http.ResponseWriter, stream bool, err error) {
 	_ = sw.data("[DONE]")
 }
 
+func requestContextEnded(r *http.Request, err error) bool {
+	if r.Context().Err() != nil {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || ClassifyError(err) == CategoryClientCanceled
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	list := s.tokens.List()
 	throttlingSummary := map[string]any{}
@@ -2332,6 +2342,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				// account; otherwise retain normal account rotation/failover.
 				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID)
 				stopKeepalive()
+				if requestContextEnded(r, ierr) {
+					log.Printf("[image-route] client disconnected; stopping image request")
+					return
+				}
 				if ierr == nil && len(imgs) > 0 {
 					var sb strings.Builder
 					sb.WriteString("已为你生成图片：\n\n")

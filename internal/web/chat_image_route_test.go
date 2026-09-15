@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -26,6 +27,18 @@ func TestWriteChatCompletionTextNonStreamingUsage(t *testing.T) {
 	content := choices[0].(map[string]any)["message"].(map[string]any)["content"].(string)
 	if !strings.Contains(content, "![image]") {
 		t.Fatalf("image markdown missing: %q", content)
+	}
+}
+
+func TestRequestContextEnded(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	if requestContextEnded(req, nil) {
+		t.Fatal("live request was classified as ended")
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	if !requestContextEnded(req.WithContext(ctx), nil) {
+		t.Fatal("canceled request context was not detected")
 	}
 }
 
