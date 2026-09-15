@@ -2574,6 +2574,18 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Tool turns never use the incremental upstream streaming path. The
+	// upstream streaming mode refuses tool-heavy prompts far more often than
+	// the non-streaming one (A/B on the same payload: 4/4 refusals streamed
+	// vs 2/2 Write tool_calls non-streamed), and the artifact-eject retry
+	// only exists in the non-streaming pipeline. Downgrade to the non-
+	// streaming upstream call and synthesize SSE at the writer level
+	// (clientStream below) so the client-facing stream contract is kept.
+	clientStream := body.Stream
+	if clientStream && len(toolMaps) > 0 {
+		body.Stream = false
+		log.Printf("[req-trace] id=%s stage=stream_downgrade tools=%d reason=upstream-stream-mode-refusals", requestID, len(toolMaps))
+	}
 	if body.Stream {
 		answerReq := buildAnswerRequest(answerPrompt, tone, body, ledger, planningMode, mcpServerURL, s.settings.get(), s.featureFlags(), localeInfo, body.Metadata != nil && body.Metadata.CopilotTempSession)
 		answerPrompt = answerReq.Text
@@ -2659,7 +2671,13 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 			text.WriteString(ev.Text)
-			return emitText(ev.Text)
+			if len(toolMaps) == 0 {
+				// Pure chat: forward deltas live. Tool turns are buffered so the
+				// artifact-eject retry below can replace the whole answer before
+				// the client ever sees a downloadable-artifact link.
+				return emitText(ev.Text)
+			}
+			return nil
 		})
 		if err != nil && text.Len() == 0 && len(streamedTools) == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
@@ -2675,6 +2693,11 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				if body.ConversationID == resolvedConversationID {
 					failoverReq.ConversationID = ""
 					failoverReq.SessionID = ""
+				}
+				if len(toolMaps) > 0 {
+					// Buffered tool turn: drop the failed attempt's text so the
+					// retried stream cannot concatenate two partial answers.
+					text.Reset()
 				}
 				ctx2, cancel2 := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ChatTimeoutSeconds)*time.Second)
 				defer cancel2()
@@ -2698,7 +2721,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 						return nil
 					}
 					text.WriteString(ev.Text)
-					return emitText(ev.Text)
+					if len(toolMaps) == 0 {
+						return emitText(ev.Text)
+					}
+					return nil
 				})
 				if err2 == nil {
 					if errors.Is(originalErr, chathub.ErrImageLimit) && s.accountPool != nil {
@@ -2763,9 +2789,49 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		if text.Len() == 0 && strings.TrimSpace(res.Text) != "" {
 			text.WriteString(res.Text)
 		}
+		// Tool turns were fully buffered above, so nothing reached the client
+		// yet: run the same artifact-eject retry the non-streaming path has.
+		// Without this, a streamed tool turn that "helpfully" produced a
+		// downloadable cloud document went straight through to the caller.
+		if len(toolMaps) > 0 && (isSandboxHallucination(text.String()) || isArtifactFallback(text.String())) {
+			for attempt := 0; attempt < 3 && (isSandboxHallucination(text.String()) || isArtifactFallback(text.String())); attempt++ {
+				if isArtifactFallback(text.String()) {
+					log.Printf("[artifact-eject] id=%s streamed tool turn fell back to a downloadable artifact, positive retry attempt %d", requestID, attempt+1)
+				} else {
+					log.Printf("[sandbox-eject] id=%s streamed tool turn hallucinated a sandbox environment, positive retry attempt %d", requestID, attempt+1)
+				}
+				correction := "ACT, DO NOT DESCRIBE. The caller's request involves files and commands on the caller's local machine. Your tools run directly on that machine and accept the exact paths mentioned in the request. Choose the most appropriate tool and call it NOW with the exact path. Do not describe your runtime environment, do not report which directories you can see, and do not summarize limitations — just make the tool call. Creating or linking a cloud/downloadable document is FORBIDDEN: the caller cannot fetch files from links; only a tool call reaches their machine."
+				if g := workspaceGrounding(prompt); g != "" {
+					correction += "\n\n" + g
+				}
+				correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + "."
+				correction += "\n\nUser request:\n" + prompt
+				res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
+				if err2 != nil {
+					log.Printf("[artifact-eject] id=%s streaming retry attempt %d upstream error: %v", requestID, attempt+1, err2)
+					break
+				}
+				res = res2
+				text.Reset()
+				text.WriteString(res2.Text)
+			}
+			// Backstop: never deliver a fake "file created" plus a dead
+			// download link even if every retry failed.
+			if isArtifactFallback(text.String()) {
+				log.Printf("[artifact-eject] id=%s streamed tool turn still returned an artifact after retries; stripping link", requestID)
+				stripped := stripArtifactLinks(text.String())
+				text.Reset()
+				text.WriteString(stripped + "\n\n（模型仍尝试生成在线文档链接，已剥离。请重试一次；若再次出现，请检查客户端是否已授予本地文件工具权限。）")
+			}
+		}
 		rawCalls := streamedTools
 		if len(rawCalls) == 0 {
 			rawCalls = fencedToolCalls(text.String(), toolMaps, body.ToolChoice)
+		}
+		if len(rawCalls) == 0 && len(res.Events) > 0 {
+			// A retry via chatWithAccount returns native tool events instead of
+			// streamed ones; surface them the same way.
+			rawCalls = nativeToolCalls(res.Events, body.Tools)
 		}
 		calls, rejected := validateCalls("stream", rawCalls)
 		toolResult := chathub.Result{Text: text.String()}
@@ -3295,7 +3361,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res)
+			_ = writeToolResponse(w, id, model, clientStream, body.shouldSendStreamUsage(), calls, res)
 			return
 		}
 	}
@@ -3307,7 +3373,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			if body.ParallelToolCalls != nil && !*body.ParallelToolCalls && len(calls) > 1 {
 				calls = calls[:1]
 			}
-			_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, res)
+			_ = writeToolResponse(w, id, model, clientStream, body.shouldSendStreamUsage(), calls, res)
 			return
 		}
 	}
@@ -3331,7 +3397,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 					calls[i].ID = scopedCallID(calls[i].Name, string(calls[i].Arguments), i, scope)
 				}
 				calls = limitToolCalls(calls, adaptiveToolCallLimit(calls, configuredToolCallLimit(s.settings)))
-				_ = writeToolResponse(w, id, model, body.Stream, body.shouldSendStreamUsage(), calls, routeRes)
+				_ = writeToolResponse(w, id, model, clientStream, body.shouldSendStreamUsage(), calls, routeRes)
 				return
 			}
 		}
@@ -3359,7 +3425,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	log.Printf("[debug] res.Text bytes=%d content=%q", len(res.Text), res.Text)
 	created := time.Now().Unix()
 
-	if body.Stream {
+	// clientStream (not body.Stream): stream-downgraded tool turns must still
+	// answer with synthesized SSE chunks.
+	if clientStream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
