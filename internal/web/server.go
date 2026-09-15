@@ -2342,6 +2342,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
 			if ut := lastUserContent(body.Messages); ut != "" && isImageGenIntent(ut) && !codingIntent(ut) {
+				imgStart := time.Now()
 				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID, body.User)
 				if ierr == nil && len(imgs) > 0 {
 					var sb strings.Builder
@@ -2349,11 +2350,39 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					for _, u := range imgs {
 						sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
 					}
-					log.Printf("[image-route] chat intent routed to image pipeline, images=%d conv=%s", len(imgs), convID)
+					log.Printf("[image-route] chat intent routed to image pipeline (upstream GPT Image 2), images=%d conv=%s dur_ms=%d", len(imgs), convID, time.Since(imgStart).Milliseconds())
+					// Record usage so the admin console shows image-route calls;
+					// previously these were invisible and looked like the
+					// request never reached the gateway.
+					if s.usage != nil {
+						s.usage.record(UsageRecord{
+							Time:         time.Now(),
+							APIKeyPrefix: extractAPIKey(r),
+							Model:        "gpt-image-2",
+							Endpoint:     "/v1/chat/completions#image-route",
+							Stream:       body.Stream,
+							InputTokens:  EstimateTokens(ut),
+							OutputTokens: int64(len(imgs)),
+							DurationMs:   time.Since(imgStart).Milliseconds(),
+							Status:       http.StatusOK,
+						})
+					}
 					s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), sb.String(), body.Stream)
 					return
 				}
 				log.Printf("[image-route] intent detected but generation failed (%v); falling back to normal chat", ierr)
+				if s.usage != nil {
+					s.usage.record(UsageRecord{
+						Time:         time.Now(),
+						APIKeyPrefix: extractAPIKey(r),
+						Model:        "gpt-image-2",
+						Endpoint:     "/v1/chat/completions#image-route",
+						Stream:       body.Stream,
+						InputTokens:  EstimateTokens(ut),
+						DurationMs:   time.Since(imgStart).Milliseconds(),
+						Status:       http.StatusBadGateway,
+					})
+				}
 			}
 		}
 	}
