@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"m365-copilot2api/internal/chathub"
 	"m365-copilot2api/internal/outbound"
 )
 
@@ -124,6 +125,20 @@ type runtimeSettings struct {
 	// does not specify one. Empty = use the model's configured default.
 	// Values: none, minimal, low, medium, high, xhigh.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// SystemPrompt is an OPTIONAL global system prompt prepended to every
+	// upstream request (tool-bearing or not). Leave empty to use the built-in
+	// default. Operators use this to tune agent identity / behavior without a
+	// recompile — e.g. paste the stock author's concise execution-agent wording
+	// or any custom instruction. It is passed verbatim; keep it short.
+	SystemPrompt string `json:"systemPrompt,omitempty"`
+	// ToolProtocolPrompt is an OPTIONAL template that REPLACES the built-in
+	// tool-state instruction for tool-bearing requests. It must contain the
+	// placeholders {tools} (the <tools>…</tools> definitions block) and
+	// {request} (the user's request text); {text} is accepted as an alias for
+	// {request}. Leave empty to use the built-in default. This lets operators
+	// rewrite how the model is told to call tools (e.g. restore the original
+	// author prompt, or add project-specific guidance) without recompiling.
+	ToolProtocolPrompt string `json:"toolProtocolPrompt,omitempty"`
 	// MaxHistoryMessages proactively caps the message count sent upstream
 	// (system/developer messages are always kept). 0 = unlimited (rely on
 	// auto-compact's token budget). Lower values cut upstream cost/latency.
@@ -451,6 +466,25 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
 	}
+}
+
+// adminPromptDefaults exposes the stock built-in prompt templates so the admin
+// UI can preview the "original" prompts and offer one-click restore. These are
+// static built-ins (chathub.ToolProtocolPromptDefault / SystemPromptDefault),
+// so no auth/state is needed beyond the admin session.
+func (s *Server) adminPromptDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
+		return
+	}
+	if !s.validAdminSession(r) {
+		writeOpenAIError(w, 401, "auth_error", "unauthorized")
+		return
+	}
+	jsonOut(w, map[string]any{
+		"systemPrompt":       chathub.SystemPromptDefault,
+		"toolProtocolPrompt": chathub.ToolProtocolPromptDefault,
+	})
 }
 func configuredToolCallLimit(s *settingsStore) int {
 	if raw, ok := os.LookupEnv("M365_MAX_TOOL_CALLS_PER_TURN"); ok {

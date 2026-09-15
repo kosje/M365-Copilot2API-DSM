@@ -7,7 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,10 +25,19 @@ import (
 // Detection resolves the latest release tag via the GitHub
 // releases/latest redirect, trying a list of mirrors first so
 // NAS boxes without direct GitHub access still work. The binary
-// asset is downloaded, validated (ELF magic + minimum size),
-// swapped with the running file and activated through
-// syscall.Exec — the process image is replaced in place, same
-// PID, same env (M365_LISTEN etc. preserved), port rebound.
+// asset for the RUNNING platform is downloaded and validated
+// (ELF magic on Linux, PE "MZ" header on Windows) before apply.
+//
+// Restart is platform-aware:
+//   - Linux: the file is swapped in place and re-activated through
+//     syscall.Exec — same PID, same env (M365_LISTEN etc. preserved),
+//     port rebound.
+//   - Windows: the running .exe is locked by the OS and cannot be
+//     renamed, so the freshly downloaded copy is spawned; it
+//     self-replaces the canonical exe on startup (after this process
+//     exits) via the M365_SELF_UPDATE_REPLACE env var, then the old
+//     process exits. The listening port is released first so the
+//     replacement can bind it.
 //
 // Auto-apply is intentionally NOT implemented: detection can be
 // automatic, upgrading always needs an explicit admin action
@@ -34,9 +46,27 @@ import (
 
 const (
 	updateRepo       = "my788525/M365-Copilot2API-FNOS"
-	updateAssetName  = "m365-copilot2api-linux-amd64"
 	alertEventUpdate = "update_available"
 )
+
+// targetAssetName returns the release asset name for the platform this
+// binary is actually running on. Both the Windows .exe and the Linux ELF
+// are published per-release so each build can self-update in place.
+func targetAssetName() string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("m365-copilot2api-windows-%s.exe", runtime.GOARCH)
+	}
+	return fmt.Sprintf("m365-copilot2api-linux-%s", runtime.GOARCH)
+}
+
+// legacyAssetNames are accepted for older releases that used the short
+// Linux asset name; only relevant on the linux platform.
+func legacyAssetNames() []string {
+	if runtime.GOOS == "linux" {
+		return []string{"m365-copilot2api-linux"}
+	}
+	return nil
+}
 
 // Mirrors tried in order when direct GitHub access fails. Each
 // entry is prefixed to the full github.com URL (ghproxy style).
@@ -142,15 +172,24 @@ func fetchReleaseMeta(tag string) (assetURL, notes string) {
 			continue
 		}
 		for _, a := range rel.Assets {
-			// Accept both the canonical -amd64 name and the legacy short name.
-			if (a.Name == updateAssetName || a.Name == "m365-copilot2api-linux") && a.BrowserDownloadURL != "" {
+			// Accept the platform-specific asset name (and, on linux, the
+			// legacy short name) so both new and old releases self-update.
+			if a.BrowserDownloadURL == "" {
+				continue
+			}
+			if a.Name == targetAssetName() {
 				return a.BrowserDownloadURL, rel.Body
+			}
+			for _, l := range legacyAssetNames() {
+				if a.Name == l {
+					return a.BrowserDownloadURL, rel.Body
+				}
 			}
 		}
 		// API unreachable/unshaped: fall back to a deterministic URL.
-		return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, updateAssetName), rel.Body
+		return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, targetAssetName()), rel.Body
 	}
-	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, updateAssetName), ""
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, targetAssetName()), ""
 }
 
 func semverAtLeast(latest, current string) bool {
@@ -283,10 +322,41 @@ func (s *Server) adminUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asset := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, updateAssetName)
+	asset := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, tag, targetAssetName())
 	newPath := exe + ".new"
 	if err := downloadBinary(asset, newPath); err != nil {
 		writeOpenAIError(w, 502, "upstream_error", "下载失败（直连与镜像均不可达）："+err.Error())
+		return
+	}
+
+	if runtime.GOOS == "windows" {
+		// Windows locks the running executable, so it cannot be renamed in
+		// place. We hand off to the freshly downloaded copy, which self-
+		// replaces the canonical exe on startup (once this process exits and
+		// frees the file lock) via the M365_SELF_UPDATE_REPLACE env var.
+		jsonOut(w, map[string]any{"status": "restarting", "from": Version, "to": strings.TrimPrefix(tag, "v")})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		log.Printf("[self-update] v%s -> %s: spawning replacement (windows)", Version, tag)
+		go func() {
+			time.Sleep(800 * time.Millisecond)
+			if s.httpServer != nil {
+				_ = s.httpServer.Close() // release the listening port for the replacement
+			}
+			time.Sleep(700 * time.Millisecond)
+			cmd := exec.Command(newPath, os.Args[1:]...)
+			cmd.Dir = filepath.Dir(exe)
+			cmd.Env = append(os.Environ(), "M365_SELF_UPDATE_REPLACE="+exe)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Stdin = os.Stdin
+			if err := cmd.Start(); err != nil {
+				log.Printf("[self-update] spawn replacement failed: %v", err)
+				return
+			}
+			os.Exit(0)
+		}()
 		return
 	}
 
@@ -307,6 +377,9 @@ func (s *Server) adminUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// Answer the client first, then replace the process image in place:
 	// same PID, inherited env (M365_LISTEN / M365_DATA_DIR preserved).
 	jsonOut(w, map[string]any{"status": "restarting", "from": Version, "to": strings.TrimPrefix(tag, "v")})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 	log.Printf("[self-update] v%s -> %s: binary swapped, restarting process", Version, tag)
 	go func() {
 		time.Sleep(1200 * time.Millisecond)
@@ -367,7 +440,8 @@ func downloadToFile(url, dest string) error {
 		os.Remove(tmp)
 		return fmt.Errorf("downloaded file too small (%d bytes)", written)
 	}
-	// ELF magic check — refuse HTML error pages / truncated payloads.
+	// Magic-number check — refuse HTML error pages / truncated payloads.
+	// Linux builds are ELF; Windows builds are PE (start with "MZ").
 	head := make([]byte, 4)
 	rf, err := os.Open(tmp)
 	if err != nil {
@@ -375,9 +449,20 @@ func downloadToFile(url, dest string) error {
 	}
 	_, rerr := io.ReadFull(rf, head)
 	rf.Close()
-	if rerr != nil || string(head) != "\x7fELF" {
+	if rerr != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("not a valid ELF binary")
+		return fmt.Errorf("cannot read downloaded file header")
+	}
+	if runtime.GOOS == "windows" {
+		if !(head[0] == 0x4D && head[1] == 0x5A) { // "MZ"
+			os.Remove(tmp)
+			return fmt.Errorf("not a valid Windows executable (missing MZ header)")
+		}
+	} else {
+		if string(head) != "\x7fELF" {
+			os.Remove(tmp)
+			return fmt.Errorf("not a valid ELF binary")
+		}
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		os.Remove(tmp)

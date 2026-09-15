@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"net/http"
-	"strings"
 )
 
 // apiKeyRecord carries the validated API key record from adminMiddleware into
@@ -30,26 +29,4 @@ func requestModelAllowed(r *http.Request, model string) bool {
 		return true
 	}
 	return modelAllowed(model, rec.ModelWhitelist)
-}
-
-// requestAutoModel resolves the per-key "auto" (smart routing) model pool.
-// When the client requests model="auto" and the authenticated key has an
-// AutoModels pool configured, the highest-priority entry is returned so the
-// gateway routes deterministically instead of delegating to the upstream
-// magic tone. Models outside the pool can never be selected by "auto".
-// Everything else is returned unchanged.
-func requestAutoModel(r *http.Request, model string) string {
-	if !strings.EqualFold(strings.TrimSpace(model), "auto") {
-		return model
-	}
-	rec, ok := apiKeyFromRequest(r)
-	if !ok || len(rec.AutoModels) == 0 {
-		return model
-	}
-	for _, m := range rec.AutoModels {
-		if v := strings.TrimSpace(m); v != "" && !strings.EqualFold(v, "auto") {
-			return v
-		}
-	}
-	return model
 }

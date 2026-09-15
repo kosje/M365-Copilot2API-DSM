@@ -33,7 +33,23 @@ set "CGO_ENABLED=0"
 
 echo [INFO] Building m365-copilot2api.exe ...
 cd /d "%ROOT%"
-go build -trimpath -ldflags="-s -w" -o "%EXE%" ./cmd/server
+
+rem --- shared kernel version (same source as the Linux fpk build) ---
+set "APP_VERSION=dev"
+if exist "%ROOT%\version.txt" (
+    set /p APP_VERSION=<"%ROOT%\version.txt"
+)
+if not defined APP_VERSION set "APP_VERSION=dev"
+if "%APP_VERSION%"=="" set "APP_VERSION=dev"
+rem Fallback: read version= from the fpk manifest if version.txt is missing.
+if "%APP_VERSION%"=="dev" (
+    for /f "tokens=2 delims==" %%v in ('findstr /b "version=" "%ROOT%\..\M365-fpk\m365-copilot2api\manifest" 2^>nul') do (
+        if not "%%v"=="" set "APP_VERSION=%%v"
+    )
+)
+echo [INFO] Version: %APP_VERSION%
+
+go build -trimpath -ldflags="-s -w -X m365-copilot2api/internal/web.Version=%APP_VERSION%" -o "%EXE%" ./cmd/server
 if errorlevel 1 (
     echo [ERROR] Build failed. See output above.
     pause

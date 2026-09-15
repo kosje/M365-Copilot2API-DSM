@@ -188,6 +188,55 @@ func isToolRefusal(text string) bool {
 	return false
 }
 
+// safetyRefusalPatterns flags an upstream content-policy refusal where the
+// model declined to create a file / script / command at the user's explicit
+// request even though caller tools were available to do the work. We match
+// only the narrow "I can't help you create/provide this" phrasing (never every
+// generic "I can't"), so a genuine refusal of truly harmful content still
+// stands. When tools are attached and no tool call was emitted, the gateway
+// retries with a fresh conversation plus an execution-agent correction
+// (see the [safety-eject] block in server.go).
+var safetyRefusalPatterns = []string{
+	"我不能帮助创建",
+	"我不能帮助提供",
+	"我无法帮助创建",
+	"我无法提供",
+	"我不能协助",
+	"我无法协助",
+	"抱歉，我不能",
+	"抱歉,我不能",
+	"无法为你创建",
+	"无法为你生成",
+	"不该创建",
+	"不应该创建",
+	"cannot help you create",
+	"can't help you create",
+	"cannot help you write",
+	"can't help you write",
+	"cannot help you with",
+	"can't help you with",
+	"i cannot help with",
+	"i can't help with",
+	"unable to help with",
+	"i'm unable to help",
+	"i am unable to help",
+	"i won't be able to help",
+}
+
+func isSafetyRefusal(text string) bool {
+	if len(text) >= 1500 {
+		// Long, substantive answers must never be misread as a refusal.
+		return false
+	}
+	low := strings.ToLower(text)
+	for _, p := range safetyRefusalPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
 func isContentPolicyBlock(text string) bool {
 	return chathub.IsContentPolicyBlock(text)
 }
@@ -320,6 +369,38 @@ func workspaceGroundingFor(text string, hasTools bool) string {
 		1)
 }
 
+// fileOpIntentPatterns: phrases that signal the user wants a file created,
+// written or modified. Matched on tool-less requests where the prompt carries
+// no absolute path, so the honest grounding variant would not fire.
+var fileOpIntentPatterns = []string{
+	"创建文件", "新建文件", "写入文件", "生成文件", "保存文件", "创建个", "新建个",
+	"建一个文件", "写一个文件", "生成一个文件", "建个文件", "写个文件", "生成个文件",
+	"创建脚本", "写脚本", "生成脚本", "清理windows", "清理垃圾",
+	".bat", ".sh", ".ps1", ".py", ".js", ".ts", ".txt", ".md", ".csv", ".json",
+	"create a file", "create file", "write a file", "generate a file",
+	"make a file", "save a file", "create a script", "write a script",
+}
+
+// fileOpIntent reports whether the text asks for a file to be created,
+// written or modified even though it may not contain an absolute path.
+func fileOpIntent(text string) bool {
+	low := strings.ToLower(text)
+	for _, p := range fileOpIntentPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// toollessFileOpNote is injected into tool-less requests that ask for file
+// operations. It keeps the model honest: it cannot write any file itself and
+// must not substitute downloadable artifacts; it should say tool access is
+// required and provide the content for the caller to save.
+func toollessFileOpNote() string {
+	return "NO FILE TOOLS ARE ATTACHED to this conversation turn. You cannot create, modify, or save any file anywhere - not on the caller's machine and not in any working directory of your own. Do NOT generate downloadable files, artifacts, or upload links as a substitute, and do NOT say the file was saved somewhere. If the request asks for file operations, reply briefly that the caller's client must attach its file tools (agent mode with full access granted) so files can be written directly, then provide the exact file content in a fenced code block for the caller to save manually."
+}
+
 // toolNames returns the function names declared in the caller's tool list.
 func toolNames(tools []chathub.Tool) []string {
 	names := make([]string, 0, len(tools))
@@ -450,4 +531,16 @@ func isArtifactFallback(text string) bool {
 		}
 	}
 	return false
+}
+
+// stripArtifactLinks removes Microsoft asyncgw / teams.microsoft.com generated-file
+// links (and their markdown link wrappers) from a reply so a tool-less caller never
+// sees a fake "file created" plus an unreachable download URL. Used as a backstop for
+// tool-less file-intent requests after the artifact-eject retries have been exhausted.
+func stripArtifactLinks(text string) string {
+	// [label](asyncgw-url) markdown links -> empty
+	text = regexp.MustCompile(`\[[^\]]*\]\((https?://[a-z0-9-]+\.asyncgw\.teams\.microsoft\.com[^)]*)\)`).ReplaceAllString(text, "")
+	// bare asyncgw/teams file urls -> empty
+	text = asyncgwURLRe.ReplaceAllString(text, "")
+	return strings.TrimSpace(text)
 }

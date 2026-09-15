@@ -266,6 +266,11 @@ type Request struct {
 	TimeZone              string
 	TimeZoneOffset        int
 	DeviceOS              string
+	// SystemPrompt and ToolProtocolPrompt are optional operator overrides
+	// (settings.systemPrompt / settings.toolProtocolPrompt) that customize the
+	// upstream prompt without a recompile. Empty = use the built-in defaults.
+	SystemPrompt       string
+	ToolProtocolPrompt string
 }
 
 type FeatureFlags struct {
@@ -1421,7 +1426,7 @@ func chatPayload(req Request, requestID string, firstTurn bool) string {
 	if deviceOS == "" {
 		deviceOS = "Windows"
 	}
-	text := toolProtocolPrompt(req.Text, req.Tools, req.ToolChoice, len(clientPlugins(req.Tools, req.MCPServerURL)) > 0)
+	text := toolProtocolPrompt(req.Text, req.Tools, req.ToolChoice, len(clientPlugins(req.Tools, req.MCPServerURL)) > 0, req.ToolProtocolPrompt, req.SystemPrompt)
 	federatedConns := req.ConnectedFederatedIDs
 	if len(federatedConns) == 0 {
 		federatedConns = []string{"dummyId"}
