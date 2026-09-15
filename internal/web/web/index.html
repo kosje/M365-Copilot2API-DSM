@@ -739,6 +739,10 @@ if (response.output_text) {
           <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">输出精简</h3>
           <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advHideReasoning" style="width:18px;height:18px;cursor:pointer"><label for="advHideReasoning" class="form-label" style="margin:0;cursor:pointer">抑制推理内容下发 (hideReasoning)</label></div>
           <p class="form-hint">开启后，网关不再把 <code>reasoning_content</code>（思维链/推理）写入返回给客户端的流与消息中。上游推理照常执行，只是对客户端不可见。<strong>默认关闭</strong>。对接 Claude Code / Codex 等 AI 编码工具时若觉得「推理块把窗口撑得过长、显示过于碎片化」，建议开启此项以减少不必要的输出体积。</p>
+          <div class="form-group"><label class="form-label">全局推理强度 (reasoningEffort)</label><select class="form-input" id="advReasoningEffort"><option value="">（模型默认）</option><option value="none">none（不推理）</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select><p class="form-hint">当客户端未显式指定推理强度时使用的<strong>全局默认</strong>。<strong>默认空 = 沿用各模型预设</strong>。调低（low/minimal）更快更省、配合 hideReasoning 更清爽；调高（high/xhigh）推理更深但更慢更贵。可选 none/minimal/low/medium/high/xhigh（环境变量 <code>M365_REASONING_EFFORT</code>）。</p></div>
+          <div class="form-group"><label class="form-label">上行历史消息上限 (maxHistoryMessages)</label><input class="form-input" id="advMaxHist" type="number" min="0" max="10000" placeholder="0（不限）"><p class="form-hint">发送给上游的对话消息条数上限（system/developer 始终保留）。<strong>默认 0 = 不限制</strong>，由 Auto-Compact 在 token 溢出时压缩。设为如 60 可主动裁剪最旧历史，省上行 token、降延迟。环境变量 <code>M365_MAX_HISTORY_MESSAGES</code>。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advDedupe" style="width:18px;height:18px;cursor:pointer"><label for="advDedupe" class="form-label" style="margin:0;cursor:pointer">工具结果去重 (dedupeToolResults)</label></div>
+          <p class="form-hint">开启后，连续两条「相同 ToolCallID + 相同内容」的 tool 结果折叠为一条再上行，省上下文 token（重复读同一文件/重复搜索很常见）。内容幂等，折叠前后语义一致。<strong>默认关闭</strong>。环境变量 <code>M365_DEDUPE_TOOL_RESULTS</code>。</p>
 
           <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
             <button class="btn primary" onclick="saveAdvanced()">保存高级参数</button>
@@ -2440,6 +2444,9 @@ const advFields=[
   {id:'advConcur',       key:'accountConcurrencyLimit', def:8, type:'int'},
   {id:'advLogLevel',     key:'logLevel',            def:'info', type:'select'},
   {id:'advHideReasoning',key:'hideReasoning',       def:false, type:'bool'},
+  {id:'advReasoningEffort', key:'reasoningEffort',  def:'', type:'select'},
+  {id:'advMaxHist',      key:'maxHistoryMessages',  def:0, type:'int'},
+  {id:'advDedupe',       key:'dedupeToolResults',   def:false, type:'bool'},
 ];
 async function loadAdvanced(){
   try{

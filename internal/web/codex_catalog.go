@@ -236,6 +236,15 @@ func reasoningTone(model, effort string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Client did not request an explicit effort: fall back to the global knob,
+	// so operators can dial reasoning depth for every model at once.
+	if e == "" {
+		if cfg := currentSettings(); cfg.ReasoningEffort != "" {
+			if se, serr := normalizeReasoningEffort(cfg.ReasoningEffort); serr == nil && se != "" {
+				e = se
+			}
+		}
+	}
 	if tone, ok := configuredModelTone(model, currentSettings().ModelMappings); ok {
 		return tone, nil
 	}

@@ -120,6 +120,17 @@ type runtimeSettings struct {
 	// reasoning panel. The upstream call still runs; only the client-visible
 	// reasoning is dropped. Default false (reasoning is forwarded as before).
 	HideReasoning bool `json:"hideReasoning,omitempty"`
+	// ReasoningEffort is a global default reasoning depth applied when the client
+	// does not specify one. Empty = use the model's configured default.
+	// Values: none, minimal, low, medium, high, xhigh.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// MaxHistoryMessages proactively caps the message count sent upstream
+	// (system/developer messages are always kept). 0 = unlimited (rely on
+	// auto-compact's token budget). Lower values cut upstream cost/latency.
+	MaxHistoryMessages int `json:"maxHistoryMessages,omitempty"`
+	// DedupeToolResults collapses consecutive identical tool-role messages before
+	// sending upstream, saving context tokens on repeated tool calls. Default off.
+	DedupeToolResults bool `json:"dedupeToolResults,omitempty"`
 }
 
 type settingsStore struct {
@@ -234,6 +245,14 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.LogLevel != "silent" && v.LogLevel != "error" && v.LogLevel != "warn" && v.LogLevel != "info" && v.LogLevel != "debug" {
 		return fmt.Errorf("日志等级必须为 silent、error、warn、info 或 debug")
+	}
+	if v.ReasoningEffort != "" {
+		if _, e := normalizeReasoningEffort(v.ReasoningEffort); e != nil {
+			return fmt.Errorf("推理强度(reasoningEffort)无效: %v", e)
+		}
+	}
+	if v.MaxHistoryMessages < 0 {
+		return fmt.Errorf("最大历史消息数不能为负")
 	}
 	if err := outbound.ValidateProxyURL(v.OutboundProxy); err != nil {
 		return err
