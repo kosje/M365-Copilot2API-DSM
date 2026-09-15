@@ -316,7 +316,7 @@ func workspaceGroundingFor(text string, hasTools bool) string {
 	}
 	return strings.Replace(g,
 		"Your tools operate on them DIRECTLY with the exact paths as given — there is no separate workspace or mounted directory to look for. Act through your tools with these exact paths now; do not describe or audit your runtime environment.",
-		"No tools are attached to this conversation turn, so you cannot touch them yourself: you have no code interpreter, no file system, and no sandbox of your own. File and command operations are performed by the caller's agent through its tools. If the request requires touching these files, state plainly that tool access is required and name the exact tool and path to use. Never probe, test, or report your own runtime environment, and never present a container or sandbox directory as the caller's workspace.",
+		"No tools are attached to this conversation turn, so you cannot touch them yourself: you have no code interpreter, no file system, and no sandbox of your own. File and command operations are performed by the caller's agent through its tools. If the request requires touching these files, state plainly that tool access is required and name the exact tool and path to use. Never probe, test, or report your own runtime environment, never present a container or sandbox directory as the caller's workspace, and never claim you can only see an empty working directory or a mounted volume — you have no view of any filesystem at all.",
 		1)
 }
 
