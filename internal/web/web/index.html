@@ -709,7 +709,6 @@ if (response.output_text) {
         </div>
         <div class="card"><div class="card-body">
           <h3 style="font-size:14px;font-weight:700;margin:4px 0 12px;color:#6366f1">Agent 调度</h3>
-          <div class="form-group"><label class="form-label">工具规划模式 (toolPlanningMode)</label><select class="form-input" id="advToolPlanning"><option value="router">router（网关路由规划）</option><option value="native">native（云端原生规划）</option></select><p class="form-hint">决定工具调用由网关本地规划还是透传给上游 Copilot 原生规划。<strong>默认 router</strong>。router 模式下网关根据可用工具自行决定调用，更可控；native 模式下由微软云端决定，可能更符合原生体验。切换后下一条请求生效。</p></div>
           <div class="form-group"><label class="form-label">每轮最大工具调用数 (maxToolCallsPerTurn)</label><input class="form-input" id="advMaxToolCalls" type="number" min="1" max="64" placeholder="32"><p class="form-hint">单个回复轮次内最多允许并行发起的工具调用数量。范围 1-64，<strong>默认 32</strong>。并发仅对只读类工具（read/list/get/…）放开，写类工具（exec/write/edit/…）一律串行，因此该值主要决定「同时读多少源」。调太高可能被上游限流，调太低长任务会变慢。</p></div>
           <div class="form-group"><label class="form-label">最大工具轮次 (maxToolRounds)</label><input class="form-input" id="advMaxRounds" type="number" min="1" max="512" placeholder="512"><p class="form-hint">一次对话请求内 Agent 循环迭代（工具调用→观察→再决策）的最大轮次。范围 1-512，<strong>默认 512</strong>。这是单条消息的「思考步数」硬上限，到达即停止。复杂多步任务建议保持较大值，简单任务可下调以省额度。</p></div>
           <div class="form-group"><label class="form-label">同一调用循环检测阈值 (loopSameLimit)</label><input class="form-input" id="advLoopSame" type="number" min="1" max="64" placeholder="6"><p class="form-hint">Agent Ledger 仅在<strong>连续出现</strong>同一工具调用（同名同参）且<strong>返回结果无变化</strong>达到该次数时，才判定「卡死循环」并强制停止。范围 1-64，<strong>默认 6</strong>。改为此前邻接+无进展判定后，编码链中「重复读同一文件/重复搜索」等正常多步操作不再被误杀；真正的原地打转（同样调用同样结果反复出现）仍会被拦截。</p></div>
@@ -745,31 +744,12 @@ if (response.output_text) {
           <p class="form-hint">开启后，连续两条「相同 ToolCallID + 相同内容」的 tool 结果折叠为一条再上行，省上下文 token（重复读同一文件/重复搜索很常见）。内容幂等，折叠前后语义一致。<strong>默认关闭</strong>。环境变量 <code>M365_DEDUPE_TOOL_RESULTS</code>。</p>
           <div class="form-group"><label class="form-label">单条工具结果字符上限 (maxToolResultChars)</label><input class="form-input" id="advToolCap" type="number" min="0" max="1000000" placeholder="0（不限制）"><p class="form-hint">单条 tool 结果（读文件 / 编译日志 / grep 输出等）上行前的最大字符数，超出部分截断并附「[result truncated …]」提示。<strong>默认 0 = 不限制</strong>；建议设为如 <strong>16000</strong>，防止一次超大输出撑爆上下文预算或触发 auto-compact 丢失早期历史。环境变量 <code>M365_MAX_TOOL_RESULT_CHARS</code>。</p></div>
           <div class="form-group"><label class="form-label">工具结果压缩模式 (toolResultMode)</label><select class="form-input" id="advToolMode"><option value="full">full（按上限截断）</option><option value="smart">smart（结构化压缩：保留头部+全部错误/警告+尾部）</option><option value="minimal">minimal（仅错误/警告+极短尾部）</option></select><p class="form-hint">oversized 工具结果的处理方式。<strong>默认 full</strong>：只按 <code>maxToolResultChars</code> 硬截断。<strong>smart</strong>（推荐编码场景）：把 6000 行 build/install/test 日志压缩成头部+所有 error/warn 行+尾部的几十行，token 成本降一个数量级而信号不丢。<strong>minimal</strong>：更激进，仅留诊断行。环境变量 <code>M365_TOOL_RESULT_MODE</code>。</p></div>
-          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advAutonomy" style="width:18px;height:18px;cursor:pointer"><label for="advAutonomy" class="form-label" style="margin:0;cursor:pointer">自主性增强 (autonomyBoost)</label></div>
-          <p class="form-hint">开启后，网关在上游 prompt 注入「自主编码代理」指令——要求模型<strong>实现全部改动、自行跑 build/test 验证、未完成不得提前结束</strong>。这是无状态代理对「自动续跑 / 完成度裁判」的正确实现：客户端（WorkBuddy / Trae）持有工具执行循环，网关通过指令驱动上游模型把客户端的循环一次性跑完，而非反复「继续」。<strong>默认关闭</strong>。环境变量 <code>M365_AUTONOMY_BOOST</code>。</p></div>
 
           <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advRepoMap" style="width:18px;height:18px;cursor:pointer"><label for="advRepoMap" class="form-label" style="margin:0;cursor:pointer">仓库语义地图 (enableRepoMap)</label></div>
           <p class="form-hint">开启后，网关从本会话工具结果中<strong>观察到的文件路径</strong>构建一张按目录分组的「仓库地图」，并作为紧凑块注入上游 prompt——即使 auto-compact 截掉了早期历史，模型也能凭地图记住项目结构与已读文件，不再反复迷失方向。<strong>默认关闭</strong>；编码场景建议开启。环境变量 <code>M365_ENABLE_REPO_MAP</code>。</p>
           <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advSumCache" style="width:18px;height:18px;cursor:pointer"><label for="advSumCache" class="form-label" style="margin:0;cursor:pointer">大文件摘要缓存 (enableFileSummaryCache)</label></div>
           <p class="form-hint">开启后（需同时开启「工具结果去重」），同一份大文件/日志在会话内重复出现时，不再以「已省略」一笔带过，而是回放<strong>缓存的摘要</strong>（头部+全部错误/警告行+尾部）——省 token 的同时不丢信号，长会话重构大项目时体验显著提升。<strong>默认关闭</strong>。环境变量 <code>M365_ENABLE_FILE_SUMMARY_CACHE</code>。</p>
 
-          <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">AI Coding 预设</h3>
-          <div class="card" style="border-color:#6366f1;background:rgba(99,102,241,.05)"><div class="card-body" style="padding:12px 16px">
-            <p style="margin:0 0 10px;color:#4338ca;font-size:13px;line-height:1.6">一键套用针对某款 AI 编码工具的经调优参数组合（写入下方各字段并保存）。你仍可随后手动微调。</p>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <select class="form-input" id="advProfile" style="max-width:260px">
-                <option value="workbuddy">WorkBuddy</option>
-                <option value="trae">Trae</option>
-                <option value="claude_code">Claude Code</option>
-                <option value="cursor">Cursor</option>
-                <option value="gemini_cli">Gemini CLI</option>
-                <option value="custom">自定义（仅记录，不改参数）</option>
-              </select>
-              <button class="btn primary" onclick="applyCodingProfile()">应用预设</button>
-              <span id="advProfileStatus" style="font-size:13px;color:#64748b"></span>
-            </div>
-            <p class="form-hint" style="margin-top:10px">WorkBuddy：hideReasoning 开 + reasoning low + toolResultMode smart + autonomyBoost 开。Trae：hideReasoning 开 + reasoning medium + toolResultMode smart + autonomyBoost 开。Claude Code：hideReasoning 关 + reasoning high + toolResultMode smart。Cursor：hideReasoning 开 + reasoning medium + toolResultMode smart。Gemini CLI：hideReasoning 关 + reasoning 空 + toolResultMode minimal。</p>
-          </div></div>
 
           <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">自定义提示词（系统 / 工具态）</h3>
           <div class="card" style="border-color:#0ea5e9;background:rgba(14,165,233,.05)"><div class="card-body" style="padding:12px 16px">
@@ -2427,7 +2407,6 @@ async function testAlertWebhook(){
 
 // Advanced Parameters page: expose all tunable constants for live editing.
 const advFields=[
-  {id:'advToolPlanning', key:'toolPlanningMode', def:'router', type:'select'},
   {id:'advMaxToolCalls', key:'maxToolCallsPerTurn', def:32, type:'int'},
   {id:'advMaxRounds',    key:'maxToolRounds',       def:512, type:'int'},
   {id:'advLoopSame',     key:'loopSameLimit',       def:6, type:'int'},
@@ -2449,7 +2428,6 @@ const advFields=[
   {id:'advDedupe',       key:'dedupeToolResults',   def:false, type:'bool'},
   {id:'advToolCap',      key:'maxToolResultChars',  def:0, type:'int'},
   {id:'advToolMode',     key:'toolResultMode',      def:'full', type:'select'},
-  {id:'advAutonomy',     key:'autonomyBoost',       def:false, type:'bool'},
   {id:'advRepoMap',      key:'enableRepoMap',       def:false, type:'bool'},
   {id:'advSumCache',     key:'enableFileSummaryCache', def:false, type:'bool'},
   {id:'advSystemPrompt', key:'systemPrompt',        def:'', type:'str'},
@@ -2470,8 +2448,6 @@ async function loadAdvanced(){
     });
     const pub=$('advPublicIdentity');
     if(pub) pub.checked = v.publicIdentityPolicy!=null ? !!v.publicIdentityPolicy : false;
-    const prof=$('advProfile');
-    if(prof) prof.value = v.codingProfile!=null && v.codingProfile!=='' ? v.codingProfile : 'custom';
     await loadPromptDefaults(v);
     $('advStatus').textContent='';
   }catch(e){showNotice(e.message,'error');}
@@ -2524,28 +2500,6 @@ async function saveAdvanced(){
     $('advStatus').textContent='✓ 已保存';
     showNotice('高级参数已保存','success');
   }catch(e){ $('advStatus').textContent='✗ 保存失败'; showNotice(e.message,'error'); }
-}
-// applyCodingProfile writes a tuned combination of underlying fields for a
-// known AI-coding client, then reloads the form so the individual controls
-// reflect the preset. 'custom' only records the profile name.
-const CODING_PROFILES={
-  workbuddy:  {hideReasoning:true,  reasoningEffort:'low',    toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
-  trae:       {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
-  claude_code:{hideReasoning:false, reasoningEffort:'high',   toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
-  cursor:     {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
-  gemini_cli: {hideReasoning:false, reasoningEffort:'',       toolResultMode:'minimal',autonomyBoost:false, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:false},
-  custom:     {},
-};
-async function applyCodingProfile(){
-  try{
-    const key=$('advProfile').value;
-    const p=CODING_PROFILES[key]||{};
-    const body=Object.assign({},p,{codingProfile:key});
-    await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
-    await loadAdvanced();
-    $('advProfileStatus').textContent='✓ 已应用 '+key;
-    showNotice('AI Coding 预设已应用：'+key,'success');
-  }catch(e){ $('advProfileStatus').textContent='✗ 应用失败'; showNotice(e.message,'error'); }
 }
 
 const ANALYTICS_LABELS=[

@@ -410,6 +410,11 @@ func validateSettings(v runtimeSettings) error {
 }
 func (s *settingsStore) get() runtimeSettings { s.mu.RLock(); defer s.mu.RUnlock(); return s.v }
 func (s *settingsStore) save(v runtimeSettings) error {
+	// Hardening: never persist the regression-causing configuration so it cannot
+	// be toggled back on via the admin API or a stale settings.json.
+	v.ToolPlanningMode = "native"
+	v.AutonomyBoost = false
+	v.CodingProfile = ""
 	if e := validateSettings(v); e != nil {
 		return e
 	}
