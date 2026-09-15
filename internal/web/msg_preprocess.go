@@ -1,6 +1,9 @@
 package web
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // preprocessMessages applies opt-in context hygiene right before the upstream
 // prompt is built. Both transforms are disabled by default, so behavior is
@@ -19,7 +22,35 @@ func preprocessMessages(msgs []oaiMsg, cfg runtimeSettings) []oaiMsg {
 	if cfg.MaxHistoryMessages > 0 && len(msgs) > cfg.MaxHistoryMessages {
 		msgs = keepRecentMessages(msgs, cfg.MaxHistoryMessages)
 	}
+	if cfg.MaxToolResultChars > 0 {
+		msgs = capToolResults(msgs, cfg.MaxToolResultChars)
+	}
 	return msgs
+}
+
+// capToolResults truncates any single tool-role message that exceeds maxChars,
+// appending a clear notice. Coding tools (read / build logs / grep dumps) can
+// emit huge payloads that would otherwise blow the context budget or force an
+// auto-compact that discards earlier history. System/developer/user/assistant
+// messages are left untouched.
+func capToolResults(msgs []oaiMsg, maxChars int) []oaiMsg {
+	out := make([]oaiMsg, 0, len(msgs))
+	for _, m := range msgs {
+		if !strings.EqualFold(m.Role, "tool") {
+			out = append(out, m)
+			continue
+		}
+		raw := contentToString(m.Content)
+		if len(raw) <= maxChars {
+			out = append(out, m)
+			continue
+		}
+		kept := raw[:maxChars]
+		notice := fmt.Sprintf("\n\n[result truncated: %d of %d chars kept; use a narrower query or read specific lines to see the rest]", maxChars, len(raw))
+		m.Content = kept + notice
+		out = append(out, m)
+	}
+	return out
 }
 
 func dedupeConsecutiveToolResults(msgs []oaiMsg) []oaiMsg {

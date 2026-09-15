@@ -131,6 +131,11 @@ type runtimeSettings struct {
 	// DedupeToolResults collapses consecutive identical tool-role messages before
 	// sending upstream, saving context tokens on repeated tool calls. Default off.
 	DedupeToolResults bool `json:"dedupeToolResults,omitempty"`
+	// MaxToolResultChars caps the size of a single tool-role message sent
+	// upstream. Coding tools can emit huge reads / build logs that blow the
+	// context budget; capping per-result keeps one oversized output from
+	// wrecking the whole conversation. 0 = unlimited. Default off.
+	MaxToolResultChars int `json:"maxToolResultChars,omitempty"`
 }
 
 type settingsStore struct {
@@ -253,6 +258,9 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.MaxHistoryMessages < 0 {
 		return fmt.Errorf("最大历史消息数不能为负")
+	}
+	if v.MaxToolResultChars < 0 || v.MaxToolResultChars > 1_000_000 {
+		return fmt.Errorf("单条工具结果字符上限必须为 0-1000000（0=不限制）")
 	}
 	if err := outbound.ValidateProxyURL(v.OutboundProxy); err != nil {
 		return err
