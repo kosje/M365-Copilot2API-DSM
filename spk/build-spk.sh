@@ -66,7 +66,7 @@ if [ -n "$UIDIR" ]; then
     if command -v jq >/dev/null 2>&1; then
         KEY="$(jq -r '.".url" | keys[0]' "$SPK/ui/config")"
     elif command -v node >/dev/null 2>&1; then
-        KEY="$(node -e 'const j=require(process.argv[1]); process.stdout.write(Object.keys(j[".url"]||{})[0]||"")' "$SPK/ui/config")"
+        KEY="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.keys(j[".url"]||{})[0]||"")' "$SPK/ui/config")"
     else
         echo "✗ 自检需要 jq 或 Node.js 解析 ui/config"
         exit 1
