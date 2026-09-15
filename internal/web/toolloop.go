@@ -302,6 +302,83 @@ func toolNames(tools []chathub.Tool) []string {
 	return names
 }
 
+// imageGenIntentPatterns: phrases that clearly ask the model to generate or
+// draw an image. Used to auto-route a chat request to the image pipeline so the
+// caller does not need a separate image endpoint.
+var imageGenIntentPatterns = []string{
+	"生成图片", "生成一张图", "生成一张", "生成插画", "生成海报", "生成logo", "生成 logo",
+	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图",
+	"生图", "出图", "配图", "配张图", "插图", "插画", "海报", "头像", "封面图",
+	"帮我画", "给我画", "创作一张图", "设计一张图", "文生图", "文字生成图片",
+	"做个图", "来张图", "一张图", "ai绘画", "ai 绘画",
+	"generate an image", "generate image", "draw an image", "create an image",
+	"make an image", "text to image", "generate a picture", "an image of",
+	"paint a picture", "generate me an", "ai image",
+}
+
+// codingIntentPatterns: phrases that signal the user wants code/editing work
+// rather than an image. When present we must NOT auto-route to image gen,
+// otherwise a coding request containing the word "图" would be hijacked.
+var codingIntentPatterns = []string{
+	"修改", "编辑", "改一下", "读取", "读一下", "新建文件", "创建文件", "重构",
+	"实现", "函数", "方法", "类 ", "代码", "code", "bug", "编译", "运行", "终端",
+	"命令行", "bash", "修复", "调试", "测试", "pytest", "npm ", "go build", "git ",
+	"脚本", "部署",
+}
+
+// isImageGenIntent reports whether text clearly asks to generate/draw an image.
+func isImageGenIntent(text string) bool {
+	t := strings.ToLower(text)
+	for _, p := range imageGenIntentPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// codingIntent reports whether text is about code/editing work.
+func codingIntent(text string) bool {
+	t := strings.ToLower(text)
+	for _, p := range codingIntentPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastUserContent returns the content of the most recent user-role message.
+func lastUserContent(messages []oaiMsg) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return contentToString(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// lastMessageRole returns the role of the final message in the conversation.
+func lastMessageRole(messages []oaiMsg) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	return messages[len(messages)-1].Role
+}
+
+// sanitizeImageAlt makes text safe to embed inside a markdown image alt.
+func sanitizeImageAlt(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "]", "")
+	s = strings.ReplaceAll(s, "(", "")
+	s = strings.ReplaceAll(s, ")", "")
+	if len(s) > 60 {
+		s = s[:60]
+	}
+	return s
+}
+
 func isSandboxHallucination(text string) bool {
 	low := strings.ToLower(text)
 	for _, p := range sandboxHallucinationPatterns {

@@ -697,3 +697,134 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 	}
 	return strings.TrimSpace(b.String())
 }
+
+
+// generateChatImages runs the image-generation pipeline (account rotation,
+// upstream GPT Image 2 call, download/store) and returns served image URLs
+// suitable for inline embedding in a chat completion. Used by the chat-endpoint
+// image-intent router so callers do not need a separate image endpoint.
+func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, size string, attachments []chathub.Attachment, accountID, user string) ([]string, string, error) {
+	if n <= 0 {
+		n = 1
+	}
+	if size == "" {
+		size = "1024x1024"
+	}
+	prompt := fmt.Sprintf("Generate an image with GPT Image 2. Size: %s. Description: %s. Return the image URL directly.", size, userPrompt)
+	explicit := firstNonEmpty(accountID, user) != ""
+	var res chathub.Result
+	found := false
+	prevID := ""
+	var successAcc auth.AccountToken
+	var lastErr error
+	for attempt := 0; attempt < maxAccountProbe; attempt++ {
+		var acc auth.AccountToken
+		var err error
+		if attempt == 0 {
+			acc, err = s.resolveAccount(firstNonEmpty(accountID, user))
+			if err == nil && !explicit && !s.accountPool.ImageGenAvailable(acc.ID) {
+				if next, nerr := s.nextImageGenAccount(acc.ID); nerr == nil {
+					acc = next
+				}
+			}
+		} else {
+			acc, err = s.nextImageGenAccount(prevID)
+		}
+		if err != nil {
+			if attempt == 0 {
+				return nil, "", err
+			}
+			if lastErr == nil {
+				lastErr = err
+			}
+			break
+		}
+		prevID = acc.ID
+		if acc.OID == "" || acc.TID == "" {
+			acc.OID, acc.TID = extractOIDTID(acc.AccessToken)
+		}
+		if acc.OID == "" || acc.TID == "" {
+			if attempt == 0 {
+				return nil, "", fmt.Errorf("account missing oid/tid — re-login with PKCE")
+			}
+			continue
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
+		res, err = s.chatWithAccount(ctx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
+		cancel()
+		if err != nil {
+			lastErr = err
+			if errors.Is(err, chathub.ErrImageLimit) {
+				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			}
+			limited := errors.Is(err, chathub.ErrImageLimit) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests
+			if explicit || !limited {
+				return nil, "", err
+			}
+			continue
+		}
+		if len(res.Images) == 0 {
+			if urls := extractImageURLs(res.RawResult); len(urls) > 0 {
+				res.Images = urls
+			}
+		}
+		if len(res.Images) == 0 {
+			if urls := extractImageURLs(res.Text); len(urls) > 0 {
+				res.Images = urls
+			}
+		}
+		if len(res.Images) == 0 && !explicit && isImageQuotaRefusal(strings.Join([]string{res.Text, res.RawResult}, "\n")) {
+			s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			continue
+		}
+		found = true
+		successAcc = acc
+		break
+	}
+	if !found {
+		if lastErr != nil && (errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr)) {
+			return nil, "", fmt.Errorf("image generation daily limit reached; try again tomorrow")
+		}
+		if lastErr != nil {
+			return nil, "", lastErr
+		}
+		return nil, "", fmt.Errorf("no image returned")
+	}
+	images := res.Images
+	if len(images) > n {
+		images = images[:n]
+	}
+	var urls []string
+	dlTimeout := time.Duration(s.settings.get().ImageTimeoutSeconds) * time.Second
+	if dlTimeout < 90*time.Second {
+		dlTimeout = 90 * time.Second
+	}
+	for _, sourceURL := range images {
+		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
+			urls = append(urls, sourceURL)
+			continue
+		}
+		if !isDesignerImageURL(sourceURL) {
+			urls = append(urls, sourceURL)
+			continue
+		}
+		designerToken, derr := s.designerAccessToken(successAcc)
+		if derr != nil {
+			urls = append(urls, sourceURL)
+			continue
+		}
+		dlCtx, dlCancel := context.WithTimeout(r.Context(), dlTimeout)
+		imageData, contentType, derr := downloadDesignerImage(dlCtx, sourceURL, designerToken)
+		dlCancel()
+		if derr != nil {
+			urls = append(urls, sourceURL)
+			continue
+		}
+		id := s.storeGeneratedImage(imageData, contentType)
+		urls = append(urls, generatedImageURL(r, id))
+	}
+	if len(urls) == 0 {
+		return nil, "", fmt.Errorf("upstream returned no image resource")
+	}
+	return urls, res.ConversationID, nil
+}

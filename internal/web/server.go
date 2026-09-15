@@ -865,6 +865,66 @@ func jsonOut(w http.ResponseWriter, v any) {
 	}
 }
 
+// writeChatCompletionText emits a single assistant message as either a streamed
+// SSE chat completion or a JSON chat completion. Used by the chat-endpoint
+// image-generation router to return the generated image inline in the
+// conversation, so the caller does not need a separate image endpoint.
+func (s *Server) writeChatCompletionText(w http.ResponseWriter, r *http.Request, model, text string, stream bool) {
+	id := "chatcmpl-" + uuid.NewString()
+	created := time.Now().Unix()
+	if stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeOpenAIError(w, http.StatusInternalServerError, "server_error", "stream unsupported")
+			return
+		}
+		sw := newSSEWriter(w, flusher)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				case <-r.Context().Done():
+					return
+				case <-ticker.C:
+					_ = sw.raw(": keepalive\n\n")
+				}
+			}
+		}()
+		chunk := map[string]any{
+			"id":      id,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": text}}},
+		}
+		if b, err := json.Marshal(chunk); err == nil {
+			_ = sw.data(string(b))
+		}
+		ct := EstimateTokens(text)
+		usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}, "usage": map[string]any{"prompt_tokens": ct, "completion_tokens": ct, "total_tokens": ct + ct}}
+		_ = sw.data(mustJSON(usageChunk))
+		_ = sw.data("[DONE]")
+		return
+	}
+	ct := EstimateTokens(text)
+	jsonOut(w, map[string]any{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}},
+		"usage":   map[string]any{"prompt_tokens": ct, "completion_tokens": ct, "total_tokens": ct + ct},
+	})
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	list := s.tokens.List()
 	throttlingSummary := map[string]any{}
@@ -2176,6 +2236,30 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if answer, ok := publicIdentityAnswer(body.Messages, body.Model); ok && responseFormat == nil {
 		s.writePublicIdentityChatResponse(w, r, &body, prompt, answer, startedAt)
 		return
+	}
+
+	// Chat-endpoint image-generation routing: when the caller uses the chat
+	// endpoint and the latest user turn clearly asks to generate/draw an image,
+	// route to the image pipeline and return the result inline in the chat
+	// completion — so the caller does not need a separate image endpoint.
+	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
+	if os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
+		if lr := lastMessageRole(body.Messages); lr == "user" {
+			if ut := lastUserContent(body.Messages); ut != "" && isImageGenIntent(ut) && !codingIntent(ut) {
+				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID, body.User)
+				if ierr == nil && len(imgs) > 0 {
+					var sb strings.Builder
+					sb.WriteString("已为你生成图片：\n\n")
+					for _, u := range imgs {
+						sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
+					}
+					log.Printf("[image-route] chat intent routed to image pipeline, images=%d conv=%s", len(imgs), convID)
+					s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), sb.String(), body.Stream)
+					return
+				}
+				log.Printf("[image-route] intent detected but generation failed (%v); falling back to normal chat", ierr)
+			}
+		}
 	}
 
 	if body.SessionKey != "" {
