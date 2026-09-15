@@ -63,7 +63,14 @@ if [ -n "$UIDIR" ]; then
         || { echo "✗ INFO 声明了 dsmuidir=${UIDIR}，但 package.tgz 内没有 ${UIDIR}/config"; exit 1; }
     echo "  ✓ package.tgz 含 ./${UIDIR}/config"
 
-    KEY="$(jq -r '.".url" | keys[0]' "$SPK/ui/config")"
+    if command -v jq >/dev/null 2>&1; then
+        KEY="$(jq -r '.".url" | keys[0]' "$SPK/ui/config")"
+    elif command -v node >/dev/null 2>&1; then
+        KEY="$(node -e 'const j=require(process.argv[1]); process.stdout.write(Object.keys(j[".url"]||{})[0]||"")' "$SPK/ui/config")"
+    else
+        echo "✗ 自检需要 jq 或 Node.js 解析 ui/config"
+        exit 1
+    fi
     [ "$KEY" = "$APPNAME" ] \
         || { echo "✗ ui/config 主键 ($KEY) 与 dsmappname ($APPNAME) 不一致"; exit 1; }
     echo "  ✓ ui/config 主键 == dsmappname"
