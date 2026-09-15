@@ -33,7 +33,9 @@ chmod 644 "$BUILD/payload/ui/config" "$BUILD/payload/ui/images"/*
 # Force the payload mode in the archive. This keeps the server executable when
 # the staging tree lives on a filesystem without Unix mode bits (for example a
 # Windows checkout used to prepare the package before final Linux validation).
-tar czf "$BUILD/package.tgz" --owner=root --group=root --mode=755 -C "$BUILD/payload" .
+tar czf "$BUILD/package.tgz" --owner=root --group=root -C "$BUILD/payload" \
+    --mode=755 ./bin \
+    --mode='u+rwX,go+rX,go-w' ./ui
 
 echo "==> 打包 SPK"
 rm -rf "$BUILD/spk" && mkdir -p "$BUILD/spk"
