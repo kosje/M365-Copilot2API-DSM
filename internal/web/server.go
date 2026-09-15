@@ -2211,12 +2211,22 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			if resolved.HistoryLen > 0 && resolved.HistoryLen < len(body.Messages) {
 				incPrompt, incAtt := flattenPromptMessages(body.Messages[resolved.HistoryLen:], nil)
 				incPrompt = strings.TrimSpace(incPrompt)
-				if incPrompt != "" {
-					answerPrompt = incPrompt
-					body.Attachments = incAtt
-				}
+			if incPrompt != "" {
+				answerPrompt = incPrompt
+				body.Attachments = incAtt
 			}
 		}
+	}
+	// Ground the model on the caller's real workspace. When the caller uses a
+	// local coding client (WorkBuddy/Trae) the conversation carries Windows
+	// paths like D:\work\GitHub\Insurtool; tell the upstream model those files
+	// are on the local machine and directly usable so it never hallucinates a
+	// /mnt/data sandbox. Only injected when the caller actually passed tools.
+	if len(body.Tools) > 0 {
+		if g := workspaceGrounding(prompt); g != "" {
+			answerPrompt += "\n\n" + g
+		}
+	}
 	}
 	accountID := body.AccountID
 	acc, err := s.resolveAccount(accountID)
@@ -3009,16 +3019,24 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	id := "chatcmpl-" + uuid.NewString()
 	if len(toolMaps) > 0 && isToolRefusal(res.Text) {
 		log.Printf("[tool-eject] model refused tools, retrying with correction")
-		correction := "Your previous response incorrectly denied that caller tools are available. They are real, active, and callable on the caller's Windows machine. Call the appropriate tool now. Do not explain tool availability.\n\nUser request:\n" + prompt
-		res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario})
+		correction := "Your previous response incorrectly denied that caller tools are available. They are real, active, and callable on the caller's Windows machine. Call the appropriate tool now. Do not explain tool availability."
+		if g := workspaceGrounding(prompt); g != "" {
+			correction += "\n\n" + g
+		}
+		correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + ".\n\nUser request:\n" + prompt
+		res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
 		if err2 == nil && !isToolRefusal(res2.Text) {
 			res = res2
 		}
 	}
 	if len(toolMaps) > 0 && isSandboxHallucination(res.Text) {
 		log.Printf("[sandbox-eject] model used code interpreter/sandbox, retrying with explicit tool instruction")
-		correction := "CRITICAL: You must NOT use any built-in code interpreter, Python sandbox, or cloud execution environment. The caller has provided a bash tool that runs Windows PowerShell 5.1 on their local machine — use it to execute any commands or code. Do NOT say you cannot run code. Do NOT say you only have a Linux container. Do NOT say you have no Windows execution channel. You DO have a bash tool that runs on Windows. Call the bash tool NOW with the appropriate PowerShell command.\n\nUser request:\n" + prompt
-		res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario})
+		correction := "CRITICAL: You must NOT use any built-in code interpreter, Python sandbox, or cloud execution environment. The caller has provided tools that run on their local Windows machine — use them to execute commands and code. Do NOT say you cannot run code. Do NOT say you only have a Linux container. Do NOT say you have no Windows execution channel. Do NOT say you can only see /mnt/data or container directories. The caller's files are directly accessible via your tools."
+		if g := workspaceGrounding(prompt); g != "" {
+			correction += "\n\n" + g
+		}
+		correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + ". Call one of them NOW with the exact Windows path. Do not say a tool is unavailable.\n\nUser request:\n" + prompt
+		res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
 		if err2 == nil && !isSandboxHallucination(res2.Text) {
 			res = res2
 		}

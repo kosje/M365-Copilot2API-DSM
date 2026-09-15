@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"m365-copilot2api/internal/chathub"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -206,11 +207,19 @@ var sandboxHallucinationPatterns = []string{
 	"code interpreter",
 	"python sandbox",
 	"sandbox environment",
+	"sandbox 环境",
+	"code interpreter 环境",
 	"/mnt/data",
 	"linux container",
 	"linux sandbox",
 	"cloud sandbox",
+	"云沙箱",
+	"云容器",
+	"container directory",
+	"容器内目录",
+	"容器目录",
 	"execution environment has changed",
+	"执行环境已经切换",
 	"cannot access the Windows path",
 	"only provides Linux",
 	"只提供 Linux 容器",
@@ -223,10 +232,74 @@ var sandboxHallucinationPatterns = []string{
 	"cannot run commands on",
 	"don't have command execution",
 	"无法执行命令",
-	"执行环境已经切换",
+	"当前运行环境里没有",
+	"运行环境只有",
+	"执行环境只有",
+	"无法直接访问你的",
+	"无法访问你的 D:",
 	"I don't have SSH access tools",
 	"I don't have any tools",
 	"none of which can reach",
+}
+
+// windowsPathRe matches absolute Windows paths (drive letter + backslash tree).
+var windowsPathRe = regexp.MustCompile(`[A-Za-z]:\\[^\s"<>|*?]+`)
+
+// workspaceRoot collapses a Windows path to a stable up-to-3-level root so that
+// "D:\work\GitHub\Insurtool\file.ts" becomes "D:\work\GitHub\Insurtool".
+func workspaceRoot(p string) string {
+	p = strings.TrimRight(p, `\`)
+	parts := strings.Split(p, `\`)
+	if len(parts) <= 1 {
+		return p
+	}
+	if len(parts) > 4 {
+		parts = parts[:4]
+	}
+	return strings.Join(parts, `\`)
+}
+
+// workspaceGrounding scans a flattened prompt for Windows absolute paths the
+// caller supplied (e.g. a WorkBuddy workspace like D:\work\GitHub\Insurtool) and
+// returns a grounding paragraph asserting those files live on the local machine
+// and are directly usable by the model's tools. Returns "" when no path is found.
+func workspaceGrounding(text string) string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, m := range windowsPathRe.FindAllString(text, -1) {
+		root := workspaceRoot(m)
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local Windows machine. Your Read/Write/Edit/Bash tools operate on them DIRECTLY — there is no separate sandbox, no Linux container, and no /mnt/data. Do NOT claim you cannot access them or can only see container directories. Use the exact paths with your tools.\n")
+	for i, r := range roots {
+		if i >= 6 {
+			break
+		}
+		b.WriteString("- " + r + "\n")
+	}
+	return b.String()
+}
+
+// toolNames returns the function names declared in the caller's tool list.
+func toolNames(tools []chathub.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		var f struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(t.Function, &f) == nil && f.Name != "" {
+			names = append(names, f.Name)
+		}
+	}
+	return names
 }
 
 func isSandboxHallucination(text string) bool {
