@@ -240,6 +240,19 @@ var sandboxHallucinationPatterns = []string{
 	"I don't have SSH access tools",
 	"I don't have any tools",
 	"none of which can reach",
+	// Chinese phrasings observed from upstream models claiming the caller's
+	// workspace is not mounted into their (imagined) container workspace.
+	"没有实际挂载",
+	"并没有实际挂载",
+	"没有挂载",
+	"未挂载",
+	"工作区为空",
+	"工作区是空的",
+	"工作目录为空",
+	"可访问的工作目录",
+	"空的 /mnt",
+	"只有空的",
+	"检查了当前可访问文件",
 }
 
 // windowsPathRe matches absolute Windows paths (drive letter + backslash tree).
@@ -278,7 +291,7 @@ func workspaceGrounding(text string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local Windows machine. Your Read/Write/Edit/Bash tools operate on them DIRECTLY — there is no separate sandbox, no Linux container, and no /mnt/data. Do NOT claim you cannot access them or can only see container directories. Use the exact paths with your tools.\n")
+	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local machine. Your tools operate on them DIRECTLY with the exact paths as given — there is no separate workspace or mounted directory to look for. Act through your tools with these exact paths now; do not describe or audit your runtime environment.\n")
 	for i, r := range roots {
 		if i >= 6 {
 			break

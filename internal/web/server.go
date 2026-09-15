@@ -3113,15 +3113,18 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			res = res2
 		}
 	}
-	if len(toolMaps) > 0 && isSandboxHallucination(res.Text) {
-		log.Printf("[sandbox-eject] model used code interpreter/sandbox, retrying with explicit tool instruction")
-		correction := "CRITICAL: You must NOT use any built-in code interpreter, Python sandbox, or cloud execution environment. The caller has provided tools that run on their local Windows machine — use them to execute commands and code. Do NOT say you cannot run code. Do NOT say you only have a Linux container. Do NOT say you have no Windows execution channel. Do NOT say you can only see /mnt/data or container directories. The caller's files are directly accessible via your tools."
-		if g := workspaceGrounding(prompt); g != "" {
-			correction += "\n\n" + g
-		}
-		correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + ". Call one of them NOW with the exact Windows path. Do not say a tool is unavailable.\n\nUser request:\n" + prompt
-		res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
-		if err2 == nil && !isSandboxHallucination(res2.Text) {
+	if len(toolMaps) > 0 {
+		for attempt := 0; attempt < 3 && isSandboxHallucination(res.Text); attempt++ {
+			log.Printf("[sandbox-eject] model hallucinated a sandbox environment, positive retry attempt %d", attempt+1)
+			correction := "ACT, DO NOT DESCRIBE. The caller's request involves files and commands on the caller's local machine. Your tools run directly on that machine and accept the exact paths mentioned in the request. Choose the most appropriate tool and call it NOW with the exact path. Do not describe your runtime environment, do not report which directories you can see, and do not summarize limitations — just make the tool call."
+			if g := workspaceGrounding(prompt); g != "" {
+				correction += "\n\n" + g
+			}
+			correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + ".\n\nUser request:\n" + prompt
+			res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
+			if err2 != nil {
+				break
+			}
 			res = res2
 		}
 	}

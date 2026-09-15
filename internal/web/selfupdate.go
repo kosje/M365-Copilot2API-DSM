@@ -142,7 +142,8 @@ func fetchReleaseMeta(tag string) (assetURL, notes string) {
 			continue
 		}
 		for _, a := range rel.Assets {
-			if a.Name == updateAssetName && a.BrowserDownloadURL != "" {
+			// Accept both the canonical -amd64 name and the legacy short name.
+			if (a.Name == updateAssetName || a.Name == "m365-copilot2api-linux") && a.BrowserDownloadURL != "" {
 				return a.BrowserDownloadURL, rel.Body
 			}
 		}
