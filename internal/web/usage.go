@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -121,6 +122,9 @@ func (s *usageLog) recentStats(window time.Duration) (total, failed int, pct flo
 }
 
 func (s *usageLog) record(rec UsageRecord) {
+	if rec.Status == http.StatusOK && strings.HasPrefix(rec.Endpoint, "/v1/chat") {
+		analyticsCompletion()
+	}
 	s.mu.Lock()
 	s.records = append(s.records, rec)
 	s.trim()

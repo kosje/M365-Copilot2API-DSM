@@ -76,6 +76,20 @@ type runtimeSettings struct {
 	EnableCodeCanvas           bool           `json:"enableCodeCanvas"`
 	EnableSydneyReconnect      bool           `json:"enableSydneyReconnect"`
 	QuotaRefreshIntervalSeconds int          `json:"quotaRefreshIntervalSeconds"`
+	// SessionTTLMinutes controls how long a session binding stays alive before
+	// eviction from sessions.json (and from in-memory lookup).
+	SessionTTLMinutes int `json:"sessionTtlMinutes"`
+	// ContextTTLMinutes controls how long a resolved conversation context remains
+	// eligible for prefix/suffix/fuzzy reuse.
+	ContextTTLMinutes int `json:"contextTtlMinutes"`
+	// ContextSimilarity is the Jaccard similarity threshold (0-1) used to fuzzy
+	// match a request against stored ContextHistory when strict prefix/suffix
+	// matching fails.
+	ContextSimilarity float64 `json:"contextSimilarity"`
+	// PublicIdentityPolicy enables the public-facing identity rewrite policy
+	// (neutralising Microsoft-brand references in answers and replacing them
+	// with a generic GPT-5-series identity).
+	PublicIdentityPolicy bool `json:"publicIdentityPolicy"`
 	// ModelAliases maps arbitrary client-requested model names (e.g. "gpt-4o",
 	// "claude-sonnet-4") to configured public models. Keys are matched
 	// case-insensitively; values must be existing public model IDs.
@@ -95,6 +109,58 @@ type runtimeSettings struct {
 	// history via an upstream call instead of silently truncating.
 	EnableAutoCompact       bool `json:"enableAutoCompact"`
 	AutoCompactMinTokens    int  `json:"autoCompactMinTokens,omitempty"`    // only compact when dropped history >= this many tokens (default 4000)
+	// Agent loop detection thresholds: how many identical tool calls / identical
+	// failures before the agent ledger flags a stuck loop (hard stop) or a
+	// repeated failure (hard stop). Raised from the old hardcoded 2/3 so that
+	// long multi-step agent tasks are not aborted prematurely.
+	LoopSameLimit   int `json:"loopSameLimit,omitempty"`   // consecutive identical calls (same result) before StuckLoop stop (default 6)
+	LoopRepeatLimit int `json:"loopRepeatLimit,omitempty"` // consecutive identical failures before RepeatedFailure stop (default 5)
+	// HideReasoning suppresses the reasoning_content / thinking stream from the
+	// OpenAI/Anthropic response so clients do not render a tall, fragmented
+	// reasoning panel. The upstream call still runs; only the client-visible
+	// reasoning is dropped. Default false (reasoning is forwarded as before).
+	HideReasoning bool `json:"hideReasoning,omitempty"`
+	// ReasoningEffort is a global default reasoning depth applied when the client
+	// does not specify one. Empty = use the model's configured default.
+	// Values: none, minimal, low, medium, high, xhigh.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// MaxHistoryMessages proactively caps the message count sent upstream
+	// (system/developer messages are always kept). 0 = unlimited (rely on
+	// auto-compact's token budget). Lower values cut upstream cost/latency.
+	MaxHistoryMessages int `json:"maxHistoryMessages,omitempty"`
+	// DedupeToolResults collapses consecutive identical tool-role messages before
+	// sending upstream, saving context tokens on repeated tool calls. Default off.
+	DedupeToolResults bool `json:"dedupeToolResults,omitempty"`
+	// MaxToolResultChars caps the size of a single tool-role message sent
+	// upstream. Coding tools can emit huge reads / build logs that blow the
+	// context budget; capping per-result keeps one oversized output from
+	// wrecking the whole conversation. 0 = unlimited. Default off.
+	MaxToolResultChars int `json:"maxToolResultChars,omitempty"`
+	// ToolResultMode selects how oversized tool results are handled:
+	//   "full"   — truncate to MaxToolResultChars (default, simplest)
+	//   "smart"  — structured compression: keep header + all error/warning
+	//              lines + tail, drop noise (best for build/test/install/grep)
+	//   "minimal" — keep only error/warning lines + a tiny tail
+	ToolResultMode string `json:"toolResultMode,omitempty"`
+	// AutonomyBoost injects an autonomy directive into the upstream prompt so the
+	// M365 model drives the client's agent loop to completion (run build/test to
+	// verify, don't stop early). This is the proxy-side realization of
+	// "auto-continue" / "completion judge" for OpenAI-compatible clients that
+	// own the tool-execution loop (WorkBuddy, Trae, Claude Code, …).
+	AutonomyBoost bool `json:"autonomyBoost,omitempty"`
+	// CodingProfile records which one-click AI-coding preset is active
+	// (workbuddy / trae / claude_code / cursor / gemini_cli / custom). It only
+	// drives the UI; applying a profile writes the underlying fields directly.
+	CodingProfile string `json:"codingProfile,omitempty"`
+	// EnableRepoMap injects a compact "repository map" (paths observed via tool
+	// results this session, grouped by directory) into the upstream prompt, so
+	// the model keeps its bearings even after auto-compact/truncation dropped
+	// the early history. Default off.
+	EnableRepoMap bool `json:"enableRepoMap,omitempty"`
+	// EnableFileSummaryCache upgrades repeated identical large tool outputs from
+	// a bare "[identical output omitted]" reference to a cached digest (header +
+	// errors/warnings + tail), preserving signal across long coding sessions.
+	EnableFileSummaryCache bool `json:"enableFileSummaryCache,omitempty"`
 }
 
 type settingsStore struct {
@@ -107,6 +173,16 @@ func envInt(name string, fallback int) int {
 	n, e := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if e == nil && n > 0 {
 		return n
+	}
+	return fallback
+}
+func envFloat(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	if f, e := strconv.ParseFloat(raw, 64); e == nil && f >= 0 && f <= 1 {
+		return f
 	}
 	return fallback
 }
@@ -134,10 +210,21 @@ func defaultRuntimeSettings() runtimeSettings {
 		EnableCodeCanvas:           os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
 		EnableSydneyReconnect:      os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
 		QuotaRefreshIntervalSeconds: envInt("M365_QUOTA_REFRESH_INTERVAL_SECONDS", 300),
+		SessionTTLMinutes:          envInt("M365_SESSION_TTL_MINUTES", 120),
+		ContextTTLMinutes:          envInt("M365_CONTEXT_TTL_MINUTES", 120),
+		ContextSimilarity:          envFloat("M365_CONTEXT_SIMILARITY", 0.6),
+		PublicIdentityPolicy:       os.Getenv("M365_PUBLIC_IDENTITY_POLICY") == "true",
 		ModelAliases:               map[string]string{},
 		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
 		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
 		AutoCompactMinTokens:       envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
+		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 6),
+		LoopRepeatLimit:            envInt("M365_LOOP_REPEAT_LIMIT", 5),
+		HideReasoning:              os.Getenv("M365_HIDE_REASONING") == "true",
+		ToolResultMode:            firstNonEmptySetting(os.Getenv("M365_TOOL_RESULT_MODE"), "full"),
+		AutonomyBoost:             os.Getenv("M365_AUTONOMY_BOOST") == "true",
+		EnableRepoMap:             os.Getenv("M365_ENABLE_REPO_MAP") == "true",
+		EnableFileSummaryCache:    os.Getenv("M365_ENABLE_FILE_SUMMARY_CACHE") == "true",
 	}
 }
 func settingsPath() string {
@@ -192,6 +279,20 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.LogLevel != "silent" && v.LogLevel != "error" && v.LogLevel != "warn" && v.LogLevel != "info" && v.LogLevel != "debug" {
 		return fmt.Errorf("日志等级必须为 silent、error、warn、info 或 debug")
+	}
+	if v.ReasoningEffort != "" {
+		if _, e := normalizeReasoningEffort(v.ReasoningEffort); e != nil {
+			return fmt.Errorf("推理强度(reasoningEffort)无效: %v", e)
+		}
+	}
+	if v.MaxHistoryMessages < 0 {
+		return fmt.Errorf("最大历史消息数不能为负")
+	}
+	if v.MaxToolResultChars < 0 || v.MaxToolResultChars > 1_000_000 {
+		return fmt.Errorf("单条工具结果字符上限必须为 0-1000000（0=不限制）")
+	}
+	if v.ToolResultMode != "" && v.ToolResultMode != "full" && v.ToolResultMode != "smart" && v.ToolResultMode != "minimal" {
+		return fmt.Errorf("工具结果模式(toolResultMode)必须为 full、smart 或 minimal")
 	}
 	if err := outbound.ValidateProxyURL(v.OutboundProxy); err != nil {
 		return err
@@ -271,6 +372,21 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.AutoCompactMinTokens < 0 || v.AutoCompactMinTokens > 100000 {
 		return fmt.Errorf("自动压缩最小 token 数必须为 0-100000")
+	}
+	if v.LoopSameLimit != 0 && (v.LoopSameLimit < 1 || v.LoopSameLimit > 64) {
+		return fmt.Errorf("同一调用循环上限(loopSameLimit)必须为 1-64")
+	}
+	if v.LoopRepeatLimit != 0 && (v.LoopRepeatLimit < 1 || v.LoopRepeatLimit > 64) {
+		return fmt.Errorf("同一失败循环上限(loopRepeatLimit)必须为 1-64")
+	}
+	if v.SessionTTLMinutes < 1 || v.SessionTTLMinutes > 10080 {
+		return fmt.Errorf("会话绑定 TTL(sessionTtlMinutes)必须为 1-10080 分钟")
+	}
+	if v.ContextTTLMinutes < 1 || v.ContextTTLMinutes > 10080 {
+		return fmt.Errorf("上下文复用 TTL(contextTtlMinutes)必须为 1-10080 分钟")
+	}
+	if v.ContextSimilarity < 0 || v.ContextSimilarity > 1 {
+		return fmt.Errorf("上下文相似度阈值(contextSimilarity)必须为 0-1")
 	}
 	if strings.TrimSpace(v.Scenario) == "" {
 		return fmt.Errorf("场景标识不能为空")
@@ -395,6 +511,63 @@ func currentSettings() runtimeSettings { return openSettingsStore().get() }
 // currentSettingsSafe returns the persisted settings without panicking when a
 // test-constructed Server has no settings store.
 func currentSettingsSafe() runtimeSettings { return openSettingsStore().get() }
+
+func sessionTTLMinutes() int {
+	if raw, ok := os.LookupEnv("M365_SESSION_TTL_MINUTES"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 10080 {
+			return n
+		}
+		return 120
+	}
+	if n := currentSettings().SessionTTLMinutes; n > 0 && n <= 10080 {
+		return n
+	}
+	return 120
+}
+func contextTTLMinutes() int {
+	if raw, ok := os.LookupEnv("M365_CONTEXT_TTL_MINUTES"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 10080 {
+			return n
+		}
+		return 120
+	}
+	if n := currentSettings().ContextTTLMinutes; n > 0 && n <= 10080 {
+		return n
+	}
+	return 120
+}
+func contextSimilarityThreshold() float64 {
+	if raw, ok := os.LookupEnv("M365_CONTEXT_SIMILARITY"); ok {
+		if f, e := strconv.ParseFloat(strings.TrimSpace(raw), 64); e == nil && f >= 0 && f <= 1 {
+			return f
+		}
+		return 0.6
+	}
+	if f := currentSettings().ContextSimilarity; f >= 0 && f <= 1 {
+		return f
+	}
+	return 0.6
+}
+func accountDefaultConcurrency() int {
+	if raw, ok := os.LookupEnv("M365_ACCOUNT_DEFAULT_CONCURRENCY"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 8
+	}
+	// Compatibility: the older env name M365_ACCOUNT_CONCURRENCY_LIMIT is
+	// exposed in settings.json as accountConcurrencyLimit.
+	if raw, ok := os.LookupEnv("M365_ACCOUNT_CONCURRENCY_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 8
+	}
+	if n := currentSettings().AccountConcurrencyLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 8
+}
 
 // resolveModelAlias maps a client-requested model name through the configured
 // alias table (case-insensitive). Unmatched models are returned unchanged, so

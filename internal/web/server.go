@@ -464,6 +464,8 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/admin/models/test", s.adminModelTest)
 	m.HandleFunc("/api/admin/models/sync", s.adminModelSync)
 	m.HandleFunc("/api/admin/settings", s.adminSettings)
+	m.HandleFunc("/api/admin/analytics", s.adminAnalytics)
+	m.HandleFunc("/api/admin/analytics/reset", s.adminAnalyticsReset)
 	m.HandleFunc("/api/admin/proxy-pool", s.proxyPool)
 	m.HandleFunc("/api/admin/deployments", s.deployments)
 	m.HandleFunc("/api/admin/deployment", s.deploymentAction)
@@ -1656,11 +1658,12 @@ func (s *Server) chatOnce(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		originalErr := err
+		analyticsFailover()
 		// Failover: a rate-limited or auth-failed account must not take down the
 		// request when the pool has other healthy accounts. Only auto-selected
 		// requests fail over; an explicitly chosen account is respected, and a
 		// conversation-bound chat stays on its account.
-		if body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err)) && (IsRateLimited(err) || body.ConversationID == "") {
+		if body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "") {
 			next, nerr := s.nextHealthyAccount(acc.ID)
 			if nerr == nil {
 				ctx2, cancel2 := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ChatTimeoutSeconds)*time.Second)
@@ -1979,7 +1982,7 @@ func buildAnswerRequest(answerPrompt, tone string, body oaiReq, ledger agentLedg
 		answerPrompt += "\n" + ledger.RouterContext()
 	}
 	if len(ledger.Completed) > 0 {
-		answerPrompt += "\nFINAL ANSWER RULE: Report only actions supported by completed tool results. If the goal is not fully verified, state exactly what remains unconfirmed."
+		answerPrompt += "\nCONTINUE RULE: Tool results above are already available. Keep taking the actions required to finish the request and call more tools as needed; only give a final summary once the task is actually complete and verified."
 	}
 	req := chathub.Request{Text: answerPrompt, Tone: tone, ConversationID: body.ConversationID, SessionID: body.SessionID, Attachments: body.Attachments, LicenseType: cfg.LicenseType, Scenario: cfg.Scenario, FeatureFlags: flags, Locale: locale.Locale, Market: locale.Market, TimeZone: locale.TimeZone, TimeZoneOffset: locale.TimeZoneOffset, DeviceOS: locale.DeviceOS, DisableMemory: disableMemory}
 	if planningMode == "native" {
@@ -2092,6 +2095,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	ledger := buildAgentLedger(body.Messages)
 	activeLedger := buildAgentLedger(activeMessages(body.Messages))
 	if err := activeLedger.CanContinue(maxToolRounds()); err != nil {
+		analyticsStuckLoopReject()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"type": "tool_round_limit", "message": err.Error(), "completed_calls": len(activeLedger.Completed)}})
@@ -2116,6 +2120,20 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[context-budget] id=%s auto-compact applied, messages=%d", requestID, len(compactedMsgs))
 	}
 	body.Messages = compactedMsgs
+	if compacted {
+		analyticsAutoCompact()
+	}
+	// Opt-in context hygiene (disabled by default). When active we clean the
+	// full message set and re-flatten, and skip the incremental conversation
+	// reuse below (which relies on absolute indices into the original array).
+	preprocessActive := cfgBudget.DedupeToolResults || cfgBudget.MaxHistoryMessages > 0 ||
+		(cfgBudget.ToolResultMode != "" && cfgBudget.ToolResultMode != "full") || cfgBudget.MaxToolResultChars > 0 ||
+		cfgBudget.EnableRepoMap || cfgBudget.EnableFileSummaryCache
+	convKey := ""
+	if preprocessActive {
+		convKey = sessionKeyFor(body.ConversationID, body.Messages)
+		body.Messages = preprocessMessages(body.Messages, cfgBudget, convKey)
+	}
 	// Preserve role boundaries when adapting OpenAI messages to ChatHub's
 	// single message.text field. This keeps system/developer instructions,
 	// history, and the current user turn distinguishable.
@@ -2124,6 +2142,17 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[req-trace] id=%s stage=prompt_flattened prompt_len=%d attachments=%d", requestID, len(prompt), len(body.Attachments))
 	fmt.Printf("[multimodal-entry] messages=%d attachments=%d prompt_len=%d\n", len(body.Messages), len(body.Attachments), len(prompt))
 	prompt = strings.TrimSpace(prompt)
+	if cfgBudget.AutonomyBoost {
+		prompt = applyAutonomyBoost(prompt, true)
+	}
+	if cfgBudget.EnableRepoMap && preprocessActive {
+		if rk := knowledgeFor(convKey); rk != nil {
+			if rm := rk.repoMapText(); rm != "" {
+				prompt = prompt + "\n\n" + rm
+				analyticsRepoMapInjection()
+			}
+		}
+	}
 	if responseFormat != nil {
 		switch responseFormat.Type {
 		case "json_object":
@@ -2171,7 +2200,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	answerPrompt := prompt
 	resolvedConversationID := ""
-	if body.ConversationID == "" && len(body.Messages) > 0 && (body.Metadata == nil || !body.Metadata.CopilotTempSession) {
+	if !preprocessActive && body.ConversationID == "" && len(body.Messages) > 0 && (body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		resolved := s.sessionResolver.Resolve(r, &body)
 		if !resolved.IsNew {
 			resolvedConversationID = resolved.ConversationID
@@ -2213,7 +2242,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// was provided by client, session key, user session, or session resolver.
 	convReused := false
 	convCacheModel := firstNonEmpty(body.Model, "m365-copilot")
-	if body.ConversationID == "" && len(body.Messages) > 1 &&
+	if !preprocessActive && body.ConversationID == "" && len(body.Messages) > 1 &&
 		(body.Metadata == nil || !body.Metadata.CopilotTempSession) {
 		sysHash := systemPromptHash(body.Messages)
 		if cached := s.convCache.Lookup(acc.ID, convCacheModel); cached != nil && cached.SystemPrompt == sysHash {
@@ -2263,6 +2292,12 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		return valid, len(rejected)
 	}
 	planningMode := s.settings.get().ToolPlanningMode
+	// A client that sends its own tool definitions (an agentic coding client
+	// such as WorkBuddy/Trae) expects standard native tool_calls back. Skip the
+	// fragile router pre-pass and forward tools directly so the model can act.
+	if len(body.Tools) > 0 {
+		planningMode = "native"
+	}
 	toolCfg := s.settings.get()
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ChatTimeoutSeconds)*time.Second)
@@ -2430,8 +2465,9 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			text.WriteString(ev.Text)
 			return emitText(ev.Text)
 		})
-		if err != nil && text.Len() == 0 && len(streamedTools) == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
+		if err != nil && text.Len() == 0 && len(streamedTools) == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			// A throttled stream may retry on the next healthy account: only the
 			// ": connected" preamble reached the client, so the retried stream is
 			// indistinguishable from a fresh request.
@@ -2739,6 +2775,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			return nil
 		}
 		onReasoning := func(reasoning string) error {
+			if s.settings.get().HideReasoning {
+				return nil
+			}
 			if reasoning = reasoningFilter.Push(reasoning); reasoning != "" {
 				return writeChunk(map[string]any{"reasoning_content": reasoning})
 			}
@@ -2779,8 +2818,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			return onReasoning(reasoning)
 		}
 		res, err = s.chatWithAccountReasoning(ctx, acc.ID, account, answerReq, onDeltaWrapped, onReasoningWrapped)
-		if err != nil && streamedReasoningLen == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
+		if err != nil && streamedReasoningLen == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			next, nerr := s.nextHealthyAccount(acc.ID)
 			if nerr == nil {
 				failoverReq := answerReq
@@ -2887,8 +2927,9 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 				err = nil
 			}
 		}
-		if err != nil && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
+		if err != nil && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			// Failover only when nothing pins the request to a conversation or
 			// account; a fresh chat can safely retry on the next healthy account.
 			next, nerr := s.nextHealthyAccount(acc.ID)
@@ -3123,7 +3164,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		"role":    "assistant",
 		"content": content,
 	}
-	if res.Reasoning != "" {
+	if res.Reasoning != "" && !s.settings.get().HideReasoning {
 		assistant["reasoning_content"] = res.Reasoning
 	}
 	// 上游 ChatHub 不返回 token 计数，按请求/回复文本本地估算填充

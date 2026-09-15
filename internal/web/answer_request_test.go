@@ -40,7 +40,7 @@ func TestBuildAnswerRequestNativeForwardsTools(t *testing.T) {
 func TestBuildAnswerRequestAddsCompletedEvidence(t *testing.T) {
 	ledger := agentLedger{Completed: []toolEvidence{{ID: "call_1", Name: "read_file", Arguments: `{}`, Result: "ok"}}}
 	req := buildAnswerRequest("[user]\nsummarize", "magic", answerRequestTestBody(), ledger, "router", "", runtimeSettings{}, chathub.FeatureFlags{}, chathubLocale{}, false)
-	for _, want := range []string{"EVIDENCE_LEDGER:", "Report only actions supported by completed tool results"} {
+	for _, want := range []string{"EVIDENCE_LEDGER:", "CONTINUE RULE:"} {
 		if !strings.Contains(req.Text, want) {
 			t.Fatalf("answer prompt missing %q: %s", want, req.Text)
 		}

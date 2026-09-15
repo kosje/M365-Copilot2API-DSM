@@ -31,13 +31,16 @@ git log --oneline HEAD..upstream/main      # 看新增了什么
 git merge upstream/main
 ```
 
-至今每次合并都是干净的——本仓库的改动集中在上游很少触碰的位置。合并后务必确认这几处还在：
+多数合并是干净的——本仓库的改动集中在上游很少触碰的位置。
+
+**冲突时的处置原则：如果上游独立解决了同一个问题，采用上游的实现，撤掉我们的。** 并行维护两套同类逻辑只会制造永久冲突。已发生过一次：我们把工具循环阈值从 2/3 提到 3/5（治标），上游在 v1.6.0 改成了相邻感知 + 进展感知——只有**连续**的相同调用**且返回相同结果**才计入 stuck，重新读取若内容不同就打断计数。那个方案从根本上区分了「原地打转」和「正常复查」，我们的 `loopThresholds` 已整体让位给上游的 `loopSameLimit` / `loopRepeatLimit`。
+
+合并后务必确认这几处还在：
 
 ```bash
 grep -c 'ID: "auto"'                    internal/web/codex_catalog.go   # auto 进 /v1/models
 grep -c 'kosje/M365-Copilot2API-DSM'    internal/web/selfupdate.go      # 更新源
 grep -c 'selfUpdateApplyEnabled = false' internal/web/selfupdate.go     # 一键更新停用
-grep -c 'loopThresholds'                internal/web/agent_ledger.go    # 循环阈值
 grep -c 'validFileTail'                 internal/web/fileproxy.go       # 文件尾校验
 grep -c 'kosje/M365-Copilot2API-DSM'    web/index.html                  # 前端链接（应为 2）
 grep -c 'u.applyEnabled!==false'        web/index.html                  # 隐藏一键更新按钮

@@ -91,19 +91,40 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 		}
 	}
 	l := agentLedger{}
-	stuckAt, failAt := loopThresholds()
-	seenCall := map[string]int{}
-	seenFailure := map[string]int{}
+	sameLimit := loopSameLimit()
+	repeatLimit := loopRepeatLimit()
+	// Adjacency-aware, progress-aware loop detection. The old logic counted
+	// identical calls globally across the whole history, which aborted long
+	// multi-step agent chains that legitimately re-issue reads/searches/checks.
+	// Now a call only extends a "stuck" run when it is *consecutive* (the
+	// immediately preceding call had the same name+args) AND returns the *same*
+	// result (no progress). A re-read that yields different content breaks the
+	// run instead of triggering a false positive.
+	prevSig := ""
+	consecSame := 0
+	lastResult := map[string]string{}
+	prevFail := ""
+	consecFail := 0
 	for _, id := range order {
 		e := calls[id]
 		l.ToolRounds++
 		sig := e.Name + "\x00" + e.Arguments
-		seenCall[sig]++
-		if seenCall[sig] >= 2 {
+		if sig == prevSig {
+			if e.Result != "" && e.Result == lastResult[sig] {
+				consecSame++
+			} else {
+				consecSame = 1
+			}
+		} else {
+			consecSame = 1
+			prevSig = sig
+		}
+		lastResult[sig] = e.Result
+		if consecSame >= 2 {
 			l.RepeatedCall = true
 			l.RepetitionSignature = sig
 		}
-		if seenCall[sig] >= stuckAt {
+		if consecSame >= sameLimit {
 			l.StuckLoop = true
 		}
 		if e.Result == "" {
@@ -111,47 +132,31 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 		} else {
 			l.Completed = append(l.Completed, e)
 			if e.Failed {
+				// Consecutive identical failures (same name+args+result) signal a
+				// dead-end retry loop. A successful call, or a failure whose result
+				// differs (the situation is changing), resets the run.
 				fs := e.Name + "\x00" + e.Arguments + "\x00" + normalizeFailure(e.Result)
-				seenFailure[fs]++
-				if seenFailure[fs] >= failAt {
+				if fs == prevFail {
+					consecFail++
+				} else {
+					consecFail = 1
+					prevFail = fs
+				}
+				if consecFail >= 2 {
 					l.RepeatedFailure = true
 					l.RepetitionSignature = fs
 				}
-				if seenFailure[fs] >= failAt+1 {
+				if consecFail >= repeatLimit {
 					l.StuckLoop = true
 				}
+			} else {
+				consecFail = 0
+				prevFail = ""
 			}
 		}
 	}
 	return l
 }
-// loopThresholds returns how many identical calls, and how many identical
-// failures, end the turn with HTTP 409.
-//
-// The old values (3 identical calls, 2 identical failures) cut off ordinary
-// work. An agent narrowing something down re-runs the same probe while it
-// varies the surrounding approach, and two identical errors is a completely
-// normal step in that — the second one is often what proves the approach is
-// dead. Aborting there ends the turn mid-investigation and the user has to
-// send another message just to resume, which is what the limit felt like in
-// practice rather than protection from a runaway loop.
-//
-// A genuine loop repeats far more than five times, so the higher defaults
-// still stop it long before it becomes expensive. Both are tunable:
-// M365_LOOP_REPEAT_LIMIT for identical calls, M365_LOOP_FAILURE_LIMIT for
-// identical failures (StuckLoop then trips one above the failure limit).
-func loopThresholds() (stuck, failure int) {
-	envInt := func(name string, def, min int) int {
-		if raw, ok := os.LookupEnv(name); ok {
-			if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && n >= min && n <= 100 {
-				return n
-			}
-		}
-		return def
-	}
-	return envInt("M365_LOOP_REPEAT_LIMIT", 5, 2), envInt("M365_LOOP_FAILURE_LIMIT", 3, 2)
-}
-
 func normalizeFailure(s string) string {
 	s = strings.ToLower(s)
 	s = regexp.MustCompile(`\d+`).ReplaceAllString(s, "#")
@@ -222,8 +227,7 @@ func (l agentLedger) CanContinue(maxRounds int) error {
 		return fmt.Errorf("tool round limit reached: %d", maxRounds)
 	}
 	if l.StuckLoop {
-		stuck, _ := loopThresholds()
-		return fmt.Errorf("stuck tool loop detected: same call repeated %d+ times", stuck)
+		return fmt.Errorf("stuck tool loop detected: same call repeated %d+ times or same failure repeated %d+ times", loopSameLimit(), loopRepeatLimit())
 	}
 	if l.RepeatedFailure {
 		return fmt.Errorf("repeated tool failure detected: %s", l.RepetitionSignature)
@@ -244,6 +248,30 @@ func maxToolRounds() int {
 		return n
 	}
 	return 32
+}
+func loopSameLimit() int {
+	if raw, ok := os.LookupEnv("M365_LOOP_SAME_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 3
+	}
+	if n := currentSettings().LoopSameLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 3
+}
+func loopRepeatLimit() int {
+	if raw, ok := os.LookupEnv("M365_LOOP_REPEAT_LIMIT"); ok {
+		if n, e := strconv.Atoi(strings.TrimSpace(raw)); e == nil && n > 0 && n <= 64 {
+			return n
+		}
+		return 5
+	}
+	if n := currentSettings().LoopRepeatLimit; n > 0 && n <= 64 {
+		return n
+	}
+	return 5
 }
 func activeMessages(messages []oaiMsg) []oaiMsg {
 	last := -1

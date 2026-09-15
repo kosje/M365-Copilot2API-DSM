@@ -14,40 +14,25 @@ func TestCompactToolResultKeepsHeadTailAndError(t *testing.T) {
 	}
 }
 
-// failedCallPair builds one assistant tool call plus its failing result.
-func failedCallPair(id string) []oaiMsg {
-	return []oaiMsg{
-		{Role: "assistant", ToolCalls: []map[string]any{{"id": id, "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
-		{Role: "tool", ToolCallID: id, Content: "exit code 1: failed"},
-	}
-}
-
 func TestAgentLedgerDetectsRepeatedFailure(t *testing.T) {
-	// Two identical failures are ordinary: an agent narrowing something down
-	// re-runs the same probe, and the second identical error is often what
-	// proves the approach is dead rather than a sign of a runaway loop.
-	// Ending the turn there is what made long tasks stop halfway and need a
-	// nudge to resume, so the limit now trips on the third.
-	two := append(failedCallPair("c1"), failedCallPair("c2")...)
-	if l := buildAgentLedger(two); l.RepeatedFailure {
-		t.Fatalf("two identical failures must not end the turn: %+v", l)
+	msgs := []oaiMsg{
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c1", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c1", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c2", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c2", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c3", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c3", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c4", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c4", Content: "exit code 1: failed"},
+		{Role: "assistant", ToolCalls: []map[string]any{{"id": "c5", "type": "function", "function": map[string]any{"name": "run", "arguments": "{\"cmd\":\"build\"}"}}}},
+		{Role: "tool", ToolCallID: "c5", Content: "exit code 1: failed"},
 	}
-
-	three := append(two, failedCallPair("c3")...)
-	l := buildAgentLedger(three)
+	l := buildAgentLedger(msgs)
 	if !l.RepeatedFailure {
-		t.Fatalf("expected repeated failure at three: %+v", l)
+		t.Fatalf("expected repeated failure: %+v", l)
 	}
 	if !strings.Contains(l.RouterContext(), "change strategy") {
 		t.Fatal(l.RouterContext())
-	}
-}
-
-func TestAgentLedgerLoopThresholdsAreConfigurable(t *testing.T) {
-	t.Setenv("M365_LOOP_FAILURE_LIMIT", "2")
-	two := append(failedCallPair("c1"), failedCallPair("c2")...)
-	if l := buildAgentLedger(two); !l.RepeatedFailure {
-		t.Fatalf("env override back to 2 should trip on two failures: %+v", l)
 	}
 }
 
@@ -118,5 +103,50 @@ func TestCompletionGuardRejectsUnsupportedSuccess(t *testing.T) {
 	}
 	if !completionEvidenceAllows("I cannot confirm completion because no tool results were returned.", buildAgentLedger(nil)) {
 		t.Fatal("honest incomplete response rejected")
+	}
+}
+
+// Non-adjacent identical calls (e.g. re-reading the same file after an edit)
+// must NOT be flagged as a stuck loop, even when they outnumber the threshold.
+func TestAgentLedgerNonAdjacentSameCallsNotStuck(t *testing.T) {
+	var msgs []oaiMsg
+	steps := []struct {
+		id, name, args, res string
+	}{
+		{"c1", "read", `{"f":"a"}`, "v1"},
+		{"c2", "edit", `{"f":"a"}`, "ok"},
+		{"c3", "read", `{"f":"a"}`, "v2"},
+		{"c4", "run", `{"x":1}`, "out1"},
+		{"c5", "read", `{"f":"a"}`, "v3"},
+	}
+	for _, s := range steps {
+		msgs = append(msgs,
+			oaiMsg{Role: "assistant", ToolCalls: []map[string]any{{"id": s.id, "type": "function", "function": map[string]any{"name": s.name, "arguments": s.args}}}},
+			oaiMsg{Role: "tool", ToolCallID: s.id, Content: s.res},
+		)
+	}
+	l := buildAgentLedger(msgs)
+	if l.StuckLoop {
+		t.Fatalf("non-adjacent identical read calls wrongly flagged as stuck: %+v", l)
+	}
+	if l.RepeatedFailure {
+		t.Fatalf("non-adjacent calls must not be a repeated failure: %+v", l)
+	}
+}
+
+// Six consecutive identical calls returning the same result must still trigger
+// a stuck loop (default loopSameLimit is 6).
+func TestAgentLedgerConsecutiveSameCallsStuck(t *testing.T) {
+	var msgs []oaiMsg
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("c%d", i)
+		msgs = append(msgs,
+			oaiMsg{Role: "assistant", ToolCalls: []map[string]any{{"id": id, "type": "function", "function": map[string]any{"name": "poll", "arguments": `{"id":1}`}}}},
+			oaiMsg{Role: "tool", ToolCallID: id, Content: "still pending"},
+		)
+	}
+	l := buildAgentLedger(msgs)
+	if !l.StuckLoop {
+		t.Fatalf("expected stuck loop after 6 consecutive identical calls, got %+v", l)
 	}
 }

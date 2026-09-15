@@ -10,7 +10,7 @@ import (
 func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sendUsage bool, calls []detectedToolCall, res chathub.Result) error {
 	toolCalls := toolCallMaps(calls)
 	msg := map[string]any{"role": "assistant", "content": nil, "tool_calls": toolCalls}
-	if res.Reasoning != "" {
+	if res.Reasoning != "" && !currentSettings().HideReasoning {
 		if reasoning := sanitizePublicReasoningText(res.Reasoning); reasoning != "" {
 			msg["reasoning_content"] = reasoning
 		}
@@ -34,8 +34,10 @@ func writeToolResponse(w http.ResponseWriter, id, model string, stream bool, sen
 			return map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
 		}
 		firstDelta := map[string]any{"role": "assistant", "content": nil}
-		if reasoning := sanitizePublicReasoningText(res.Reasoning); reasoning != "" {
-			firstDelta["reasoning_content"] = reasoning
+		if !currentSettings().HideReasoning {
+			if reasoning := sanitizePublicReasoningText(res.Reasoning); reasoning != "" {
+				firstDelta["reasoning_content"] = reasoning
+			}
 		}
 		emit(base(firstDelta, nil))
 		const chunkSize = 512

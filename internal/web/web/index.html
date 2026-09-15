@@ -317,6 +317,7 @@ body{background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display"
       <button data-page="proxies" onclick="showPage('proxies')"><i data-lucide="globe" style="width:16px;height:16px;flex-shrink:0"></i><span>Proxy Pool</span></button>
       <button data-page="modeltest" onclick="showPage('modeltest')"><i data-lucide="flask-conical" style="width:16px;height:16px;flex-shrink:0"></i><span>Model Test</span></button>
       <button data-page="settings" onclick="showPage('settings')"><i data-lucide="settings" style="width:16px;height:16px;flex-shrink:0"></i><span>Settings</span></button>
+      <button data-page="advanced" onclick="showPage('advanced')"><i data-lucide="sliders-horizontal" style="width:16px;height:16px;flex-shrink:0"></i><span>Advanced</span></button>
     </nav>
     <div class="sidebar-foot" id="verFoot">…</div>
   </aside>
@@ -698,6 +699,97 @@ if (response.output_text) {
         <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
         <div class="card"><div class="card-body"><div class="form-group"><label class="form-label">Chat timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120"></div><div class="form-group"><label class="form-label">Quota refresh interval (seconds, 0=off)</label><input class="form-input" id="setQuotaRefresh" type="number" placeholder="300"><p class="form-hint">自动探测并刷新所有账号的 M365 额度（剩余用量）。默认 300 秒；设为 0 关闭定时刷新。账号新增时也会立即刷新一次。</p></div><div class="form-group"><label class="form-label">Token 主动刷新间隔（秒，0=off）</label><input class="form-input" id="setTokenRefresh" type="number" placeholder="21600"><p class="form-hint">Token 即将到期前主动刷新（默认 21600 秒 = 6 小时），避免高峰期集中失效。刷新失败会触发告警通知。</p></div><div class="form-group"><label class="form-label"><input type="checkbox" id="setAutoCompact" style="margin-right:6px">启用 Auto-Compact（上下文自动压缩）</label><p class="form-hint">请求超过上下文预算时，把被挤掉的历史用一次上游调用压缩成摘要并注入回上下文（而不是静默丢弃），适合整站审计等超长任务。响应头 <code>X-M365-Context-Compacted: 1</code> 标识生效。</p></div><div class="form-group"><label class="form-label">Auto-Compact 最小压缩 token 数</label><input class="form-input" id="setCompactMin" type="number" placeholder="4000"><p class="form-hint">被丢弃历史低于该值时直接截断，不消耗一次上游调用做摘要。默认 4000。</p></div><div class="form-group"><label class="form-label">模型别名映射（每行一条：别名=目标模型）</label><textarea class="form-input" id="setAliases" rows="4" placeholder="gpt-4o=gpt-5.6-sol&#10;claude-sonnet-4=gpt-5.6-luna"></textarea><p class="form-hint">客户端写死 gpt-4o / claude-sonnet-4 等模型名时自动映射到已配置的公开模型，无需改客户端。目标必须是「模型管理」里已存在的公开模型。</p></div><div class="form-group"><label class="form-label">告警 Webhook URL（留空 = 关闭）</label><input class="form-input" id="setAlertUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hint/... 或 https://api.day.app/你的key 或 https://api.telegram.org/bot&lt;token&gt;/sendMessage"><p class="form-hint">支持飞书 bot / Bark / Telegram / 通用 JSON。触发事件：账号鉴权失败、Token 刷新失败、密钥配额耗尽、错误率超阈值。同类告警 1 小时内只发一次。</p></div><div class="form-group"><label class="form-label">Telegram Chat ID（仅 Telegram webhook 需要）</label><input class="form-input" id="setAlertChatId" placeholder="-1001234567890"></div><div class="form-group"><label class="form-label">错误率告警阈值（%，0=off）</label><input class="form-input" id="setAlertRate" type="number" min="0" max="100" placeholder="30"><p class="form-hint">最近 60 分钟错误率超过该值（且样本 ≥ 20）时告警。每 10 分钟检查一次。</p></div><div class="form-group"><button class="btn" onclick="testAlertWebhook()">发送测试通知</button></div><div class="form-group"><label class="form-label">Language</label><select class="form-input" id="languageSelect"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt-BR">Português (Brasil)</option><option value="ru">Русский</option><option value="ar">العربية</option></select><p class="form-hint">Choose the language used by the administration console.</p></div><div style="margin-top:16px"><button class="btn primary" onclick="saveSettings()">Save settings</button></div></div></div>
       </section>
+
+      <!-- Advanced Parameters -->
+      <section id="page-advanced" style="display:none">
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:8px">Advanced Parameters</h2>
+        <div class="card" style="border-color:#f59e0b;background:rgba(245,158,11,.05)">
+          <div class="card-body" style="padding:12px 16px">
+            <p style="margin:0;color:#b45309;font-size:13px;line-height:1.6"><strong>⚠️ 高级参数。</strong> 下列数值会影响 Agent 调度、上下文预算、会话复用与并发行为。除特殊说明外，修改后<strong>保存即生效</strong>，无需重启。建议先用默认值跑通，再按实际负载微调；数值越界会被后端校验拒绝（见每项下方范围）。</p>
+          </div>
+        </div>
+        <div class="card"><div class="card-body">
+          <h3 style="font-size:14px;font-weight:700;margin:4px 0 12px;color:#6366f1">Agent 调度</h3>
+          <div class="form-group"><label class="form-label">工具规划模式 (toolPlanningMode)</label><select class="form-input" id="advToolPlanning"><option value="router">router（网关路由规划）</option><option value="native">native（云端原生规划）</option></select><p class="form-hint">决定工具调用由网关本地规划还是透传给上游 Copilot 原生规划。<strong>默认 router</strong>。router 模式下网关根据可用工具自行决定调用，更可控；native 模式下由微软云端决定，可能更符合原生体验。切换后下一条请求生效。</p></div>
+          <div class="form-group"><label class="form-label">每轮最大工具调用数 (maxToolCallsPerTurn)</label><input class="form-input" id="advMaxToolCalls" type="number" min="1" max="64" placeholder="32"><p class="form-hint">单个回复轮次内最多允许并行发起的工具调用数量。范围 1-64，<strong>默认 32</strong>。并发仅对只读类工具（read/list/get/…）放开，写类工具（exec/write/edit/…）一律串行，因此该值主要决定「同时读多少源」。调太高可能被上游限流，调太低长任务会变慢。</p></div>
+          <div class="form-group"><label class="form-label">最大工具轮次 (maxToolRounds)</label><input class="form-input" id="advMaxRounds" type="number" min="1" max="512" placeholder="512"><p class="form-hint">一次对话请求内 Agent 循环迭代（工具调用→观察→再决策）的最大轮次。范围 1-512，<strong>默认 512</strong>。这是单条消息的「思考步数」硬上限，到达即停止。复杂多步任务建议保持较大值，简单任务可下调以省额度。</p></div>
+          <div class="form-group"><label class="form-label">同一调用循环检测阈值 (loopSameLimit)</label><input class="form-input" id="advLoopSame" type="number" min="1" max="64" placeholder="6"><p class="form-hint">Agent Ledger 仅在<strong>连续出现</strong>同一工具调用（同名同参）且<strong>返回结果无变化</strong>达到该次数时，才判定「卡死循环」并强制停止。范围 1-64，<strong>默认 6</strong>。改为此前邻接+无进展判定后，编码链中「重复读同一文件/重复搜索」等正常多步操作不再被误杀；真正的原地打转（同样调用同样结果反复出现）仍会被拦截。</p></div>
+          <div class="form-group"><label class="form-label">同一失败循环检测阈值 (loopRepeatLimit)</label><input class="form-input" id="advLoopRepeat" type="number" min="1" max="64" placeholder="5"><p class="form-hint">同一个错误<strong>连续失败</strong>达到该次数即判定「重复失败死循环」并停止。范围 1-64，<strong>默认 5</strong>。与 loopSameLimit 配合：前者防「原地打转」，后者防「反复撞同一错」。调高更宽容，调低更早放弃。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">上下文与输出预算</h3>
+          <div class="form-group"><label class="form-label">上下文窗口 (contextWindow, tokens)</label><input class="form-input" id="advCtx" type="number" min="1024" placeholder="128000"><p class="form-hint">传给上游模型的总上下文 token 预算（含历史 + 系统提示 + 本轮请求）。范围 ≥1024，<strong>默认 128000</strong>。需与所选上游模型的实际窗口匹配；设得过大而模型不支持会被上游截断。Auto-Compact 在此预算溢出时触发。</p></div>
+          <div class="form-group"><label class="form-label">单次最大输出 token (maxOutputTokens)</label><input class="form-input" id="advMaxOut" type="number" min="1" placeholder="16384"><p class="form-hint">单次回复允许生成的最大 token 数。范围 1 ~ 小于上下文窗口，<strong>默认 16384</strong>。长文/代码生成可上调，但受上游模型上限与上下文窗口共同约束。</p></div>
+          <div class="form-group"><label class="form-label">单对话最大消息数 (maxConversationMessages)</label><input class="form-input" id="advMaxConv" type="number" min="1" max="10000" placeholder="600"><p class="form-hint">单个会话保留的最大消息条数，超出部分从上下文头部丢弃（被丢弃历史若达到 Auto-Compact 阈值会先压缩）。范围 1-10000，<strong>默认 600</strong>。调高保留更长记忆，调低更省 token。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">会话复用</h3>
+          <div class="form-group"><label class="form-label">会话绑定 TTL (sessionTtlMinutes, 分钟)</label><input class="form-input" id="advSessionTTL" type="number" min="1" max="10080" placeholder="120"><p class="form-hint">会话绑定在 <code>sessions.json</code> 及内存中的存活时间。超过该时间未活跃即被清除，下次请求视为新会话。范围 1-10080（7 天），<strong>默认 120</strong>。长聊场景可调高，公共/多租户场景建议保持较短。</p></div>
+          <div class="form-group"><label class="form-label">上下文复用 TTL (contextTtlMinutes, 分钟)</label><input class="form-input" id="advContextTTL" type="number" min="1" max="10080" placeholder="120"><p class="form-hint">已解析对话上下文可用于前缀/后缀/模糊复用的时间窗口。范围 1-10080，<strong>默认 120</strong>。与 sessionTtlMinutes 通常保持一致；若希望历史短暂失忆可调低。</p></div>
+          <div class="form-group"><label class="form-label">上下文相似度阈值 (contextSimilarity, 0-1)</label><input class="form-input" id="advCtxSim" type="number" min="0" max="1" step="0.05" placeholder="0.6"><p class="form-hint">当严格前缀/后缀匹配失败时，用 Jaccard 相似度模糊匹配历史上下文；超过该阈值即复用对应会话。范围 0-1，<strong>默认 0.6</strong>。设 0 关闭模糊复用；设 1 要求几乎完全相同（仅允许少量字符差异）。推荐 0.5-0.8。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advPublicIdentity" style="width:18px;height:18px;cursor:pointer"><label for="advPublicIdentity" class="form-label" style="margin:0;cursor:pointer">启用公开身份策略 (publicIdentityPolicy)</label></div>
+          <p class="form-hint">开启后，当用户询问「你是谁/基于什么模型」时，回复会统一替换为 GPT-5 系列 AI 助手，并清洗正文、推理、引用中的 Microsoft/Copilot/M365 品牌标识。<strong>默认关闭</strong>。仅在需要对外公开访问且希望弱化微软品牌时启用。</p>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">超时与并发</h3>
+          <div class="form-group"><label class="form-label">聊天超时 (chatTimeoutSeconds, 秒)</label><input class="form-input" id="advChatTimeout" type="number" min="5" max="3600" placeholder="120"><p class="form-hint">单次聊天/补全请求的最长等待时间。范围 5-3600，<strong>默认 120</strong>。模型推理或工具链较长时可适度上调，超时返回 504。</p></div>
+          <div class="form-group"><label class="form-label">图片生成超时 (imageTimeoutSeconds, 秒)</label><input class="form-input" id="advImgTimeout" type="number" min="5" max="3600" placeholder="300"><p class="form-hint">一次画图/图生图请求的最长等待时间。范围 5-3600，<strong>默认 300</strong>。多图、高分辨率或生图队列繁忙时可能需要更久，超时返回 504。</p></div>
+          <div class="form-group"><label class="form-label">限流冷却时间 (rateLimitCooldownSeconds, 秒)</label><input class="form-input" id="advCooldown" type="number" min="5" max="3600" placeholder="30"><p class="form-hint">命中上游限流（429）后，账号进入冷却、暂停派发新请求的最短等待。范围 5-3600，<strong>默认 30</strong>。调高可减少对限流账号的无效重试，调低恢复更快但更易再撞限流。</p></div>
+          <div class="form-group"><label class="form-label">单账号并发上限 (accountConcurrencyLimit)</label><input class="form-input" id="advConcur" type="number" min="1" max="64" placeholder="8"><p class="form-hint">单个 M365 账号同时处理的请求数上限。范围 1-64，<strong>默认 8</strong>。对应环境变量 <code>M365_ACCOUNT_DEFAULT_CONCURRENCY</code>（旧名 <code>M365_ACCOUNT_CONCURRENCY_LIMIT</code> 仍兼容）。多账号池会按此值放大总吞吐；调太高可能触发账号级限流，调太低浪费账号额度。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">日志</h3>
+          <div class="form-group"><label class="form-label">日志级别 (logLevel)</label><select class="form-input" id="advLogLevel"><option value="silent">silent（完全静默）</option><option value="error">error（仅错误）</option><option value="warn">warn（错误与警告）</option><option value="info">info（常规运行信息）</option><option value="debug">debug（调试，输出最多）</option></select><p class="form-hint">控制台/日志文件输出粒度。<strong>默认 info</strong>。debug 会打印大量请求/响应细节，仅排查问题时临时开启；生产建议 info 或 warn。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:20px 0 12px;color:#6366f1">输出精简</h3>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advHideReasoning" style="width:18px;height:18px;cursor:pointer"><label for="advHideReasoning" class="form-label" style="margin:0;cursor:pointer">抑制推理内容下发 (hideReasoning)</label></div>
+          <p class="form-hint">开启后，网关不再把 <code>reasoning_content</code>（思维链/推理）写入返回给客户端的流与消息中。上游推理照常执行，只是对客户端不可见。<strong>默认关闭</strong>。对接 Claude Code / Codex 等 AI 编码工具时若觉得「推理块把窗口撑得过长、显示过于碎片化」，建议开启此项以减少不必要的输出体积。</p>
+          <div class="form-group"><label class="form-label">全局推理强度 (reasoningEffort)</label><select class="form-input" id="advReasoningEffort"><option value="">（模型默认）</option><option value="none">none（不推理）</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select><p class="form-hint">当客户端未显式指定推理强度时使用的<strong>全局默认</strong>。<strong>默认空 = 沿用各模型预设</strong>。调低（low/minimal）更快更省、配合 hideReasoning 更清爽；调高（high/xhigh）推理更深但更慢更贵。可选 none/minimal/low/medium/high/xhigh（环境变量 <code>M365_REASONING_EFFORT</code>）。</p></div>
+          <div class="form-group"><label class="form-label">上行历史消息上限 (maxHistoryMessages)</label><input class="form-input" id="advMaxHist" type="number" min="0" max="10000" placeholder="0（不限）"><p class="form-hint">发送给上游的对话消息条数上限（system/developer 始终保留）。<strong>默认 0 = 不限制</strong>，由 Auto-Compact 在 token 溢出时压缩。设为如 60 可主动裁剪最旧历史，省上行 token、降延迟。环境变量 <code>M365_MAX_HISTORY_MESSAGES</code>。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advDedupe" style="width:18px;height:18px;cursor:pointer"><label for="advDedupe" class="form-label" style="margin:0;cursor:pointer">工具结果去重 (dedupeToolResults)</label></div>
+          <p class="form-hint">开启后，连续两条「相同 ToolCallID + 相同内容」的 tool 结果折叠为一条再上行，省上下文 token（重复读同一文件/重复搜索很常见）。内容幂等，折叠前后语义一致。<strong>默认关闭</strong>。环境变量 <code>M365_DEDUPE_TOOL_RESULTS</code>。</p>
+          <div class="form-group"><label class="form-label">单条工具结果字符上限 (maxToolResultChars)</label><input class="form-input" id="advToolCap" type="number" min="0" max="1000000" placeholder="0（不限制）"><p class="form-hint">单条 tool 结果（读文件 / 编译日志 / grep 输出等）上行前的最大字符数，超出部分截断并附「[result truncated …]」提示。<strong>默认 0 = 不限制</strong>；建议设为如 <strong>16000</strong>，防止一次超大输出撑爆上下文预算或触发 auto-compact 丢失早期历史。环境变量 <code>M365_MAX_TOOL_RESULT_CHARS</code>。</p></div>
+          <div class="form-group"><label class="form-label">工具结果压缩模式 (toolResultMode)</label><select class="form-input" id="advToolMode"><option value="full">full（按上限截断）</option><option value="smart">smart（结构化压缩：保留头部+全部错误/警告+尾部）</option><option value="minimal">minimal（仅错误/警告+极短尾部）</option></select><p class="form-hint">oversized 工具结果的处理方式。<strong>默认 full</strong>：只按 <code>maxToolResultChars</code> 硬截断。<strong>smart</strong>（推荐编码场景）：把 6000 行 build/install/test 日志压缩成头部+所有 error/warn 行+尾部的几十行，token 成本降一个数量级而信号不丢。<strong>minimal</strong>：更激进，仅留诊断行。环境变量 <code>M365_TOOL_RESULT_MODE</code>。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advAutonomy" style="width:18px;height:18px;cursor:pointer"><label for="advAutonomy" class="form-label" style="margin:0;cursor:pointer">自主性增强 (autonomyBoost)</label></div>
+          <p class="form-hint">开启后，网关在上游 prompt 注入「自主编码代理」指令——要求模型<strong>实现全部改动、自行跑 build/test 验证、未完成不得提前结束</strong>。这是无状态代理对「自动续跑 / 完成度裁判」的正确实现：客户端（WorkBuddy / Trae）持有工具执行循环，网关通过指令驱动上游模型把客户端的循环一次性跑完，而非反复「继续」。<strong>默认关闭</strong>。环境变量 <code>M365_AUTONOMY_BOOST</code>。</p></div>
+
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advRepoMap" style="width:18px;height:18px;cursor:pointer"><label for="advRepoMap" class="form-label" style="margin:0;cursor:pointer">仓库语义地图 (enableRepoMap)</label></div>
+          <p class="form-hint">开启后，网关从本会话工具结果中<strong>观察到的文件路径</strong>构建一张按目录分组的「仓库地图」，并作为紧凑块注入上游 prompt——即使 auto-compact 截掉了早期历史，模型也能凭地图记住项目结构与已读文件，不再反复迷失方向。<strong>默认关闭</strong>；编码场景建议开启。环境变量 <code>M365_ENABLE_REPO_MAP</code>。</p>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advSumCache" style="width:18px;height:18px;cursor:pointer"><label for="advSumCache" class="form-label" style="margin:0;cursor:pointer">大文件摘要缓存 (enableFileSummaryCache)</label></div>
+          <p class="form-hint">开启后（需同时开启「工具结果去重」），同一份大文件/日志在会话内重复出现时，不再以「已省略」一笔带过，而是回放<strong>缓存的摘要</strong>（头部+全部错误/警告行+尾部）——省 token 的同时不丢信号，长会话重构大项目时体验显著提升。<strong>默认关闭</strong>。环境变量 <code>M365_ENABLE_FILE_SUMMARY_CACHE</code>。</p>
+
+          <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">AI Coding 预设</h3>
+          <div class="card" style="border-color:#6366f1;background:rgba(99,102,241,.05)"><div class="card-body" style="padding:12px 16px">
+            <p style="margin:0 0 10px;color:#4338ca;font-size:13px;line-height:1.6">一键套用针对某款 AI 编码工具的经调优参数组合（写入下方各字段并保存）。你仍可随后手动微调。</p>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <select class="form-input" id="advProfile" style="max-width:260px">
+                <option value="workbuddy">WorkBuddy</option>
+                <option value="trae">Trae</option>
+                <option value="claude_code">Claude Code</option>
+                <option value="cursor">Cursor</option>
+                <option value="gemini_cli">Gemini CLI</option>
+                <option value="custom">自定义（仅记录，不改参数）</option>
+              </select>
+              <button class="btn primary" onclick="applyCodingProfile()">应用预设</button>
+              <span id="advProfileStatus" style="font-size:13px;color:#64748b"></span>
+            </div>
+            <p class="form-hint" style="margin-top:10px">WorkBuddy：hideReasoning 开 + reasoning low + toolResultMode smart + autonomyBoost 开。Trae：hideReasoning 开 + reasoning medium + toolResultMode smart + autonomyBoost 开。Claude Code：hideReasoning 关 + reasoning high + toolResultMode smart。Cursor：hideReasoning 开 + reasoning medium + toolResultMode smart。Gemini CLI：hideReasoning 关 + reasoning 空 + toolResultMode minimal。</p>
+          </div></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">Agent Analytics（运行统计与优化建议）</h3>
+          <div class="card" style="border-color:#10b981;background:rgba(16,185,129,.05)"><div class="card-body" style="padding:12px 16px">
+            <div id="advAnalytics" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#065f46"></div>
+            <ul id="advAnalyticsSug" style="margin:10px 0 0;padding-left:18px;font-size:13px;color:#065f46;line-height:1.7"></ul>
+            <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+              <button class="btn" onclick="loadAnalytics()">刷新统计</button>
+              <button class="btn" onclick="resetAnalytics()">清零统计</button>
+              <span id="advAnalyticsStatus" style="font-size:13px;color:#64748b"></span>
+            </div>
+          </div></div>
+
+          <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+            <button class="btn primary" onclick="saveAdvanced()">保存高级参数</button>
+            <button class="btn" onclick="loadAdvanced()">重置为已保存值</button>
+            <span id="advStatus" style="font-size:13px;color:#64748b"></span>
+          </div>
+        </div></div>
+      </section>
     </div>
   </main>
 </div>
@@ -806,7 +898,7 @@ if (response.output_text) {
 
 <script>
 const $=id=>document.getElementById(id);
-const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',chat:'Chat Users',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings'};
+const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',chat:'Chat Users',proxies:'Proxy Pool',modeltest:'Model Test',settings:'Settings',advanced:'Advanced Parameters'};
 const localeStorageKey='m365_locale';
 const localeSelectionKey='m365_locale_selected';
 const SUPPORTED_LOCALES=['en','zh-CN','zh-TW','ja','ko','es','fr','de','pt-BR','ru','ar'];
@@ -1121,7 +1213,7 @@ function showNotice(msg,type='info'){
 }
 
 function showPage(p){
-  ['dashboard','usage','accounts','apikeys','conversations','chat','proxies','modeltest','settings'].forEach(k=>{
+  ['dashboard','usage','accounts','apikeys','conversations','chat','proxies','modeltest','settings','advanced'].forEach(k=>{
     $('page-'+k).style.display=k===p?'block':'none';
     document.querySelector('[data-page="'+k+'"]')?.classList.toggle('active',k===p);
   });
@@ -1135,6 +1227,7 @@ function showPage(p){
   if(p==='proxies')loadProxies();
   if(p==='modeltest')loadModelTest();
   if(p==='settings')loadSettings();
+  if(p==='advanced'){loadAdvanced();loadAnalytics();}
 }
 
 let onboardingHidden=false;
@@ -2379,6 +2472,125 @@ async function saveSettings(){
 async function testAlertWebhook(){
   try{await api('/api/admin/alerts/test',{method:'POST'});showNotice('测试通知已发送，请查收','success');}
   catch(e){showNotice(e.message,'error');}
+}
+
+// Advanced Parameters page: expose all tunable constants for live editing.
+const advFields=[
+  {id:'advToolPlanning', key:'toolPlanningMode', def:'router', type:'select'},
+  {id:'advMaxToolCalls', key:'maxToolCallsPerTurn', def:32, type:'int'},
+  {id:'advMaxRounds',    key:'maxToolRounds',       def:512, type:'int'},
+  {id:'advLoopSame',     key:'loopSameLimit',       def:6, type:'int'},
+  {id:'advLoopRepeat',   key:'loopRepeatLimit',     def:5, type:'int'},
+  {id:'advCtx',          key:'contextWindow',       def:128000, type:'int'},
+  {id:'advMaxOut',       key:'maxOutputTokens',     def:16384, type:'int'},
+  {id:'advMaxConv',      key:'maxConversationMessages', def:600, type:'int'},
+  {id:'advSessionTTL',   key:'sessionTtlMinutes',   def:120, type:'int'},
+  {id:'advContextTTL',   key:'contextTtlMinutes',   def:120, type:'int'},
+  {id:'advCtxSim',       key:'contextSimilarity',   def:0.6, type:'float'},
+  {id:'advChatTimeout',  key:'chatTimeoutSeconds',  def:120, type:'int'},
+  {id:'advImgTimeout',   key:'imageTimeoutSeconds', def:300, type:'int'},
+  {id:'advCooldown',     key:'rateLimitCooldownSeconds', def:30, type:'int'},
+  {id:'advConcur',       key:'accountConcurrencyLimit', def:8, type:'int'},
+  {id:'advLogLevel',     key:'logLevel',            def:'info', type:'select'},
+  {id:'advHideReasoning',key:'hideReasoning',       def:false, type:'bool'},
+  {id:'advReasoningEffort', key:'reasoningEffort',  def:'', type:'select'},
+  {id:'advMaxHist',      key:'maxHistoryMessages',  def:0, type:'int'},
+  {id:'advDedupe',       key:'dedupeToolResults',   def:false, type:'bool'},
+  {id:'advToolCap',      key:'maxToolResultChars',  def:0, type:'int'},
+  {id:'advToolMode',     key:'toolResultMode',      def:'full', type:'select'},
+  {id:'advAutonomy',     key:'autonomyBoost',       def:false, type:'bool'},
+  {id:'advRepoMap',      key:'enableRepoMap',       def:false, type:'bool'},
+  {id:'advSumCache',     key:'enableFileSummaryCache', def:false, type:'bool'},
+];
+async function loadAdvanced(){
+  try{
+    const d=await api('/api/admin/settings');
+    const v=d.settings||{};
+    advFields.forEach(f=>{
+      const el=$(f.id); if(!el) return;
+      const val=v[f.key];
+      if(f.type==='bool'){ el.checked = val!=null ? !!val : !!f.def; }
+      else if(f.type==='select') el.value = (val!=null && val!=='') ? val : f.def;
+      else if(f.type==='float') el.value = (val!=null && val!=='') ? val : f.def;
+      else el.value = (val!=null && val!==0) ? val : f.def;
+    });
+    const pub=$('advPublicIdentity');
+    if(pub) pub.checked = v.publicIdentityPolicy!=null ? !!v.publicIdentityPolicy : false;
+    const prof=$('advProfile');
+    if(prof) prof.value = v.codingProfile!=null && v.codingProfile!=='' ? v.codingProfile : 'custom';
+    $('advStatus').textContent='';
+  }catch(e){showNotice(e.message,'error');}
+}
+async function saveAdvanced(){
+  try{
+    const body={};
+    advFields.forEach(f=>{
+      const el=$(f.id); if(!el) return;
+      if(f.type==='bool'){ body[f.key]=!!el.checked; return; }
+      const raw=(el.value||'').trim();
+      if(raw==='') return;            // 留空 = 沿用已保存值
+      if(f.type==='select'){ body[f.key]=raw; }
+      else if(f.type==='float'){ const n=parseFloat(raw); if(!Number.isNaN(n)) body[f.key]=n; }
+      else { const n=parseInt(raw,10); if(!Number.isNaN(n)) body[f.key]=n; }
+    });
+    const pub=$('advPublicIdentity');
+    if(pub) body.publicIdentityPolicy = pub.checked;
+    if(Object.keys(body).length===0){ $('advStatus').textContent='未改动任何值'; return; }
+    await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
+    $('advStatus').textContent='✓ 已保存';
+    showNotice('高级参数已保存','success');
+  }catch(e){ $('advStatus').textContent='✗ 保存失败'; showNotice(e.message,'error'); }
+}
+// applyCodingProfile writes a tuned combination of underlying fields for a
+// known AI-coding client, then reloads the form so the individual controls
+// reflect the preset. 'custom' only records the profile name.
+const CODING_PROFILES={
+  workbuddy:  {hideReasoning:true,  reasoningEffort:'low',    toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  trae:       {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  claude_code:{hideReasoning:false, reasoningEffort:'high',   toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  cursor:     {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  gemini_cli: {hideReasoning:false, reasoningEffort:'',       toolResultMode:'minimal',autonomyBoost:false, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:false},
+  custom:     {},
+};
+async function applyCodingProfile(){
+  try{
+    const key=$('advProfile').value;
+    const p=CODING_PROFILES[key]||{};
+    const body=Object.assign({},p,{codingProfile:key});
+    await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
+    await loadAdvanced();
+    $('advProfileStatus').textContent='✓ 已应用 '+key;
+    showNotice('AI Coding 预设已应用：'+key,'success');
+  }catch(e){ $('advProfileStatus').textContent='✗ 应用失败'; showNotice(e.message,'error'); }
+}
+
+const ANALYTICS_LABELS=[
+  ['requestsTotal','请求总数'],['completionsTotal','完成数'],['failoversTotal','断流转移'],
+  ['stuckLoopRejects','死循环拦截'],['autoCompacts','自动压缩'],['toolCallsObserved','工具调用数'],
+  ['toolResultsCompressed','结构化压缩'],['toolResultsCapped','截断次数'],['toolResultsDeduped','去重次数'],
+  ['fileSummariesServed','摘要回放'],['charsSaved','累计节省字符'],['repoMapInjections','地图注入次数'],
+];
+async function loadAnalytics(){
+  try{
+    const d=await api('/api/admin/analytics');
+    const a=d.analytics||{};
+    const box=$('advAnalytics');
+    box.innerHTML=ANALYTICS_LABELS.map(([k,label])=>{
+      const v=a[k]!=null?a[k]:0;
+      const val=(k==='charsSaved'&&v>1000)?(Math.round(v/1000)+'k'):v;
+      return '<span style="background:#d1fae5;border:1px solid #a7f3d0;border-radius:999px;padding:3px 10px;white-space:nowrap">'+label+' <strong>'+val+'</strong></span>';
+    }).join('');
+    const ul=$('advAnalyticsSug');
+    ul.innerHTML=(d.suggestions||[]).map(x=>'<li>'+x+'</li>').join('');
+    $('advAnalyticsStatus').textContent='';
+  }catch(e){ $('advAnalyticsStatus').textContent='✗ 加载失败'; }
+}
+async function resetAnalytics(){
+  try{
+    await api('/api/admin/analytics/reset',{method:'POST'});
+    showNotice('统计已清零','success');
+    loadAnalytics();
+  }catch(e){ showNotice(e.message,'error'); }
 }
 
 setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);

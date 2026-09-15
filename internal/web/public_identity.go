@@ -15,17 +15,19 @@ const (
 
 // publicIdentityPolicyEnabled is opt-in so ordinary upstream responses remain
 // untouched unless the Microsoft gateway channel explicitly enables it.
+// Explicit env values still win for backward compatibility; an empty env value
+// is treated as disabled. Otherwise the persisted runtime setting is consulted.
 func publicIdentityPolicyEnabled() bool {
 	raw, ok := os.LookupEnv("M365_PUBLIC_IDENTITY_POLICY")
-	if !ok || strings.TrimSpace(raw) == "" {
-		return false
+	if ok {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "", "0", "false", "no", "off", "disabled":
+			return false
+		default:
+			return true
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "0", "false", "no", "off", "disabled":
-		return false
-	default:
-		return true
-	}
+	return currentSettings().PublicIdentityPolicy
 }
 
 const (
