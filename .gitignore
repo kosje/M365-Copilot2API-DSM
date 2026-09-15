@@ -79,6 +79,8 @@ fnos_*.py
 /.gh-pages/
 # 打包中间产物
 /.spkbuild/
+/.spkbuild*/
+/.spkverify*/
 /.spkbin/
 /*.spk
 /checksums.txt
