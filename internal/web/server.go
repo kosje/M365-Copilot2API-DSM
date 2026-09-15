@@ -2250,7 +2250,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
 	if responseFormat == nil && os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
-			if ut := lastUserContent(body.Messages); shouldRouteChatImage(ut) {
+			if ut := lastUserContent(body.Messages); shouldRouteChatImage(ut) || (hasImageAttachment(body.Attachments) && isImageEditIntent(ut)) {
 				if !requestModelAllowed(r, "gpt-image-2") {
 					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
 					return

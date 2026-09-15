@@ -78,6 +78,33 @@ func TestShouldRouteChatImageAvoidsFalsePositives(t *testing.T) {
 	}
 }
 
+func TestImageEditIntentRequiresAnEditAction(t *testing.T) {
+	cases := map[string]bool{
+		"把这张图改成水彩风格":            true,
+		"换成红色背景":                true,
+		"Remove the background": true,
+		"分析这张图并描述人物服装":          false,
+		"这张图片里有什么？":             false,
+	}
+	for text, want := range cases {
+		if got := isImageEditIntent(text); got != want {
+			t.Fatalf("isImageEditIntent(%q)=%v want %v", text, got, want)
+		}
+	}
+}
+
+func TestHasImageAttachment(t *testing.T) {
+	if !hasImageAttachment([]chathub.Attachment{{Type: "image"}}) {
+		t.Fatal("image attachment type was not detected")
+	}
+	if !hasImageAttachment([]chathub.Attachment{{Type: "file", MimeType: "image/png"}}) {
+		t.Fatal("image MIME type was not detected")
+	}
+	if hasImageAttachment([]chathub.Attachment{{Type: "file", MimeType: "application/pdf"}}) {
+		t.Fatal("non-image attachment was misclassified")
+	}
+}
+
 func TestCodingIntentSuppressesImageRoute(t *testing.T) {
 	text := "生成 logo 的 SVG 代码"
 	if !isImageGenIntent(text) || !codingIntent(text) {

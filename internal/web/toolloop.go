@@ -397,6 +397,34 @@ func shouldRouteChatImage(text string) bool {
 	return isImageGenIntent(t)
 }
 
+func isImageEditIntent(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	for _, p := range imageGenNonActionPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return false
+		}
+	}
+	for _, p := range []string{
+		"修改这张图", "编辑这张图", "修改图片", "编辑图片", "把这张图改", "将这张图改", "把图片改",
+		"换成", "改成", "更换背景", "替换背景", "去掉背景", "移除背景", "增加背景", "添加背景",
+		"edit this image", "edit the image", "change this image", "change the background", "remove the background",
+	} {
+		if strings.Contains(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImageAttachment(attachments []chathub.Attachment) bool {
+	for _, a := range attachments {
+		if strings.EqualFold(strings.TrimSpace(a.Type), "image") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.MimeType)), "image/") {
+			return true
+		}
+	}
+	return false
+}
+
 // codingIntent reports whether text is about code/editing work.
 func codingIntent(text string) bool {
 	t := strings.ToLower(text)
