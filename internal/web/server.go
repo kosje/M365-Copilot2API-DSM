@@ -869,9 +869,13 @@ func jsonOut(w http.ResponseWriter, v any) {
 // SSE chat completion or a JSON chat completion. Used by the chat-endpoint
 // image-generation router to return the generated image inline in the
 // conversation, so the caller does not need a separate image endpoint.
-func (s *Server) writeChatCompletionText(w http.ResponseWriter, r *http.Request, model, text string, stream bool) {
+func (s *Server) writeChatCompletionText(w http.ResponseWriter, r *http.Request, model, text string, stream, sendUsage bool, inputTokens int64) {
 	id := "chatcmpl-" + uuid.NewString()
 	created := time.Now().Unix()
+	outputTokens := EstimateTokens(text)
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -908,20 +912,21 @@ func (s *Server) writeChatCompletionText(w http.ResponseWriter, r *http.Request,
 		if b, err := json.Marshal(chunk); err == nil {
 			_ = sw.data(string(b))
 		}
-		ct := EstimateTokens(text)
-		usageChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}, "usage": map[string]any{"prompt_tokens": ct, "completion_tokens": ct, "total_tokens": ct + ct}}
-		_ = sw.data(mustJSON(usageChunk))
+		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+		if sendUsage {
+			finishChunk["usage"] = map[string]any{"prompt_tokens": inputTokens, "completion_tokens": outputTokens, "total_tokens": inputTokens + outputTokens}
+		}
+		_ = sw.data(mustJSON(finishChunk))
 		_ = sw.data("[DONE]")
 		return
 	}
-	ct := EstimateTokens(text)
 	jsonOut(w, map[string]any{
 		"id":      id,
 		"object":  "chat.completion",
 		"created": created,
 		"model":   model,
 		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}},
-		"usage":   map[string]any{"prompt_tokens": ct, "completion_tokens": ct, "total_tokens": ct + ct},
+		"usage":   map[string]any{"prompt_tokens": inputTokens, "completion_tokens": outputTokens, "total_tokens": inputTokens + outputTokens},
 	})
 }
 
@@ -2243,9 +2248,13 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// route to the image pipeline and return the result inline in the chat
 	// completion — so the caller does not need a separate image endpoint.
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
-	if os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
+	if responseFormat == nil && os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
-			if ut := lastUserContent(body.Messages); ut != "" && isImageGenIntent(ut) && !codingIntent(ut) {
+			if ut := lastUserContent(body.Messages); shouldRouteChatImage(ut) {
+				if !requestModelAllowed(r, "gpt-image-2") {
+					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
+					return
+				}
 				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID, body.User)
 				if ierr == nil && len(imgs) > 0 {
 					var sb strings.Builder
@@ -2254,10 +2263,30 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 						sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
 					}
 					log.Printf("[image-route] chat intent routed to image pipeline, images=%d conv=%s", len(imgs), convID)
-					s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), sb.String(), body.Stream)
+					text := sb.String()
+					s.usage.record(UsageRecord{
+						Time:         time.Now(),
+						APIKeyPrefix: extractAPIKey(r),
+						Model:        "gpt-image-2",
+						Endpoint:     "/v1/chat/completions:image-route",
+						Stream:       body.Stream,
+						InputTokens:  EstimateTokens(ut),
+						OutputTokens: EstimateTokens(text),
+						DurationMs:   time.Since(startedAt).Milliseconds(),
+						Status:       http.StatusOK,
+					})
+					s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), text, body.Stream, body.shouldSendStreamUsage(), EstimateTokens(ut))
 					return
 				}
-				log.Printf("[image-route] intent detected but generation failed (%v); falling back to normal chat", ierr)
+				log.Printf("[image-route] intent detected but generation failed: %v", ierr)
+				status := upstreamStatus(ierr)
+				if status == http.StatusTooManyRequests {
+					w.Header().Set("Retry-After", "86400")
+					writeOpenAIError(w, status, "image_limit_error", "image generation is temporarily unavailable or its daily quota is exhausted; try again later")
+				} else {
+					writeOpenAIError(w, status, "image_generation_error", "image generation failed; no image was returned")
+				}
+				return
 			}
 		}
 	}

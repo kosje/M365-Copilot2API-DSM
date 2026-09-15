@@ -698,7 +698,6 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 	return strings.TrimSpace(b.String())
 }
 
-
 // generateChatImages runs the image-generation pipeline (account rotation,
 // upstream GPT Image 2 call, download/store) and returns served image URLs
 // suitable for inline embedding in a chat completion. Used by the chat-endpoint
@@ -801,7 +800,20 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 	}
 	for _, sourceURL := range images {
 		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
-			urls = append(urls, sourceURL)
+			meta, payload, ok := strings.Cut(sourceURL, ",")
+			if !ok || !strings.Contains(strings.ToLower(meta), ";base64") {
+				return nil, "", fmt.Errorf("upstream returned an invalid inline image")
+			}
+			imageData, derr := base64.StdEncoding.DecodeString(payload)
+			if derr != nil || len(imageData) == 0 || len(imageData) > maxGeneratedImageBytes {
+				return nil, "", fmt.Errorf("upstream returned an invalid inline image")
+			}
+			contentType := strings.TrimPrefix(strings.SplitN(meta, ";", 2)[0], "data:")
+			if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+				contentType = http.DetectContentType(imageData)
+			}
+			id := s.storeGeneratedImage(imageData, contentType)
+			urls = append(urls, generatedImageURL(r, id))
 			continue
 		}
 		if !isDesignerImageURL(sourceURL) {

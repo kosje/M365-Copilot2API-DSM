@@ -78,7 +78,7 @@
 
 ## 与上游 fnOS 版的差异
 
-本分支基于 [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) `v1.5.2`，改动如下（依 AGPL-3.0 第 5(a) 条标注）：
+本分支同步至 [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) `v1.6.5`，改动如下（依 AGPL-3.0 第 5(a) 条标注）：
 
 ### 1. 群晖 SPK 打包（新增）
 
@@ -129,6 +129,7 @@ FPK 与 SPK 结构高度对应，按 DSM 规范重写：
 完整功能文档见上游 [README](https://github.com/my788525/M365-Copilot2API-FNOS#readme) 与 [FORK_GUIDE](https://github.com/my788525/M365-Copilot2API-FNOS/blob/main/docs/FORK_GUIDE.md)，此处仅列要点：
 
 - **OpenAI / Anthropic 双兼容**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/images/generations`
+- **普通聊天自动生图**：继续使用普通模型和 `/v1/chat/completions`；明确提出“生成图片/画一张图”等请求时自动调用 GPT Image 2，并以 Markdown 图片返回，无需切换模型或新增生图接口
 - **多账号轮询 + 故障自动转移**，账号可网页端导入导出（`accounts.json`）
 - **API Key 管理**：每日 / 总量额度、模型白名单、IP 白名单、auto 模型池
 - **`/chat` 轻量对话端**：流式对话、图片理解与生成、文件分析（CSV / Excel / PDF / 代码）、每用户额度

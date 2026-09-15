@@ -306,14 +306,39 @@ func toolNames(tools []chathub.Tool) []string {
 // draw an image. Used to auto-route a chat request to the image pipeline so the
 // caller does not need a separate image endpoint.
 var imageGenIntentPatterns = []string{
-	"生成图片", "生成一张图", "生成一张", "生成插画", "生成海报", "生成logo", "生成 logo",
+	"生成图片", "生成图像", "生成一张图", "生成一幅图", "生成插画", "生成海报", "生成头像", "生成封面",
+	"生成logo", "生成 logo",
 	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图",
-	"生图", "出图", "配图", "配张图", "插图", "插画", "海报", "头像", "封面图",
-	"帮我画", "给我画", "创作一张图", "设计一张图", "文生图", "文字生成图片",
-	"做个图", "来张图", "一张图", "ai绘画", "ai 绘画",
+	"帮我画", "给我画", "请画", "帮我生图", "给我生图", "请生图", "生图：", "生图:", "直接生图", "开始生图",
+	"帮我出图", "给我出图", "请出图", "直接出图", "帮我配图", "请配图", "配图：", "配图:", "配张图",
+	"创作一张图", "设计一张图", "设计一个logo", "设计一个 logo", "文生图：", "文生图:", "文字生成图片",
+	"做个图", "来张图", "ai绘画：", "ai 绘画：",
 	"generate an image", "generate image", "draw an image", "create an image",
-	"make an image", "text to image", "generate a picture", "an image of",
-	"paint a picture", "generate me an", "ai image",
+	"make an image", "text to image", "generate a picture", "draw a picture",
+	"paint a picture", "generate me an image", "create me an image", "make me an image",
+}
+
+var imageGenActionPatterns = []string{
+	"生成", "画", "生图", "出图", "配图", "设计", "制作", "创作", "做个", "做一张", "来张",
+}
+
+var imageGenObjectPatterns = []string{
+	"图片", "图像", "一张图", "一幅图", "插画", "海报", "头像", "封面", "logo", "壁纸",
+}
+
+// imageGenNonActionPatterns identify discussion, analysis, prompt-writing and
+// explicit opt-out requests. Nouns such as "海报" or "image" alone are not
+// generation intent: routing those requests would unexpectedly spend image
+// quota and hijack ordinary questions.
+var imageGenNonActionPatterns = []string{
+	"不要生成图片", "别生成图片", "无需生成图片", "不用生成图片", "不需要生成图片",
+	"不要画图", "别画图", "只写提示词", "生图提示词", "绘图提示词",
+	"生图接口", "图片生成接口", "图像生成接口", "生成图片接口", "生图api", "生图 api",
+	"是否支持生图", "支不支持生图", "如何生图", "怎么生图", "生图原理",
+	"怎么设计海报", "如何设计海报", "设计海报需要注意什么", "海报设计需要注意什么",
+	"分析这张图", "分析图片", "描述这张图", "识别图片", "图片里有什么", "看一下这张图",
+	"do not generate an image", "don't generate an image", "image generation api", "image generation endpoint",
+	"write an image prompt", "image prompt only", "analyze this image", "describe this image",
 }
 
 // codingIntentPatterns: phrases that signal the user wants code/editing work
@@ -334,7 +359,42 @@ func isImageGenIntent(text string) bool {
 			return true
 		}
 	}
+	hasAction := false
+	for _, p := range imageGenActionPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			hasAction = true
+			break
+		}
+	}
+	if !hasAction {
+		return false
+	}
+	for _, p := range imageGenObjectPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return true
+		}
+	}
 	return false
+}
+
+func shouldRouteChatImage(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if t == "" || codingIntent(t) {
+		return false
+	}
+	for _, p := range imageGenNonActionPatterns {
+		if strings.Contains(t, strings.ToLower(p)) {
+			return false
+		}
+	}
+	if strings.ContainsAny(t, "?？") {
+		for _, p := range []string{"是否", "能否", "可否", "支持", "会不会", "可以", "can you", "do you support", "are you able"} {
+			if strings.Contains(t, p) {
+				return false
+			}
+		}
+	}
+	return isImageGenIntent(t)
 }
 
 // codingIntent reports whether text is about code/editing work.

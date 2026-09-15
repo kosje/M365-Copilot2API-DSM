@@ -44,12 +44,12 @@ func TestToolNamesExtractsFunctionNames(t *testing.T) {
 
 func TestIsImageGenIntent(t *testing.T) {
 	cases := map[string]bool{
-		"帮我生成一张产品海报":        true,
-		"画一张猫的图片":            true,
+		"帮我生成一张产品海报":                    true,
+		"画一张猫的图片":                       true,
 		"Generate an image of a sunset": true,
-		"文生图：一只在月亮上的猫":     true,
-		"帮我修改 main.ts 文件":     false, // coding, not image
-		"今天天气怎么样":           false,
+		"文生图：一只在月亮上的猫":                  true,
+		"帮我修改 main.ts 文件":               false,
+		"今天天气怎么样":                       false,
 	}
 	for text, want := range cases {
 		if got := isImageGenIntent(text); got != want {
@@ -58,13 +58,32 @@ func TestIsImageGenIntent(t *testing.T) {
 	}
 }
 
+func TestShouldRouteChatImageAvoidsFalsePositives(t *testing.T) {
+	cases := map[string]bool{
+		"帮我生成一张东方仙侠海报":                            true,
+		"设计一个 logo，直接返回图片":                        true,
+		"Generate an image of a sunset":           true,
+		"这个接口是否支持生图？":                             false,
+		"写一个适合生成海报的生图提示词，不要生成图片":                  false,
+		"分析这张图并描述人物服装":                            false,
+		"生成 logo 的 SVG 代码":                        false,
+		"海报设计需要注意什么？":                             false,
+		"How does the image generation API work?": false,
+	}
+	for text, want := range cases {
+		if got := shouldRouteChatImage(text); got != want {
+			t.Fatalf("shouldRouteChatImage(%q)=%v want %v", text, got, want)
+		}
+	}
+}
+
 func TestCodingIntentSuppressesImageRoute(t *testing.T) {
 	text := "生成 logo 的 SVG 代码"
-	if isImageGenIntent(text) && codingIntent(text) {
-		// both flags true → router must NOT fire (coding wins via guard)
-		if isImageGenIntent(text) && codingIntent(text) {
-			// expected: guard `!codingIntent` disables route
-		}
+	if !isImageGenIntent(text) || !codingIntent(text) {
+		t.Fatal("test fixture must contain both image and coding intent")
+	}
+	if shouldRouteChatImage(text) {
+		t.Fatal("coding intent must suppress image routing")
 	}
 	if !codingIntent("帮我修改 main.ts 文件") {
 		t.Fatalf("expected coding intent for edit request")
