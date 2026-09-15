@@ -30,12 +30,12 @@ rm -rf "$BUILD/payload/ui"
 cp -r "$SPK/ui" "$BUILD/payload/ui"
 chmod 755 "$BUILD/payload/bin/m365-copilot2api"
 chmod 644 "$BUILD/payload/ui/config" "$BUILD/payload/ui/images"/*
-# Force the payload mode in the archive. This keeps the server executable when
-# the staging tree lives on a filesystem without Unix mode bits (for example a
-# Windows checkout used to prepare the package before final Linux validation).
-tar czf "$BUILD/package.tgz" --owner=root --group=root -C "$BUILD/payload" \
-    --mode=755 ./bin \
-    --mode='u+rwX,go+rX,go-w' ./ui
+# Build uncompressed first so payload sections can receive different modes.
+# GNU tar's --mode is global rather than positional; a single invocation would
+# either leave the server at 0644 on Windows or mark every UI asset executable.
+tar cf "$BUILD/package.tar" --owner=root --group=root --mode=755 -C "$BUILD/payload" ./bin
+tar rf "$BUILD/package.tar" --owner=root --group=root --mode='u+rwX,go+rX,go-w' -C "$BUILD/payload" ./ui
+gzip -n -9 -c "$BUILD/package.tar" > "$BUILD/package.tgz"
 
 echo "==> 打包 SPK"
 rm -rf "$BUILD/spk" && mkdir -p "$BUILD/spk"
