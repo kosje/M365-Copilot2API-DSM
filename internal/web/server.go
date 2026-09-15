@@ -2119,7 +2119,8 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// Opt-in context hygiene (disabled by default). When active we clean the
 	// full message set and re-flatten, and skip the incremental conversation
 	// reuse below (which relies on absolute indices into the original array).
-	preprocessActive := cfgBudget.DedupeToolResults || cfgBudget.MaxHistoryMessages > 0
+	preprocessActive := cfgBudget.DedupeToolResults || cfgBudget.MaxHistoryMessages > 0 ||
+		(cfgBudget.ToolResultMode != "" && cfgBudget.ToolResultMode != "full") || cfgBudget.MaxToolResultChars > 0
 	if preprocessActive {
 		body.Messages = preprocessMessages(body.Messages, cfgBudget)
 	}
@@ -2131,6 +2132,9 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[req-trace] id=%s stage=prompt_flattened prompt_len=%d attachments=%d", requestID, len(prompt), len(body.Attachments))
 	fmt.Printf("[multimodal-entry] messages=%d attachments=%d prompt_len=%d\n", len(body.Messages), len(body.Attachments), len(prompt))
 	prompt = strings.TrimSpace(prompt)
+	if cfgBudget.AutonomyBoost {
+		prompt = applyAutonomyBoost(prompt, true)
+	}
 	if responseFormat != nil {
 		switch responseFormat.Type {
 		case "json_object":

@@ -744,6 +744,27 @@ if (response.output_text) {
           <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advDedupe" style="width:18px;height:18px;cursor:pointer"><label for="advDedupe" class="form-label" style="margin:0;cursor:pointer">工具结果去重 (dedupeToolResults)</label></div>
           <p class="form-hint">开启后，连续两条「相同 ToolCallID + 相同内容」的 tool 结果折叠为一条再上行，省上下文 token（重复读同一文件/重复搜索很常见）。内容幂等，折叠前后语义一致。<strong>默认关闭</strong>。环境变量 <code>M365_DEDUPE_TOOL_RESULTS</code>。</p>
           <div class="form-group"><label class="form-label">单条工具结果字符上限 (maxToolResultChars)</label><input class="form-input" id="advToolCap" type="number" min="0" max="1000000" placeholder="0（不限制）"><p class="form-hint">单条 tool 结果（读文件 / 编译日志 / grep 输出等）上行前的最大字符数，超出部分截断并附「[result truncated …]」提示。<strong>默认 0 = 不限制</strong>；建议设为如 <strong>16000</strong>，防止一次超大输出撑爆上下文预算或触发 auto-compact 丢失早期历史。环境变量 <code>M365_MAX_TOOL_RESULT_CHARS</code>。</p></div>
+          <div class="form-group"><label class="form-label">工具结果压缩模式 (toolResultMode)</label><select class="form-input" id="advToolMode"><option value="full">full（按上限截断）</option><option value="smart">smart（结构化压缩：保留头部+全部错误/警告+尾部）</option><option value="minimal">minimal（仅错误/警告+极短尾部）</option></select><p class="form-hint">oversized 工具结果的处理方式。<strong>默认 full</strong>：只按 <code>maxToolResultChars</code> 硬截断。<strong>smart</strong>（推荐编码场景）：把 6000 行 build/install/test 日志压缩成头部+所有 error/warn 行+尾部的几十行，token 成本降一个数量级而信号不丢。<strong>minimal</strong>：更激进，仅留诊断行。环境变量 <code>M365_TOOL_RESULT_MODE</code>。</p></div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advAutonomy" style="width:18px;height:18px;cursor:pointer"><label for="advAutonomy" class="form-label" style="margin:0;cursor:pointer">自主性增强 (autonomyBoost)</label></div>
+          <p class="form-hint">开启后，网关在上游 prompt 注入「自主编码代理」指令——要求模型<strong>实现全部改动、自行跑 build/test 验证、未完成不得提前结束</strong>。这是无状态代理对「自动续跑 / 完成度裁判」的正确实现：客户端（WorkBuddy / Trae）持有工具执行循环，网关通过指令驱动上游模型把客户端的循环一次性跑完，而非反复「继续」。<strong>默认关闭</strong>。环境变量 <code>M365_AUTONOMY_BOOST</code>。</p></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">AI Coding 预设</h3>
+          <div class="card" style="border-color:#6366f1;background:rgba(99,102,241,.05)"><div class="card-body" style="padding:12px 16px">
+            <p style="margin:0 0 10px;color:#4338ca;font-size:13px;line-height:1.6">一键套用针对某款 AI 编码工具的经调优参数组合（写入下方各字段并保存）。你仍可随后手动微调。</p>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <select class="form-input" id="advProfile" style="max-width:260px">
+                <option value="workbuddy">WorkBuddy</option>
+                <option value="trae">Trae</option>
+                <option value="claude_code">Claude Code</option>
+                <option value="cursor">Cursor</option>
+                <option value="gemini_cli">Gemini CLI</option>
+                <option value="custom">自定义（仅记录，不改参数）</option>
+              </select>
+              <button class="btn primary" onclick="applyCodingProfile()">应用预设</button>
+              <span id="advProfileStatus" style="font-size:13px;color:#64748b"></span>
+            </div>
+            <p class="form-hint" style="margin-top:10px">WorkBuddy：hideReasoning 开 + reasoning low + toolResultMode smart + autonomyBoost 开。Trae：hideReasoning 开 + reasoning medium + toolResultMode smart + autonomyBoost 开。Claude Code：hideReasoning 关 + reasoning high + toolResultMode smart。Cursor：hideReasoning 开 + reasoning medium + toolResultMode smart。Gemini CLI：hideReasoning 关 + reasoning 空 + toolResultMode minimal。</p>
+          </div></div>
 
           <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
             <button class="btn primary" onclick="saveAdvanced()">保存高级参数</button>
@@ -2449,6 +2470,8 @@ const advFields=[
   {id:'advMaxHist',      key:'maxHistoryMessages',  def:0, type:'int'},
   {id:'advDedupe',       key:'dedupeToolResults',   def:false, type:'bool'},
   {id:'advToolCap',      key:'maxToolResultChars',  def:0, type:'int'},
+  {id:'advToolMode',     key:'toolResultMode',      def:'full', type:'select'},
+  {id:'advAutonomy',     key:'autonomyBoost',       def:false, type:'bool'},
 ];
 async function loadAdvanced(){
   try{
@@ -2464,6 +2487,8 @@ async function loadAdvanced(){
     });
     const pub=$('advPublicIdentity');
     if(pub) pub.checked = v.publicIdentityPolicy!=null ? !!v.publicIdentityPolicy : false;
+    const prof=$('advProfile');
+    if(prof) prof.value = v.codingProfile!=null && v.codingProfile!=='' ? v.codingProfile : 'custom';
     $('advStatus').textContent='';
   }catch(e){showNotice(e.message,'error');}
 }
@@ -2486,6 +2511,28 @@ async function saveAdvanced(){
     $('advStatus').textContent='✓ 已保存';
     showNotice('高级参数已保存','success');
   }catch(e){ $('advStatus').textContent='✗ 保存失败'; showNotice(e.message,'error'); }
+}
+// applyCodingProfile writes a tuned combination of underlying fields for a
+// known AI-coding client, then reloads the form so the individual controls
+// reflect the preset. 'custom' only records the profile name.
+const CODING_PROFILES={
+  workbuddy:  {hideReasoning:true,  reasoningEffort:'low',    toolResultMode:'smart', autonomyBoost:true},
+  trae:       {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true},
+  claude_code:{hideReasoning:false, reasoningEffort:'high',   toolResultMode:'smart', autonomyBoost:true},
+  cursor:     {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true},
+  gemini_cli: {hideReasoning:false, reasoningEffort:'',       toolResultMode:'minimal',autonomyBoost:false},
+  custom:     {},
+};
+async function applyCodingProfile(){
+  try{
+    const key=$('advProfile').value;
+    const p=CODING_PROFILES[key]||{};
+    const body=Object.assign({},p,{codingProfile:key});
+    await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
+    await loadAdvanced();
+    $('advProfileStatus').textContent='✓ 已应用 '+key;
+    showNotice('AI Coding 预设已应用：'+key,'success');
+  }catch(e){ $('advProfileStatus').textContent='✗ 应用失败'; showNotice(e.message,'error'); }
 }
 
 setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);

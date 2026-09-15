@@ -136,6 +136,22 @@ type runtimeSettings struct {
 	// context budget; capping per-result keeps one oversized output from
 	// wrecking the whole conversation. 0 = unlimited. Default off.
 	MaxToolResultChars int `json:"maxToolResultChars,omitempty"`
+	// ToolResultMode selects how oversized tool results are handled:
+	//   "full"   — truncate to MaxToolResultChars (default, simplest)
+	//   "smart"  — structured compression: keep header + all error/warning
+	//              lines + tail, drop noise (best for build/test/install/grep)
+	//   "minimal" — keep only error/warning lines + a tiny tail
+	ToolResultMode string `json:"toolResultMode,omitempty"`
+	// AutonomyBoost injects an autonomy directive into the upstream prompt so the
+	// M365 model drives the client's agent loop to completion (run build/test to
+	// verify, don't stop early). This is the proxy-side realization of
+	// "auto-continue" / "completion judge" for OpenAI-compatible clients that
+	// own the tool-execution loop (WorkBuddy, Trae, Claude Code, …).
+	AutonomyBoost bool `json:"autonomyBoost,omitempty"`
+	// CodingProfile records which one-click AI-coding preset is active
+	// (workbuddy / trae / claude_code / cursor / gemini_cli / custom). It only
+	// drives the UI; applying a profile writes the underlying fields directly.
+	CodingProfile string `json:"codingProfile,omitempty"`
 }
 
 type settingsStore struct {
@@ -196,6 +212,8 @@ func defaultRuntimeSettings() runtimeSettings {
 		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 6),
 		LoopRepeatLimit:            envInt("M365_LOOP_REPEAT_LIMIT", 5),
 		HideReasoning:              os.Getenv("M365_HIDE_REASONING") == "true",
+		ToolResultMode:            firstNonEmptySetting(os.Getenv("M365_TOOL_RESULT_MODE"), "full"),
+		AutonomyBoost:             os.Getenv("M365_AUTONOMY_BOOST") == "true",
 	}
 }
 func settingsPath() string {
@@ -261,6 +279,9 @@ func validateSettings(v runtimeSettings) error {
 	}
 	if v.MaxToolResultChars < 0 || v.MaxToolResultChars > 1_000_000 {
 		return fmt.Errorf("单条工具结果字符上限必须为 0-1000000（0=不限制）")
+	}
+	if v.ToolResultMode != "" && v.ToolResultMode != "full" && v.ToolResultMode != "smart" && v.ToolResultMode != "minimal" {
+		return fmt.Errorf("工具结果模式(toolResultMode)必须为 full、smart 或 minimal")
 	}
 	if err := outbound.ValidateProxyURL(v.OutboundProxy); err != nil {
 		return err
