@@ -301,6 +301,25 @@ func workspaceGrounding(text string) string {
 	return b.String()
 }
 
+// workspaceGroundingFor returns the grounding paragraph for the caller's real
+// workspace. With tools attached the model is told to act through them; without
+// tools it is told the truth — it has no execution environment of its own and
+// the caller's agent performs file operations — so it never hallucinates a
+// /mnt/data sandbox in tool-less utility turns.
+func workspaceGroundingFor(text string, hasTools bool) string {
+	g := workspaceGrounding(text)
+	if g == "" {
+		return ""
+	}
+	if hasTools {
+		return g
+	}
+	return strings.Replace(g,
+		"Your tools operate on them DIRECTLY with the exact paths as given — there is no separate workspace or mounted directory to look for. Act through your tools with these exact paths now; do not describe or audit your runtime environment.",
+		"No tools are attached to this conversation turn, so you cannot touch them yourself: you have no code interpreter, no file system, and no sandbox of your own. File and command operations are performed by the caller's agent through its tools. If the request requires touching these files, state plainly that tool access is required and name the exact tool and path to use. Never probe, test, or report your own runtime environment, and never present a container or sandbox directory as the caller's workspace.",
+		1)
+}
+
 // toolNames returns the function names declared in the caller's tool list.
 func toolNames(tools []chathub.Tool) []string {
 	names := make([]string, 0, len(tools))

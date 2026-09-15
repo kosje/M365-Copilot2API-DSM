@@ -2145,7 +2145,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	normalizeLegacyTools(&body)
 	body.ConversationID = firstNonEmpty(body.ConversationID, body.ConversationIDC)
 	body.SessionID = firstNonEmpty(body.SessionID, body.SessionIDC)
-	log.Printf("[req-trace] id=%s stage=body_parsed messages=%d tools=%d choice=%s raw_bytes=%d", requestID, len(body.Messages), len(body.Tools), normalizedToolChoiceMode(body.ToolChoice), len(raw))
+	log.Printf("[req-trace] id=%s stage=body_parsed messages=%d tools=%d choice=%s raw_bytes=%d ua=%q", requestID, len(body.Messages), len(body.Tools), normalizedToolChoiceMode(body.ToolChoice), len(raw), r.Header.Get("User-Agent"))
 	if err := validateToolConversation(body.Messages); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "tool_protocol_error", err.Error())
 		return
@@ -2301,15 +2301,12 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Ground the model on the caller's real workspace. When the caller uses a
-	// local coding client (WorkBuddy/Trae) the conversation carries Windows
-	// paths like D:\work\GitHub\Insurtool; tell the upstream model those files
-	// are on the local machine and directly usable so it never hallucinates a
-	// /mnt/data sandbox. Only injected when the caller actually passed tools.
-	if len(body.Tools) > 0 {
-		if g := workspaceGrounding(prompt); g != "" {
-			answerPrompt += "\n\n" + g
-		}
+	// Ground the model on the caller's real workspace for ANY request that
+	// carries Windows paths — with or without tools. Tool-less turns (client
+	// utility calls, plain chats) previously got no grounding and the upstream
+	// model would "test" its own code-interpreter sandbox and report /mnt/data.
+	if g := workspaceGroundingFor(prompt, len(body.Tools) > 0); g != "" {
+		answerPrompt += "\n\n" + g
 	}
 	}
 	accountID := body.AccountID
@@ -3113,14 +3110,23 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			res = res2
 		}
 	}
-	if len(toolMaps) > 0 {
+	hasTools := len(toolMaps) > 0
+	if hasTools || workspaceGrounding(prompt) != "" {
 		for attempt := 0; attempt < 3 && isSandboxHallucination(res.Text); attempt++ {
-			log.Printf("[sandbox-eject] model hallucinated a sandbox environment, positive retry attempt %d", attempt+1)
-			correction := "ACT, DO NOT DESCRIBE. The caller's request involves files and commands on the caller's local machine. Your tools run directly on that machine and accept the exact paths mentioned in the request. Choose the most appropriate tool and call it NOW with the exact path. Do not describe your runtime environment, do not report which directories you can see, and do not summarize limitations — just make the tool call."
+			log.Printf("[sandbox-eject] model hallucinated a sandbox environment, positive retry attempt %d (tools=%t)", attempt+1, hasTools)
+			var correction string
+			if hasTools {
+				correction = "ACT, DO NOT DESCRIBE. The caller's request involves files and commands on the caller's local machine. Your tools run directly on that machine and accept the exact paths mentioned in the request. Choose the most appropriate tool and call it NOW with the exact path. Do not describe your runtime environment, do not report which directories you can see, and do not summarize limitations — just make the tool call."
+			} else {
+				correction = "ANSWER HONESTLY ABOUT ACCESS. You have no execution environment of your own in this conversation — no code interpreter, no file system, no sandbox. The caller's files live on the caller's local machine, and file or command operations are performed by the caller's agent through its tools. If the request requires touching those files, state plainly that tool access is required and name the exact tool and path to use. Never probe, test, or report your own runtime environment, and never present a container or sandbox directory as the caller's workspace."
+			}
 			if g := workspaceGrounding(prompt); g != "" {
 				correction += "\n\n" + g
 			}
-			correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + ".\n\nUser request:\n" + prompt
+			if hasTools {
+				correction += "\n\nAvailable tool names: " + strings.Join(toolNames(body.Tools), ", ") + "."
+			}
+			correction += "\n\nUser request:\n" + prompt
 			res2, err2 := s.chatWithAccount(ctx, acc.ID, account, chathub.Request{Text: correction, Tone: tone, Attachments: body.Attachments, LicenseType: toolCfg.LicenseType, Scenario: toolCfg.Scenario, Tools: body.Tools, ToolChoice: body.ToolChoice})
 			if err2 != nil {
 				break
