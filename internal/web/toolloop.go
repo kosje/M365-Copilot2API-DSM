@@ -523,6 +523,13 @@ var artifactFallbackPatterns = []string{
 	"i created a file you can download",
 }
 
+// artifactReplyRe catches natural-language "file generated" claim variants
+// that the fixed pattern list above misses. Real-world failing replies like
+// "已生成 BAT 文件：" or "已创建 222.bat" interleave a filename between the
+// verb and 文件, so a plain "已生成文件" substring never matches and the
+// artifact-eject retry never fires.
+var artifactReplyRe = regexp.MustCompile(`(?i)(已生成|已创建|已保存|已写入|已将)[^.\n，。：；！？]{0,24}(文件|脚本|文档|链接)|(已生成|已创建|已保存|已写入)[^.\n]{0,20}\.(bat|txt|md|py|js|ts|sh|ps1|csv|json|log|zip|pdf|docx|xlsx|yml|yaml|html|css|ini)|文件[^.\n]{0,10}(已生成|已保存|已创建)|(下载|保存)[^.\n]{0,10}(链接|地址|到本地)|(click|点击)[^.\n]{0,12}(download|下载)|(file|script|document)[^.\n]{0,16}(has been|was)?[^.\n]{0,8}(generated|created|saved)`)
+
 func isArtifactFallback(text string) bool {
 	low := strings.ToLower(text)
 	for _, p := range artifactFallbackPatterns {
@@ -530,7 +537,7 @@ func isArtifactFallback(text string) bool {
 			return true
 		}
 	}
-	return false
+	return artifactReplyRe.MatchString(text)
 }
 
 // stripArtifactLinks removes Microsoft asyncgw / teams.microsoft.com generated-file

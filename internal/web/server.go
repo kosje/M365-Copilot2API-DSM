@@ -1916,6 +1916,42 @@ type oaiMsg struct {
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 }
 
+// sanitizeHistory strips asyncgw / teams.microsoft.com "generated file" links
+// from inbound assistant messages before they are forwarded upstream. A prior
+// failed turn that emitted a downloadable-artifact link would otherwise stay in
+// the conversation and teach the model to keep doing it (self-reinforcement
+// loop that produces "online documents" instead of local Write calls). Scrubbing
+// the link — but keeping the surrounding text — removes the bad example without
+// losing legitimate context.
+func sanitizeHistory(body *oaiReq) {
+	for i := range body.Messages {
+		m := &body.Messages[i]
+		if m.Role != "assistant" {
+			continue
+		}
+		if s, ok := m.Content.(string); ok && s != "" {
+			if cleaned := stripArtifactLinks(s); cleaned != s {
+				m.Content = cleaned
+			}
+		} else if parts, ok := m.Content.([]any); ok {
+			for j := range parts {
+				if pm, ok := parts[j].(map[string]any); ok {
+					if txt, ok := pm["text"].(string); ok && txt != "" {
+						if cleaned := stripArtifactLinks(txt); cleaned != txt {
+							pm["text"] = cleaned
+						}
+					}
+				}
+			}
+		}
+		if m.ReasoningContent != "" {
+			if cleaned := stripArtifactLinks(m.ReasoningContent); cleaned != m.ReasoningContent {
+				m.ReasoningContent = cleaned
+			}
+		}
+	}
+}
+
 type oaiReq struct {
 	Model          string          `json:"model"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
@@ -2044,12 +2080,50 @@ func normalizeLegacyTools(body *oaiReq) {
 	}
 }
 
+// tracePromptHeads logs the head and tail of the composed upstream prompt so a
+// mis-composed payload (drowned instructions, ledger debris, stray injections)
+// can be diagnosed from app.log alone.
+func tracePromptHeads(id string, text string) {
+	const seg = 700
+	head := text
+	if len(head) > seg {
+		head = head[:seg]
+	}
+	tail := text
+	if len(tail) > seg {
+		tail = tail[len(tail)-seg:]
+	}
+	log.Printf("[payload-trace] id=%s text_len=%d head=%q tail=%q", id, len(text), head, tail)
+}
+
+// traceResponseText logs the head of the model's final reply for the
+// chat-completions path, so artifact replies whose wording evades the eject
+// detector are still captured verbatim for diagnosis.
+func traceResponseText(id, stage string, text string) {
+	const seg = 900
+	h := text
+	if len(h) > seg {
+		h = h[:seg] + "..."
+	}
+	log.Printf("[response-trace] id=%s stage=%s len=%d text=%q", id, stage, len(text), h)
+}
+
 func buildAnswerRequest(answerPrompt, tone string, body oaiReq, ledger agentLedger, planningMode string, mcpServerURL string, cfg runtimeSettings, flags chathub.FeatureFlags, locale chathubLocale, disableMemory bool) chathub.Request {
 	if len(ledger.Completed) > 0 || len(ledger.Pending) > 0 {
 		answerPrompt += "\n" + ledger.RouterContext()
 	}
 	if len(ledger.Completed) > 0 {
 		answerPrompt += "\nCONTINUE RULE: Tool results above are already available. Keep taking the actions required to finish the request and call more tools as needed; only give a final summary once the task is actually complete and verified."
+	}
+	// Recency anchoring: with a long agent history the tool-protocol instruction
+	// sits >100K chars behind the end of the prompt and the model's compliance
+	// decays — it falls back to its built-in "generate a downloadable file"
+	// artifact channel. A short reminder at the very END of the prompt (right
+	// before the model reads it) restores tool-first behaviour. Only injected
+	// for tool-bearing requests whose current request is file/command related,
+	// so ordinary Q&A turns are untouched.
+	if len(body.Tools) > 0 && (fileOpIntent(answerPrompt) || workspaceGrounding(answerPrompt) != "") {
+		answerPrompt += "\n\nFINAL REMINDER: Create or modify files ONLY by calling the Write/Edit tool with the exact absolute Windows path from the request, then STOP and wait for the tool result. Never reply with a download link, and never claim a file exists without a tool call. Make the tool call NOW."
 	}
 	req := chathub.Request{Text: answerPrompt, Tone: tone, ConversationID: body.ConversationID, SessionID: body.SessionID, Attachments: body.Attachments, LicenseType: cfg.LicenseType, Scenario: cfg.Scenario, FeatureFlags: flags, Locale: locale.Locale, Market: locale.Market, TimeZone: locale.TimeZone, TimeZoneOffset: locale.TimeZoneOffset, DeviceOS: locale.DeviceOS, DisableMemory: disableMemory}
 	if planningMode == "native" {
@@ -2120,6 +2194,9 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "bad json")
 		return
 	}
+	// Strip any asyncgw "generated file" links from prior assistant turns so a
+	// previously failed (online-document) response cannot poison this request.
+	sanitizeHistory(&body)
 	responseFormat := body.ResponseFormat
 	effort := body.ReasoningEffort
 	if body.Reasoning != nil && strings.TrimSpace(body.Reasoning.Effort) != "" {
@@ -2501,6 +2578,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		answerReq := buildAnswerRequest(answerPrompt, tone, body, ledger, planningMode, mcpServerURL, s.settings.get(), s.featureFlags(), localeInfo, body.Metadata != nil && body.Metadata.CopilotTempSession)
 		answerPrompt = answerReq.Text
 		log.Printf("[req-trace] id=%s stage=answer_start prompt_len=%d native_tools=%d mcp=%s", requestID, len(answerPrompt), len(answerReq.Tools), mcpServerURL)
+		tracePromptHeads(requestID, answerPrompt)
 		id := "chatcmpl-" + uuid.NewString()
 		model := firstNonEmpty(body.Model, "m365-copilot")
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -2852,6 +2930,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	answerReq := buildAnswerRequest(answerPrompt, tone, body, ledger, planningMode, mcpServerURL, s.settings.get(), s.featureFlags(), localeInfo, body.Metadata != nil && body.Metadata.CopilotTempSession)
 	answerPrompt = answerReq.Text
+	tracePromptHeads(requestID, answerPrompt)
 	var res chathub.Result
 	if body.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -3206,6 +3285,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		stripped := stripArtifactLinks(res.Text)
 		res.Text = stripped + "\n\n（本服务运行在 NAS 上，没有你的 Windows 本机文件系统。如需直接把文件写到你电脑，请在客户端开启 Agent 模式并授予文件完全访问权限，模型便会通过工具直接写入；当前 tools=0 模式下它无法创建任何本地文件，所以这里只给出内容，不输出下载链接。）"
 	}
+	traceResponseText(requestID, "final", res.Text)
 	invalidDetectedTool := false
 	if rawCalls := fencedToolCalls(res.Text, toolMaps, body.ToolChoice); len(rawCalls) > 0 {
 		calls, rejected := validateCalls("fenced", rawCalls)
