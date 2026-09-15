@@ -17,6 +17,11 @@ OUT="$ROOT/${PKG}-${VER}.spk"
 
 echo "==> 构建 ${PKG} ${VER}"
 
+# Always start from an empty staging tree. Reusing it can silently package an
+# obsolete binary left by another platform (for example server.exe on Windows).
+rm -rf "$BUILD"
+mkdir -p "$BUILD/payload/bin"
+
 # go:embed 读的是 internal/web/web/，构建前同步前端，避免打进陈旧页面
 cp -f "$ROOT"/web/*.html "$ROOT/internal/web/web/"
 
