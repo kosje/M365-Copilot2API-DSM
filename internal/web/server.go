@@ -1982,7 +1982,7 @@ func buildAnswerRequest(answerPrompt, tone string, body oaiReq, ledger agentLedg
 		answerPrompt += "\n" + ledger.RouterContext()
 	}
 	if len(ledger.Completed) > 0 {
-		answerPrompt += "\nFINAL ANSWER RULE: Report only actions supported by completed tool results. If the goal is not fully verified, state exactly what remains unconfirmed."
+		answerPrompt += "\nCONTINUE RULE: Tool results above are already available. Keep taking the actions required to finish the request and call more tools as needed; only give a final summary once the task is actually complete and verified."
 	}
 	req := chathub.Request{Text: answerPrompt, Tone: tone, ConversationID: body.ConversationID, SessionID: body.SessionID, Attachments: body.Attachments, LicenseType: cfg.LicenseType, Scenario: cfg.Scenario, FeatureFlags: flags, Locale: locale.Locale, Market: locale.Market, TimeZone: locale.TimeZone, TimeZoneOffset: locale.TimeZoneOffset, DeviceOS: locale.DeviceOS, DisableMemory: disableMemory}
 	if planningMode == "native" {
@@ -2292,6 +2292,12 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		return valid, len(rejected)
 	}
 	planningMode := s.settings.get().ToolPlanningMode
+	// A client that sends its own tool definitions (an agentic coding client
+	// such as WorkBuddy/Trae) expects standard native tool_calls back. Skip the
+	// fragile router pre-pass and forward tools directly so the model can act.
+	if len(body.Tools) > 0 {
+		planningMode = "native"
+	}
 	toolCfg := s.settings.get()
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ChatTimeoutSeconds)*time.Second)
