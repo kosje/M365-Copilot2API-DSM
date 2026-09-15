@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -25,6 +26,23 @@ func TestWriteChatCompletionTextNonStreamingUsage(t *testing.T) {
 	content := choices[0].(map[string]any)["message"].(map[string]any)["content"].(string)
 	if !strings.Contains(content, "![image]") {
 		t.Fatalf("image markdown missing: %q", content)
+	}
+}
+
+func TestChatImageKeepaliveAndStreamingErrorStaySSECompatible(t *testing.T) {
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	stop, ok := startChatImageKeepalive(rr, req)
+	if !ok {
+		t.Fatal("httptest recorder should support flushing")
+	}
+	stop()
+	writeChatImageRouteError(rr, true, errors.New("no image returned"))
+	body := rr.Body.String()
+	for _, want := range []string{": image generation started", `"type":"image_generation_error"`, "data: [DONE]"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SSE route response missing %q: %s", want, body)
+		}
 	}
 }
 

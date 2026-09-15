@@ -930,6 +930,66 @@ func (s *Server) writeChatCompletionText(w http.ResponseWriter, r *http.Request,
 	})
 }
 
+// startChatImageKeepalive commits a valid SSE response immediately and keeps
+// long Designer generations alive. It returns only after the keepalive writer
+// has stopped, so the final completion cannot race with a ticker write.
+func startChatImageKeepalive(w http.ResponseWriter, r *http.Request) (func(), bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "stream unsupported")
+		return func() {}, false
+	}
+	sw := newSSEWriter(w, flusher)
+	_ = sw.raw(": image generation started\n\n")
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				_ = sw.raw(": keepalive\n\n")
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(done) })
+		<-stopped
+	}, true
+}
+
+func writeChatImageRouteError(w http.ResponseWriter, stream bool, err error) {
+	status := upstreamStatus(err)
+	typ := "image_generation_error"
+	msg := "image generation failed; no image was returned"
+	if status == http.StatusTooManyRequests {
+		typ = "image_limit_error"
+		msg = "image generation is temporarily unavailable or its daily quota is exhausted; try again later"
+		w.Header().Set("Retry-After", "86400")
+	}
+	if !stream {
+		writeOpenAIError(w, status, typ, msg)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+	sw := newSSEWriter(w, flusher)
+	_ = sw.data(mustJSON(map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": typ, "param": nil}}))
+	_ = sw.data("[DONE]")
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	list := s.tokens.List()
 	throttlingSummary := map[string]any{}
@@ -2255,10 +2315,19 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
 					return
 				}
+				stopKeepalive := func() {}
+				if body.Stream {
+					var ok bool
+					stopKeepalive, ok = startChatImageKeepalive(w, r)
+					if !ok {
+						return
+					}
+				}
 				// OpenAI's `user` field is an end-user identifier, not an M365
 				// account selector. Only accountId may pin image generation to an
 				// account; otherwise retain normal account rotation/failover.
 				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID)
+				stopKeepalive()
 				if ierr == nil && len(imgs) > 0 {
 					var sb strings.Builder
 					sb.WriteString("已为你生成图片：\n\n")
@@ -2282,13 +2351,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				log.Printf("[image-route] intent detected but generation failed: %v", ierr)
-				status := upstreamStatus(ierr)
-				if status == http.StatusTooManyRequests {
-					w.Header().Set("Retry-After", "86400")
-					writeOpenAIError(w, status, "image_limit_error", "image generation is temporarily unavailable or its daily quota is exhausted; try again later")
-				} else {
-					writeOpenAIError(w, status, "image_generation_error", "image generation failed; no image was returned")
-				}
+				writeChatImageRouteError(w, body.Stream, ierr)
 				return
 			}
 		}
