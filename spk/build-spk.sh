@@ -30,7 +30,10 @@ rm -rf "$BUILD/payload/ui"
 cp -r "$SPK/ui" "$BUILD/payload/ui"
 chmod 755 "$BUILD/payload/bin/m365-copilot2api"
 chmod 644 "$BUILD/payload/ui/config" "$BUILD/payload/ui/images"/*
-tar czf "$BUILD/package.tgz" --owner=root --group=root -C "$BUILD/payload" .
+# Force the payload mode in the archive. This keeps the server executable when
+# the staging tree lives on a filesystem without Unix mode bits (for example a
+# Windows checkout used to prepare the package before final Linux validation).
+tar czf "$BUILD/package.tgz" --owner=root --group=root --mode=755 -C "$BUILD/payload" .
 
 echo "==> 打包 SPK"
 rm -rf "$BUILD/spk" && mkdir -p "$BUILD/spk"
@@ -72,6 +75,11 @@ fi
 grep -q "^\./bin/m365-copilot2api$" "$LIST" \
     || { echo "✗ package.tgz 内没有 bin/m365-copilot2api"; exit 1; }
 echo "  ✓ 二进制已就位"
+BINMODE="$(tar tvzf "$BUILD/package.tgz" ./bin/m365-copilot2api | awk '{print $1}')"
+case "$BINMODE" in
+    -rwx*) echo "  ✓ 二进制归档权限可执行 ($BINMODE)" ;;
+    *) echo "✗ 二进制归档权限不可执行 ($BINMODE)"; exit 1 ;;
+esac
 for f in start-stop-status postinst preuninst preupgrade postupgrade; do
     sh -n "$SPK/scripts/$f" || { echo "✗ $f 语法错误"; exit 1; }
 done
