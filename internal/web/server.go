@@ -464,6 +464,8 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/api/admin/models/test", s.adminModelTest)
 	m.HandleFunc("/api/admin/models/sync", s.adminModelSync)
 	m.HandleFunc("/api/admin/settings", s.adminSettings)
+	m.HandleFunc("/api/admin/analytics", s.adminAnalytics)
+	m.HandleFunc("/api/admin/analytics/reset", s.adminAnalyticsReset)
 	m.HandleFunc("/api/admin/proxy-pool", s.proxyPool)
 	m.HandleFunc("/api/admin/deployments", s.deployments)
 	m.HandleFunc("/api/admin/deployment", s.deploymentAction)
@@ -1656,6 +1658,7 @@ func (s *Server) chatOnce(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		originalErr := err
+		analyticsFailover()
 		// Failover: a rate-limited or auth-failed account must not take down the
 		// request when the pool has other healthy accounts. Only auto-selected
 		// requests fail over; an explicitly chosen account is respected, and a
@@ -2092,6 +2095,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	ledger := buildAgentLedger(body.Messages)
 	activeLedger := buildAgentLedger(activeMessages(body.Messages))
 	if err := activeLedger.CanContinue(maxToolRounds()); err != nil {
+		analyticsStuckLoopReject()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"type": "tool_round_limit", "message": err.Error(), "completed_calls": len(activeLedger.Completed)}})
@@ -2116,13 +2120,19 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[context-budget] id=%s auto-compact applied, messages=%d", requestID, len(compactedMsgs))
 	}
 	body.Messages = compactedMsgs
+	if compacted {
+		analyticsAutoCompact()
+	}
 	// Opt-in context hygiene (disabled by default). When active we clean the
 	// full message set and re-flatten, and skip the incremental conversation
 	// reuse below (which relies on absolute indices into the original array).
 	preprocessActive := cfgBudget.DedupeToolResults || cfgBudget.MaxHistoryMessages > 0 ||
-		(cfgBudget.ToolResultMode != "" && cfgBudget.ToolResultMode != "full") || cfgBudget.MaxToolResultChars > 0
+		(cfgBudget.ToolResultMode != "" && cfgBudget.ToolResultMode != "full") || cfgBudget.MaxToolResultChars > 0 ||
+		cfgBudget.EnableRepoMap || cfgBudget.EnableFileSummaryCache
+	convKey := ""
 	if preprocessActive {
-		body.Messages = preprocessMessages(body.Messages, cfgBudget)
+		convKey = sessionKeyFor(body.ConversationID, body.Messages)
+		body.Messages = preprocessMessages(body.Messages, cfgBudget, convKey)
 	}
 	// Preserve role boundaries when adapting OpenAI messages to ChatHub's
 	// single message.text field. This keeps system/developer instructions,
@@ -2134,6 +2144,14 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	prompt = strings.TrimSpace(prompt)
 	if cfgBudget.AutonomyBoost {
 		prompt = applyAutonomyBoost(prompt, true)
+	}
+	if cfgBudget.EnableRepoMap && preprocessActive {
+		if rk := knowledgeFor(convKey); rk != nil {
+			if rm := rk.repoMapText(); rm != "" {
+				prompt = prompt + "\n\n" + rm
+				analyticsRepoMapInjection()
+			}
+		}
 	}
 	if responseFormat != nil {
 		switch responseFormat.Type {
@@ -2443,6 +2461,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil && text.Len() == 0 && len(streamedTools) == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			// A throttled stream may retry on the next healthy account: only the
 			// ": connected" preamble reached the client, so the retried stream is
 			// indistinguishable from a fresh request.
@@ -2795,6 +2814,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		res, err = s.chatWithAccountReasoning(ctx, acc.ID, account, answerReq, onDeltaWrapped, onReasoningWrapped)
 		if err != nil && streamedReasoningLen == 0 && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			next, nerr := s.nextHealthyAccount(acc.ID)
 			if nerr == nil {
 				failoverReq := answerReq
@@ -2903,6 +2923,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 		}
 		if err != nil && !convReused && body.AccountID == "" && (IsRateLimited(err) || IsAuthFailure(err) || isUpstreamConnectionDrop(err)) && (IsRateLimited(err) || body.ConversationID == "" || body.ConversationID == resolvedConversationID) {
 			originalErr := err
+			analyticsFailover()
 			// Failover only when nothing pins the request to a conversation or
 			// account; a fresh chat can safely retry on the next healthy account.
 			next, nerr := s.nextHealthyAccount(acc.ID)

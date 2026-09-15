@@ -21,8 +21,13 @@ import (
 //     "smart"/"minimal" structurally compress (keep errors/warnings/tail).
 //   - DedupeRepeatedToolResults folds non-adjacent identical large tool outputs
 //     (the same big file read 5 times across the conversation) into a short
-//     reference note.
-func preprocessMessages(msgs []oaiMsg, cfg runtimeSettings) []oaiMsg {
+//     reference note — or, with EnableFileSummaryCache, into a cached digest.
+//   - convKey scopes the session knowledge store (repo map + summary cache);
+//     empty key disables knowledge features for this call.
+func preprocessMessages(msgs []oaiMsg, cfg runtimeSettings, convKey string) []oaiMsg {
+	k := knowledgeFor(convKey)
+	k.observeToolResults(msgs)
+	analyticsToolCallsObserved(countToolMessages(msgs))
 	if cfg.DedupeToolResults {
 		msgs = dedupeConsecutiveToolResults(msgs)
 	}
@@ -39,9 +44,19 @@ func preprocessMessages(msgs []oaiMsg, cfg runtimeSettings) []oaiMsg {
 	}
 	if cfg.DedupeToolResults {
 		// also fold non-adjacent repeated large reads (cheap, hash-based)
-		msgs = dedupeRepeatedToolResults(msgs, 2000)
+		msgs = dedupeRepeatedToolResults(msgs, 2000, cfg.EnableFileSummaryCache, k)
 	}
 	return msgs
+}
+
+func countToolMessages(msgs []oaiMsg) int {
+	n := 0
+	for _, m := range msgs {
+		if strings.EqualFold(m.Role, "tool") {
+			n++
+		}
+	}
+	return n
 }
 
 // compressToolResults structurally compresses oversized tool-role messages.
@@ -77,6 +92,7 @@ func compressToolResults(msgs []oaiMsg, maxChars int, minimal bool) []oaiMsg {
 		}
 		notice := fmt.Sprintf("\n\n[tool output compressed: %d of %d chars kept — header + all errors/warnings + tail; use a narrower query for full output]", len(kept), len(raw))
 		m.Content = kept + notice
+		analyticsToolCompressed(len(raw) - len(kept) - len(notice))
 		out = append(out, m)
 	}
 	return out
@@ -149,6 +165,7 @@ func capToolResults(msgs []oaiMsg, maxChars int) []oaiMsg {
 		kept := raw[:maxChars]
 		notice := fmt.Sprintf("\n\n[result truncated: %d of %d chars kept; use a narrower query or read specific lines to see the rest]", maxChars, len(raw))
 		m.Content = kept + notice
+		analyticsToolCapped(len(raw) - len(kept) - len(notice))
 		out = append(out, m)
 	}
 	return out
@@ -170,10 +187,12 @@ func dedupeConsecutiveToolResults(msgs []oaiMsg) []oaiMsg {
 	return out
 }
 
-// dedupeRepeatedToolResults folds non-adjacent identical large tool outputs
-// into a short reference note. Keyed by a content hash so the same big file
-// read many turns apart is only ever sent upstream once.
-func dedupeRepeatedToolResults(msgs []oaiMsg, minChars int) []oaiMsg {
+// dedupeRepeatedToolResults folds non-adjacent identical large tool outputs.
+// Without the summary cache the repeat is replaced by a bare reference note;
+// with EnableFileSummaryCache (and a session knowledge store available) the
+// repeat is replaced by the cached digest (header + errors/warnings + tail),
+// preserving the signal without resending the full payload.
+func dedupeRepeatedToolResults(msgs []oaiMsg, minChars int, summaryCache bool, k *sessionKnowledge) []oaiMsg {
 	seen := map[string]bool{}
 	out := make([]oaiMsg, 0, len(msgs))
 	for _, m := range msgs {
@@ -189,7 +208,16 @@ func dedupeRepeatedToolResults(msgs []oaiMsg, minChars int) []oaiMsg {
 		h := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 		if seen[h] {
 			short := h[:12]
+			if summaryCache {
+				if digest := k.cachedDigest(raw); digest != "" {
+					m.Content = fmt.Sprintf("[cached summary of identical tool output (sha256:%s), %d chars originally — digest below]\n%s", short, len(raw), digest)
+					analyticsFileSummaryServed(len(raw) - len(contentToString(m.Content)))
+					out = append(out, m)
+					continue
+				}
+			}
 			m.Content = fmt.Sprintf("[identical tool output (sha256:%s) already provided earlier in this conversation; omitted to save context]", short)
+			analyticsToolDeduped(len(raw) - len(contentToString(m.Content)))
 			out = append(out, m)
 			continue
 		}

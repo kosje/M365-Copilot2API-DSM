@@ -152,6 +152,15 @@ type runtimeSettings struct {
 	// (workbuddy / trae / claude_code / cursor / gemini_cli / custom). It only
 	// drives the UI; applying a profile writes the underlying fields directly.
 	CodingProfile string `json:"codingProfile,omitempty"`
+	// EnableRepoMap injects a compact "repository map" (paths observed via tool
+	// results this session, grouped by directory) into the upstream prompt, so
+	// the model keeps its bearings even after auto-compact/truncation dropped
+	// the early history. Default off.
+	EnableRepoMap bool `json:"enableRepoMap,omitempty"`
+	// EnableFileSummaryCache upgrades repeated identical large tool outputs from
+	// a bare "[identical output omitted]" reference to a cached digest (header +
+	// errors/warnings + tail), preserving signal across long coding sessions.
+	EnableFileSummaryCache bool `json:"enableFileSummaryCache,omitempty"`
 }
 
 type settingsStore struct {
@@ -214,6 +223,8 @@ func defaultRuntimeSettings() runtimeSettings {
 		HideReasoning:              os.Getenv("M365_HIDE_REASONING") == "true",
 		ToolResultMode:            firstNonEmptySetting(os.Getenv("M365_TOOL_RESULT_MODE"), "full"),
 		AutonomyBoost:             os.Getenv("M365_AUTONOMY_BOOST") == "true",
+		EnableRepoMap:             os.Getenv("M365_ENABLE_REPO_MAP") == "true",
+		EnableFileSummaryCache:    os.Getenv("M365_ENABLE_FILE_SUMMARY_CACHE") == "true",
 	}
 }
 func settingsPath() string {

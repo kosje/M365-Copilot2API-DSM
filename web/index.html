@@ -748,6 +748,11 @@ if (response.output_text) {
           <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advAutonomy" style="width:18px;height:18px;cursor:pointer"><label for="advAutonomy" class="form-label" style="margin:0;cursor:pointer">自主性增强 (autonomyBoost)</label></div>
           <p class="form-hint">开启后，网关在上游 prompt 注入「自主编码代理」指令——要求模型<strong>实现全部改动、自行跑 build/test 验证、未完成不得提前结束</strong>。这是无状态代理对「自动续跑 / 完成度裁判」的正确实现：客户端（WorkBuddy / Trae）持有工具执行循环，网关通过指令驱动上游模型把客户端的循环一次性跑完，而非反复「继续」。<strong>默认关闭</strong>。环境变量 <code>M365_AUTONOMY_BOOST</code>。</p></div>
 
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advRepoMap" style="width:18px;height:18px;cursor:pointer"><label for="advRepoMap" class="form-label" style="margin:0;cursor:pointer">仓库语义地图 (enableRepoMap)</label></div>
+          <p class="form-hint">开启后，网关从本会话工具结果中<strong>观察到的文件路径</strong>构建一张按目录分组的「仓库地图」，并作为紧凑块注入上游 prompt——即使 auto-compact 截掉了早期历史，模型也能凭地图记住项目结构与已读文件，不再反复迷失方向。<strong>默认关闭</strong>；编码场景建议开启。环境变量 <code>M365_ENABLE_REPO_MAP</code>。</p>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><input type="checkbox" id="advSumCache" style="width:18px;height:18px;cursor:pointer"><label for="advSumCache" class="form-label" style="margin:0;cursor:pointer">大文件摘要缓存 (enableFileSummaryCache)</label></div>
+          <p class="form-hint">开启后（需同时开启「工具结果去重」），同一份大文件/日志在会话内重复出现时，不再以「已省略」一笔带过，而是回放<strong>缓存的摘要</strong>（头部+全部错误/警告行+尾部）——省 token 的同时不丢信号，长会话重构大项目时体验显著提升。<strong>默认关闭</strong>。环境变量 <code>M365_ENABLE_FILE_SUMMARY_CACHE</code>。</p>
+
           <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">AI Coding 预设</h3>
           <div class="card" style="border-color:#6366f1;background:rgba(99,102,241,.05)"><div class="card-body" style="padding:12px 16px">
             <p style="margin:0 0 10px;color:#4338ca;font-size:13px;line-height:1.6">一键套用针对某款 AI 编码工具的经调优参数组合（写入下方各字段并保存）。你仍可随后手动微调。</p>
@@ -764,6 +769,17 @@ if (response.output_text) {
               <span id="advProfileStatus" style="font-size:13px;color:#64748b"></span>
             </div>
             <p class="form-hint" style="margin-top:10px">WorkBuddy：hideReasoning 开 + reasoning low + toolResultMode smart + autonomyBoost 开。Trae：hideReasoning 开 + reasoning medium + toolResultMode smart + autonomyBoost 开。Claude Code：hideReasoning 关 + reasoning high + toolResultMode smart。Cursor：hideReasoning 开 + reasoning medium + toolResultMode smart。Gemini CLI：hideReasoning 关 + reasoning 空 + toolResultMode minimal。</p>
+          </div></div>
+
+          <h3 style="font-size:14px;font-weight:700;margin:22px 0 12px;color:#6366f1">Agent Analytics（运行统计与优化建议）</h3>
+          <div class="card" style="border-color:#10b981;background:rgba(16,185,129,.05)"><div class="card-body" style="padding:12px 16px">
+            <div id="advAnalytics" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#065f46"></div>
+            <ul id="advAnalyticsSug" style="margin:10px 0 0;padding-left:18px;font-size:13px;color:#065f46;line-height:1.7"></ul>
+            <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+              <button class="btn" onclick="loadAnalytics()">刷新统计</button>
+              <button class="btn" onclick="resetAnalytics()">清零统计</button>
+              <span id="advAnalyticsStatus" style="font-size:13px;color:#64748b"></span>
+            </div>
           </div></div>
 
           <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
@@ -1210,7 +1226,7 @@ function showPage(p){
   if(p==='proxies')loadProxies();
   if(p==='modeltest')loadModelTest();
   if(p==='settings')loadSettings();
-  if(p==='advanced')loadAdvanced();
+  if(p==='advanced'){loadAdvanced();loadAnalytics();}
 }
 
 let onboardingHidden=false;
@@ -2472,6 +2488,8 @@ const advFields=[
   {id:'advToolCap',      key:'maxToolResultChars',  def:0, type:'int'},
   {id:'advToolMode',     key:'toolResultMode',      def:'full', type:'select'},
   {id:'advAutonomy',     key:'autonomyBoost',       def:false, type:'bool'},
+  {id:'advRepoMap',      key:'enableRepoMap',       def:false, type:'bool'},
+  {id:'advSumCache',     key:'enableFileSummaryCache', def:false, type:'bool'},
 ];
 async function loadAdvanced(){
   try{
@@ -2516,11 +2534,11 @@ async function saveAdvanced(){
 // known AI-coding client, then reloads the form so the individual controls
 // reflect the preset. 'custom' only records the profile name.
 const CODING_PROFILES={
-  workbuddy:  {hideReasoning:true,  reasoningEffort:'low',    toolResultMode:'smart', autonomyBoost:true},
-  trae:       {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true},
-  claude_code:{hideReasoning:false, reasoningEffort:'high',   toolResultMode:'smart', autonomyBoost:true},
-  cursor:     {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true},
-  gemini_cli: {hideReasoning:false, reasoningEffort:'',       toolResultMode:'minimal',autonomyBoost:false},
+  workbuddy:  {hideReasoning:true,  reasoningEffort:'low',    toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  trae:       {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  claude_code:{hideReasoning:false, reasoningEffort:'high',   toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  cursor:     {hideReasoning:true,  reasoningEffort:'medium', toolResultMode:'smart', autonomyBoost:true, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:true},
+  gemini_cli: {hideReasoning:false, reasoningEffort:'',       toolResultMode:'minimal',autonomyBoost:false, dedupeToolResults:true, enableFileSummaryCache:true, enableRepoMap:false},
   custom:     {},
 };
 async function applyCodingProfile(){
@@ -2533,6 +2551,35 @@ async function applyCodingProfile(){
     $('advProfileStatus').textContent='✓ 已应用 '+key;
     showNotice('AI Coding 预设已应用：'+key,'success');
   }catch(e){ $('advProfileStatus').textContent='✗ 应用失败'; showNotice(e.message,'error'); }
+}
+
+const ANALYTICS_LABELS=[
+  ['requestsTotal','请求总数'],['completionsTotal','完成数'],['failoversTotal','断流转移'],
+  ['stuckLoopRejects','死循环拦截'],['autoCompacts','自动压缩'],['toolCallsObserved','工具调用数'],
+  ['toolResultsCompressed','结构化压缩'],['toolResultsCapped','截断次数'],['toolResultsDeduped','去重次数'],
+  ['fileSummariesServed','摘要回放'],['charsSaved','累计节省字符'],['repoMapInjections','地图注入次数'],
+];
+async function loadAnalytics(){
+  try{
+    const d=await api('/api/admin/analytics');
+    const a=d.analytics||{};
+    const box=$('advAnalytics');
+    box.innerHTML=ANALYTICS_LABELS.map(([k,label])=>{
+      const v=a[k]!=null?a[k]:0;
+      const val=(k==='charsSaved'&&v>1000)?(Math.round(v/1000)+'k'):v;
+      return '<span style="background:#d1fae5;border:1px solid #a7f3d0;border-radius:999px;padding:3px 10px;white-space:nowrap">'+label+' <strong>'+val+'</strong></span>';
+    }).join('');
+    const ul=$('advAnalyticsSug');
+    ul.innerHTML=(d.suggestions||[]).map(x=>'<li>'+x+'</li>').join('');
+    $('advAnalyticsStatus').textContent='';
+  }catch(e){ $('advAnalyticsStatus').textContent='✗ 加载失败'; }
+}
+async function resetAnalytics(){
+  try{
+    await api('/api/admin/analytics/reset',{method:'POST'});
+    showNotice('统计已清零','success');
+    loadAnalytics();
+  }catch(e){ showNotice(e.message,'error'); }
 }
 
 setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);
