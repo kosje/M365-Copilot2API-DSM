@@ -61,6 +61,7 @@ func TestIsImageGenIntent(t *testing.T) {
 func TestShouldRouteChatImageAvoidsFalsePositives(t *testing.T) {
 	cases := map[string]bool{
 		"帮我生成一张东方仙侠海报":                            true,
+		"生成一张极简风格的蓝色圆形图标，纯白背景":                    true,
 		"设计一个 logo，直接返回图片":                        true,
 		"Generate an image of a sunset":           true,
 		"这个接口是否支持生图？":                             false,

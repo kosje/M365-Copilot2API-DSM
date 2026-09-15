@@ -323,7 +323,7 @@ var imageGenActionPatterns = []string{
 }
 
 var imageGenObjectPatterns = []string{
-	"图片", "图像", "一张图", "一幅图", "插画", "海报", "头像", "封面", "logo", "壁纸",
+	"图片", "图像", "一张图", "一幅图", "图标", "插画", "海报", "头像", "封面", "logo", "壁纸", "照片",
 }
 
 // imageGenNonActionPatterns identify discussion, analysis, prompt-writing and
