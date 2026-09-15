@@ -3112,8 +3112,12 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	hasTools := len(toolMaps) > 0
 	if hasTools || workspaceGrounding(prompt) != "" {
-		for attempt := 0; attempt < 3 && isSandboxHallucination(res.Text); attempt++ {
-			log.Printf("[sandbox-eject] model hallucinated a sandbox environment, positive retry attempt %d (tools=%t)", attempt+1, hasTools)
+		for attempt := 0; attempt < 3 && (isSandboxHallucination(res.Text) || (hasTools && isArtifactFallback(res.Text))); attempt++ {
+			if isArtifactFallback(res.Text) {
+				log.Printf("[artifact-eject] model fell back to a downloadable artifact instead of using tools, positive retry attempt %d", attempt+1)
+			} else {
+				log.Printf("[sandbox-eject] model hallucinated a sandbox environment, positive retry attempt %d (tools=%t)", attempt+1, hasTools)
+			}
 			var correction string
 			if hasTools {
 				correction = "ACT, DO NOT DESCRIBE. The caller's request involves files and commands on the caller's local machine. Your tools run directly on that machine and accept the exact paths mentioned in the request. Choose the most appropriate tool and call it NOW with the exact path. Do not describe your runtime environment, do not report which directories you can see, and do not summarize limitations — just make the tool call."

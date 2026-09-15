@@ -420,3 +420,34 @@ func isSandboxHallucination(text string) bool {
 	}
 	return false
 }
+
+// artifactFallbackPatterns: the upstream model sometimes refuses the caller's
+// tools and instead "generates a downloadable file" via its built-in artifact
+// channel (e.g. a teams.microsoft.com / asyncgw download link). That is the
+// same class of failure as a sandbox hallucination: the model did not act
+// through the tools it was given. Detect it so the positive retry can force a
+// real tool call.
+var artifactFallbackPatterns = []string{
+	"teams.microsoft.com",
+	"asyncgw",
+	"提供给你下载",
+	"可下载文件",
+	"保存到当前运行环境",
+	"只能保存到",
+	"生成了一个可下载",
+	"已生成文件",
+	"下载链接",
+	"download link",
+	"i produced a downloadable",
+	"i created a file you can download",
+}
+
+func isArtifactFallback(text string) bool {
+	low := strings.ToLower(text)
+	for _, p := range artifactFallbackPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
