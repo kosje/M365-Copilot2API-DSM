@@ -2323,6 +2323,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// completion — so the caller does not need a separate image endpoint.
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
 	forceImageModel := strings.EqualFold(strings.TrimSpace(body.Model), "gpt-image-2")
+	if forceImageModel && (responseFormat != nil || lastMessageRole(body.Messages) != "user") {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "gpt-image-2 requires a final user image prompt and does not support response_format or tool continuations")
+		return
+	}
 	if responseFormat == nil && (forceImageModel || os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true") {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
 			ut := lastUserContent(body.Messages)
@@ -2332,6 +2336,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			// without any image resource, which is what several CLI clients show.
 			// For ordinary models, retain the intent-based routing behavior.
 			if shouldUseChatImageRoute(body.Model, ut, body.Attachments) {
+				log.Printf("[image-route] id=%s model=%s selected=true explicit=%t", requestID, body.Model, forceImageModel)
 				if !requestModelAllowed(r, "gpt-image-2") {
 					writeOpenAIError(w, http.StatusForbidden, "auth_error", "image generation is not allowed for this API key")
 					return
@@ -2358,6 +2363,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					sb.WriteString("已为你生成图片：\n\n")
 					for _, u := range imgs {
 						sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
+						sb.WriteString("[下载图片](" + u + ")\n\n")
 					}
 					log.Printf("[image-route] chat intent routed to image pipeline, images=%d conv=%s", len(imgs), convID)
 					text := sb.String()
@@ -2840,6 +2846,11 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[req-trace] id=%s stage=flush_text err=%v", requestID, ferr)
 			}
 		}
+		if md := s.upstreamImagesToMarkdown(r, res.Images, acc); md != "" {
+			if err := emitText(md); err != nil {
+				return
+			}
+		}
 		finishChunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
 		if res.Throttling != nil {
 			finishChunk["x_m365_throttling"] = res.Throttling
@@ -2851,7 +2862,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 		// Surface their URLs in the terminal chunk so the web chat can render
 		// them (the streaming deltas never carry image payloads).
 		if len(res.Images) > 0 {
-			finishChunk["images"] = res.Images
+			// Images have already been delivered through delta.content.
 		}
 		_ = sw.data(mustJSON(finishChunk))
 		_ = sw.data("[DONE]")
@@ -3063,6 +3074,11 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			}
 		}
 		if err == nil {
+			if md := s.upstreamImagesToMarkdown(r, res.Images, acc); md != "" {
+				if err := writeChunk(map[string]any{"content": md}); err != nil {
+					return
+				}
+			}
 			if content := contentFilter.Flush(); content != "" {
 				if writeErr := writeChunk(map[string]any{"content": content}); writeErr != nil {
 					return
@@ -3338,7 +3354,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 			}
 		}()
 		// one-shot "stream" — emit full content then done
-		if md := s.upstreamImagesToMarkdown("http://"+r.Host, res.Images, acc); md != "" {
+		if md := s.upstreamImagesToMarkdown(r, res.Images, acc); md != "" {
 			res.Text += "\n\n" + md
 		}
 		chunk := map[string]any{
@@ -3375,7 +3391,7 @@ APPLICATION_REQUEST_AND_EVIDENCE:
 	}
 	content := any(res.Text)
 	if len(res.Images) > 0 {
-		if md := s.upstreamImagesToMarkdown("http://"+r.Host, res.Images, acc); md != "" {
+		if md := s.upstreamImagesToMarkdown(r, res.Images, acc); md != "" {
 			res.Text += "\n\n" + md
 		}
 		content = res.Text

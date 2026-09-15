@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -606,6 +607,10 @@ func downloadImageAsBase64(url string) (b64, contentType string, err error) {
 func downloadImageAsBase64WithToken(url, token string) (b64, contentType string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	return downloadImageWithContext(ctx, url, token)
+}
+
+func downloadImageWithContext(ctx context.Context, url, token string) (b64, contentType string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", "", err
@@ -621,9 +626,12 @@ func downloadImageAsBase64WithToken(url, token string) (b64, contentType string,
 	if resp.StatusCode != 200 {
 		return "", "", fmt.Errorf("download returned %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGeneratedImageBytes+1))
 	if err != nil {
 		return "", "", err
+	}
+	if len(body) > maxGeneratedImageBytes {
+		return "", "", fmt.Errorf("generated image exceeds size limit")
 	}
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
@@ -659,51 +667,78 @@ func downloadImageAsDataURIWithToken(url, token string) (string, error) {
 	return "data:" + ct + ";base64," + b64, nil
 }
 
-// upstreamImagesToMarkdown 把聊天回复里上游生成的图片转成 markdown 追加到回复文本：
-//   - 下载成功：落盘为本地缓存文件，返回 ![生成图片 N](baseURL/api/chatui/file/{id})
-//   - 下载失败（设备可能无代理直连图片 CDN）：返回可点击的上游下载链接，由用户自行下载
-//
-// 与 /v1/images/generations 的兜底语义一致，但以 markdown 形式随聊天流返回。
-func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc auth.AccountToken) string {
-	var b strings.Builder
-	idx := 0
-	for _, raw := range urls {
-		u := strings.TrimSpace(raw)
-		if u == "" {
-			continue
-		}
-		idx++
-		// data URI：直接解码落盘
-		if strings.HasPrefix(strings.ToLower(u), "data:image/") {
-			if _, payload, ok := strings.Cut(u, ","); ok {
-				if data, err := base64.StdEncoding.DecodeString(payload); err == nil && len(data) > 0 {
-					if id, serr := s.chatUI.saveImage(data, "image/png"); serr == nil {
-						b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
-						continue
-					}
-				}
-			}
-			continue
-		}
-		// 带上游 token 下载图片字节；失败再用 Designer 专用 token 重试
-		b64, ct, err := downloadImageAsBase64WithToken(u, acc.AccessToken)
-		if err != nil {
-			if dt, dterr := s.designerAccessToken(acc); dterr == nil {
-				b64, ct, err = downloadImageAsBase64WithToken(u, dt)
-			}
-		}
-		if err == nil {
-			if data, derr := base64.StdEncoding.DecodeString(b64); derr == nil && len(data) > 0 {
-				if id, serr := s.chatUI.saveImage(data, ct); serr == nil {
-					b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
-					continue
-				}
-			}
-		}
-		log.Printf("[chat-image-download] err=%v (fallback to upstream URL)", err)
-		b.WriteString(fmt.Sprintf("\n⚠️ 图片 %d 已生成，但服务器下载图片失败（设备可能无法直连图片 CDN，需要代理）。请自行点击链接下载：[下载图片 %d](%s)", idx, idx, u))
+// upstreamImagesToMarkdown delivers images in the standard content field.
+// External clients cannot consume chat UI session-protected URLs.
+func (s *Server) upstreamImagesToMarkdown(r *http.Request, sources []string, acc auth.AccountToken) string {
+	if len(sources) == 0 {
+		return ""
 	}
-	return strings.TrimSpace(b.String())
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	urls, err := s.hostChatImages(ctx, r, sources, acc)
+	if err != nil {
+		log.Printf("[chat-image-download] failed: %v", err)
+		return "\n\n图片下载失败，未能提供可查看的图片。请稍后重试。"
+	}
+	var b strings.Builder
+	for _, u := range urls {
+		b.WriteString("\n\n![生成图片](" + u + ")\n[下载图片](" + u + ")")
+	}
+	return b.String()
+}
+
+// hostChatImages verifies bytes before publishing a public, short-lived URL.
+// Never forward an account token to arbitrary URLs returned by the model.
+func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []string, acc auth.AccountToken) ([]string, error) {
+	var urls []string
+	seen := map[[32]byte]bool{}
+	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		source = strings.TrimSpace(source)
+		var data []byte
+		var err error
+		if strings.HasPrefix(strings.ToLower(source), "data:image/") {
+			meta, payload, ok := strings.Cut(source, ",")
+			if !ok || !strings.Contains(strings.ToLower(meta), ";base64") || len(payload) > base64.StdEncoding.EncodedLen(maxGeneratedImageBytes) {
+				return nil, fmt.Errorf("invalid inline image")
+			}
+			data, err = base64.StdEncoding.DecodeString(payload)
+		} else {
+			if !isDesignerImageURL(source) {
+				return nil, fmt.Errorf("unsupported generated image host")
+			}
+			data, _, err = downloadDesignerImage(ctx, source, acc.AccessToken)
+			if err != nil && ctx.Err() == nil && acc.RefreshToken != "" {
+				var token string
+				token, err = s.designerAccessToken(acc)
+				if err == nil {
+					data, _, err = downloadDesignerImage(ctx, source, token)
+				}
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("image download failed: %w", err)
+		}
+		ct := http.DetectContentType(data)
+		if len(data) == 0 || len(data) > maxGeneratedImageBytes || !strings.HasPrefix(ct, "image/") {
+			return nil, fmt.Errorf("upstream returned invalid image bytes")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		hash := sha256.Sum256(data)
+		if seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		urls = append(urls, generatedImageURL(r, s.storeGeneratedImage(data, ct)))
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("upstream returned no image resource")
+	}
+	return urls, nil
 }
 
 // generateChatImages runs the image-generation pipeline (account rotation,
@@ -832,65 +867,9 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 	if len(images) > n {
 		images = images[:n]
 	}
-	var urls []string
-	dlTimeout := time.Duration(s.settings.get().ImageTimeoutSeconds) * time.Second
-	if dlTimeout < 90*time.Second {
-		dlTimeout = 90 * time.Second
-	}
-	for _, sourceURL := range images {
-		if err := totalCtx.Err(); err != nil {
-			return nil, "", chatImageContextError(err, totalTimeout)
-		}
-		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
-			meta, payload, ok := strings.Cut(sourceURL, ",")
-			if !ok || !strings.Contains(strings.ToLower(meta), ";base64") {
-				return nil, "", fmt.Errorf("upstream returned an invalid inline image")
-			}
-			imageData, derr := base64.StdEncoding.DecodeString(payload)
-			if derr != nil || len(imageData) == 0 || len(imageData) > maxGeneratedImageBytes {
-				return nil, "", fmt.Errorf("upstream returned an invalid inline image")
-			}
-			contentType := strings.TrimPrefix(strings.SplitN(meta, ";", 2)[0], "data:")
-			if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
-				contentType = http.DetectContentType(imageData)
-			}
-			id := s.storeGeneratedImage(imageData, contentType)
-			urls = append(urls, generatedImageURL(r, id))
-			continue
-		}
-		if !isDesignerImageURL(sourceURL) {
-			urls = append(urls, sourceURL)
-			continue
-		}
-		// The normal M365 access token works for some Designer URLs while the
-		// dedicated Designer scope works for others. Try both, matching the
-		// proven chat-image download path, so external clients receive a stable
-		// local /v1/images/files URL instead of an upstream URL they cannot open.
-		b64, contentType, derr := downloadImageAsBase64WithToken(sourceURL, successAcc.AccessToken)
-		var imageData []byte
-		if derr == nil {
-			imageData, derr = base64.StdEncoding.DecodeString(b64)
-		}
-		if derr != nil || len(imageData) == 0 {
-			designerToken, tokenErr := s.designerAccessToken(successAcc)
-			if tokenErr == nil {
-				dlCtx, dlCancel := context.WithTimeout(r.Context(), dlTimeout)
-				imageData, contentType, derr = downloadDesignerImage(dlCtx, sourceURL, designerToken)
-				dlCancel()
-			} else {
-				derr = tokenErr
-			}
-		}
-		if derr != nil || len(imageData) == 0 {
-			log.Printf("[image-route-download] err=%v (fallback to upstream URL)", derr)
-			urls = append(urls, sourceURL)
-			continue
-		}
-		id := s.storeGeneratedImage(imageData, contentType)
-		urls = append(urls, generatedImageURL(r, id))
-	}
-	if len(urls) == 0 {
-		return nil, "", fmt.Errorf("upstream returned no image resource")
+	urls, err := s.hostChatImages(totalCtx, r, images, successAcc)
+	if err != nil {
+		return nil, "", err
 	}
 	return urls, res.ConversationID, nil
 }
