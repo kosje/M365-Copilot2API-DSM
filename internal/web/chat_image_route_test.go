@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteChatCompletionTextNonStreamingUsage(t *testing.T) {
@@ -39,6 +40,24 @@ func TestRequestContextEnded(t *testing.T) {
 	cancel()
 	if !requestContextEnded(req.WithContext(ctx), nil) {
 		t.Fatal("canceled request context was not detected")
+	}
+}
+
+func TestChatImageRouteTimeouts(t *testing.T) {
+	for _, tc := range []struct {
+		seconds int
+		total   time.Duration
+		attempt time.Duration
+	}{
+		{seconds: 2, total: 5 * time.Second, attempt: 5 * time.Second},
+		{seconds: 120, total: 2 * time.Minute, attempt: 2 * time.Minute},
+		{seconds: 300, total: 5 * time.Minute, attempt: 3 * time.Minute},
+		{seconds: 3600, total: 10 * time.Minute, attempt: 3 * time.Minute},
+	} {
+		total, attempt := chatImageRouteTimeouts(tc.seconds)
+		if total != tc.total || attempt != tc.attempt {
+			t.Fatalf("seconds=%d got (%s,%s), want (%s,%s)", tc.seconds, total, attempt, tc.total, tc.attempt)
+		}
 	}
 }
 
