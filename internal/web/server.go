@@ -972,7 +972,11 @@ func writeChatImageRouteError(w http.ResponseWriter, stream bool, err error) {
 	status := upstreamStatus(err)
 	typ := "image_generation_error"
 	msg := "image generation failed; no image was returned"
-	if status == http.StatusTooManyRequests {
+	if errors.Is(err, context.DeadlineExceeded) {
+		status = http.StatusGatewayTimeout
+		typ = "image_timeout_error"
+		msg = "image generation timed out; try again later"
+	} else if status == http.StatusTooManyRequests {
 		typ = "image_limit_error"
 		msg = "image generation is temporarily unavailable or its daily quota is exhausted; try again later"
 		w.Header().Set("Retry-After", "86400")

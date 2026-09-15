@@ -710,6 +710,16 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 		size = "1024x1024"
 	}
 	prompt := fmt.Sprintf("Generate an image with GPT Image 2. Size: %s. Description: %s. Return the image URL directly.", size, userPrompt)
+	// ImageTimeoutSeconds is a request-level budget, not a per-account budget.
+	// Applying it independently inside the failover loop multiplies a 300s
+	// setting by every account (12 accounts => up to an hour) while SSE
+	// keepalives make the client appear stuck forever.
+	totalTimeout := time.Duration(s.settings.get().ImageTimeoutSeconds) * time.Second
+	if totalTimeout < 5*time.Second {
+		totalTimeout = 5 * time.Second
+	}
+	totalCtx, totalCancel := context.WithTimeout(r.Context(), totalTimeout)
+	defer totalCancel()
 	explicit := strings.TrimSpace(accountID) != ""
 	var res chathub.Result
 	found := false
@@ -717,6 +727,9 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 	var successAcc auth.AccountToken
 	var lastErr error
 	for attempt := 0; attempt < maxAccountProbe; attempt++ {
+		if err := totalCtx.Err(); err != nil {
+			return nil, "", fmt.Errorf("image generation timed out after %s: %w", totalTimeout, err)
+		}
 		var acc auth.AccountToken
 		var err error
 		if attempt == 0 {
@@ -748,11 +761,14 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 			}
 			continue
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.settings.get().ImageTimeoutSeconds)*time.Second)
+		ctx, cancel := context.WithCancel(totalCtx)
 		res, err = s.chatWithAccount(ctx, acc.ID, chathub.Account{AccessToken: acc.AccessToken, OID: acc.OID, TID: acc.TID}, chathub.Request{Text: prompt, Tone: "magic", Attachments: attachments, LicenseType: s.settings.get().LicenseType, Scenario: s.settings.get().Scenario, FeatureFlags: s.featureFlags()})
 		cancel()
 		if err != nil {
 			lastErr = err
+			if totalCtx.Err() != nil {
+				return nil, "", fmt.Errorf("image generation timed out after %s: %w", totalTimeout, totalCtx.Err())
+			}
 			if errors.Is(err, chathub.ErrImageLimit) {
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
 			}
@@ -799,6 +815,9 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 		dlTimeout = 90 * time.Second
 	}
 	for _, sourceURL := range images {
+		if err := totalCtx.Err(); err != nil {
+			return nil, "", fmt.Errorf("image generation timed out after %s: %w", totalTimeout, err)
+		}
 		if strings.HasPrefix(strings.ToLower(sourceURL), "data:image/") {
 			meta, payload, ok := strings.Cut(sourceURL, ",")
 			if !ok || !strings.Contains(strings.ToLower(meta), ";base64") {
