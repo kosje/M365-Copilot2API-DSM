@@ -84,14 +84,25 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # /bin/sh is dash on the runner, which is a much stricter POSIX check than
-      # bash and closer to what DSM's busybox shell accepts.
-      - name: POSIX syntax check on the lifecycle hooks
+      # Two different shells, deliberately. The DSM lifecycle hooks must be POSIX
+      # (DSM runs them with busybox sh), and /bin/sh is dash on the runner, which
+      # is a far stricter check than bash. The build and release scripts are bash
+      # by shebang, so they get bash -n - checking them with sh -n would accept
+      # syntax that fails at runtime, and would reject bash-only constructs they
+      # are entitled to use.
+      - name: POSIX syntax check on the DSM lifecycle hooks
         run: |
-          for f in spk/scripts/* spk/build-spk.sh spk/release.sh spk/gen-feed.sh spk/tests/lifecycle.sh migrate/migrate.sh; do
+          for f in spk/scripts/* spk/tests/lifecycle.sh migrate/migrate.sh; do
             [ -e "$f" ] || continue
             echo "sh -n $f"
             sh -n "$f"
+          done
+
+      - name: bash syntax check on the build scripts
+        run: |
+          for f in spk/build-spk.sh spk/release.sh spk/gen-feed.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
           done
 
       - name: lifecycle hook behaviour

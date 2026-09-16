@@ -1,0 +1,225 @@
+name: Release
+
+# 推一个 v* tag 就会：跑测试 → 构建 SPK 与独立二进制 → 生成校验和 → 建 Release
+# 并附上产物 → 从 SPK 的 INFO 重新生成套件来源 feed 并推到 gh-pages。
+#
+# 手动触发（workflow_dispatch）可以在不打新 tag 的情况下重跑一次发版。
+#
+# 为什么不沿用 spk/release.sh：它需要在 Linux 上跑（Windows 的 tar 会把脚本的
+# 可执行位丢掉）、依赖本机装好 go/git/gh、还要手工准备 .gh-pages 工作树。CI 里
+# 这些都不存在，而且每次发版都应该用同一套环境。release.sh 保留给本地发版用，
+# 两者都调用同一个 gen-feed.sh，所以 feed 只有一份生成逻辑。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要发布的版本号，例如 1.6.6（必须与 spk/INFO 的前缀一致）"
+        required: true
+        type: string
+
+# 建 Release 与推 gh-pages 都需要写权限。默认的 GITHUB_TOKEN 是只读的。
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整历史：生成发版说明要 diff 上一个 tag，还要操作 gh-pages 分支。
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 解析版本号并与 spk/INFO 对齐
+        id: v
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="${{ github.event.inputs.version }}"
+          fi
+          [ -n "$VER" ] || { echo "::error::无法确定版本号"; exit 1; }
+
+          # INFO 的 version 是 DSM 唯一认的编号（X.Y.Z-BBBB），分发文件名用 semver
+          # 部分。两者必须一致，否则套件中心显示的版本与文件名对不上——之前靠人工
+          # 维护，出过 1.6.5-0004 与 1.5.7 并存的事故。
+          INFOVER="$(grep -m1 '^version=' spk/INFO | cut -d'"' -f2)"
+          case "$INFOVER" in
+            "$VER"-*) ;;
+            *) echo "::error::spk/INFO 是 $INFOVER，但这次发的是 $VER，两者必须一致"; exit 1 ;;
+          esac
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "infover=$INFOVER" >> "$GITHUB_OUTPUT"
+          echo "SPK version: $INFOVER / 分发版本: $VER"
+
+      # 发一个跑不过测试的产物是没意义的。CI 已经门禁过这个提交，但 tag 可以指向
+      # 任何提交，所以这里再确认一次。
+      - name: 测试
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      # build-spk.sh 自带一致性自检（dsmuidir 是否真的交付、ui/config 主键是否
+      # 匹配 dsmappname、7 个图标尺寸是否齐全、归档内二进制是否可执行、INFO 版本
+      # 是否高于已发布版本），所以这一步同时也是校验。
+      - name: 构建 SPK
+        run: ./spk/build-spk.sh "${{ steps.v.outputs.version }}"
+
+      - name: 构建独立二进制
+        run: |
+          set -eu
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -trimpath \
+            -ldflags="-s -w -X m365-copilot2api/internal/web.Version=${{ steps.v.outputs.version }}" \
+            -o m365-copilot2api-linux-amd64 ./cmd/server
+          file m365-copilot2api-linux-amd64
+
+      - name: 生成校验和
+        run: |
+          set -eu
+          SPK="m365-copilot2api-${{ steps.v.outputs.version }}.spk"
+          [ -f "$SPK" ] || { echo "::error::$SPK 不存在"; exit 1; }
+          sha256sum "$SPK" > checksums.txt
+          sha256sum -b m365-copilot2api-linux-amd64 \
+            | sed 's|.*\*|m365-copilot2api-linux-amd64|' >> checksums.txt
+          cat checksums.txt
+
+      # 发版说明：优先用仓库里的 docs/release-notes/<版本>.md，没有就按提交记录
+      # 生成。两种情况下都附上完整提交列表。
+      - name: 组装发版说明
+        run: |
+          set -eu
+          VER="${{ steps.v.outputs.version }}"
+          TAG="v$VER"
+          NOTES="docs/release-notes/$VER.md"
+          if [ -f "$NOTES" ]; then
+            echo "使用仓库内的 $NOTES"
+            cp "$NOTES" release-notes.md
+          else
+            {
+              echo "### Copilot2API $TAG"
+              echo
+              echo "群晖套件：下载附件中的 \`m365-copilot2api-$VER.spk\`，在**套件中心 → 手动安装**。"
+              echo "已添加套件来源的用户会在套件中心看到更新提示。"
+              echo
+              echo "校验下载（见附件 \`checksums.txt\`）："
+              echo
+              echo '```'
+              echo "sha256sum -c checksums.txt"
+              echo '```'
+            } > release-notes.md
+          fi
+
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo
+            echo "---"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "#### 完整改动（\`$PREV\`..\`$TAG\`）"
+              echo
+              git log --no-merges --pretty='- %s' "$PREV..$TAG"
+              echo
+              echo "\`${{ github.server_url }}/${{ github.repository }}/compare/$PREV...$TAG\`"
+            else
+              echo "#### 完整改动"
+              echo
+              git log --no-merges --pretty='- %s' -25
+            fi
+          } >> release-notes.md
+          echo "---- release-notes.md ----"
+          head -40 release-notes.md
+
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          VER="${{ steps.v.outputs.version }}"
+          TAG="v$VER"
+          SPK="m365-copilot2api-$VER.spk"
+          ASSETS="$SPK m365-copilot2api-linux-amd64 checksums.txt"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG 已存在，覆盖上传产物"
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber $ASSETS
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
+          else
+            echo "创建 $TAG"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --notes-file release-notes.md $ASSETS
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | "  \(.name)  \(.size) bytes"'
+
+      # 套件来源 feed。必须先有 Release：feed 里的 link 指向刚上传的产物。
+      #
+      # 用 gen-feed.sh 从 SPK 的 INFO 重新生成整份 JSON，而不是在旧文件上打补丁
+      # ——打补丁会让 feed 与包内元数据脱节。输出写到 gh-pages 的根目录，因为
+      # GitHub Pages 服务的就是那个分支。
+      - name: 更新套件来源 feed
+        run: |
+          set -eu
+          VER="${{ steps.v.outputs.version }}"
+          SPK="m365-copilot2api-$VER.spk"
+          LINK="${{ github.server_url }}/${{ github.repository }}/releases/download/v$VER/$SPK"
+
+          git fetch origin gh-pages
+          git worktree add gh-pages-tree gh-pages
+
+          ./spk/gen-feed.sh "$SPK" "$LINK" gh-pages-tree/index.json
+
+          cd gh-pages-tree
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "feed 无变化"
+          else
+            git commit -q -m "feed: ${{ steps.v.outputs.infover }} (v$VER)"
+            git push origin HEAD:gh-pages
+            echo "已推送 feed: ${{ steps.v.outputs.infover }}"
+          fi
+
+      - name: 确认线上 feed 已生效
+        run: |
+          set -eu
+          # Pages 构建需要一点时间；轮询而不是死等。
+          for i in $(seq 1 20); do
+            BODY="$(curl -sS -H 'Cache-Control: no-cache' \
+              "https://kosje.github.io/${{ github.repository_owner }}/M365-Copilot2API-DSM/index.json" || true)"
+            if printf '%s' "$BODY" | grep -q "${{ steps.v.outputs.infover }}"; then
+              echo "线上 feed 已是 ${{ steps.v.outputs.infover }}"
+              printf '%s' "$BODY" | python3 -m json.tool
+              exit 0
+            fi
+            echo "  等待 Pages 构建… ($i)"
+            sleep 15
+          done
+          echo "::error::线上 feed 仍未出现 ${{ steps.v.outputs.infover }}，请检查 Pages 构建"
+          exit 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-artifacts
+          path: |
+            m365-copilot2api-*.spk
+            m365-copilot2api-linux-amd64
+            checksums.txt
+            release-notes.md
+          if-no-files-found: warn
+          retention-days: 14

@@ -81,13 +81,12 @@ echo "  已附带 checksums.txt"
 
 step "更新套件来源 feed"
 [ -d "$PAGES" ] || { echo "缺少 gh-pages 工作树，先执行：git worktree add .gh-pages origin/gh-pages"; exit 1; }
-INFOVER="$(tar xOf "$SPK" INFO | grep -m1 '^version=' | cut -d'"' -f2)"
 LINK="https://github.com/$REPO/releases/download/$TAG/$(basename "$SPK")"
-MD5="$(md5sum "$SPK" | cut -d' ' -f1)"
-SIZE="$(wc -c < "$SPK" | tr -d ' ')"
-jq --arg v "$INFOVER" --arg l "$LINK" --arg m "$MD5" --argjson s "$SIZE" \
-   '.packages[0].version=$v | .packages[0].link=$l | .packages[0].md5=$m | .packages[0].size=$s' \
-   "$PAGES/index.json" > "$PAGES/index.json.tmp" && mv "$PAGES/index.json.tmp" "$PAGES/index.json"
+# 用 gen-feed.sh 从 SPK 的 INFO 重新生成整份 feed，而不是在旧文件上打补丁。
+# 打补丁会让 feed 与包内元数据脱节——线上那份就是这么缺掉 arch/os_min_ver 的。
+# 输出必须写到 gh-pages 的根目录：GitHub Pages 服务的是那个分支，不是 docs/。
+"$ROOT/spk/gen-feed.sh" "$SPK" "$LINK" "$PAGES/index.json"
+INFOVER="$(tar xOf "$SPK" INFO | grep -m1 '^version=' | cut -d'"' -f2)"
 git -C "$PAGES" add -A
 git -C "$PAGES" commit -q -m "feed: $INFOVER ($TAG)"
 git -C "$PAGES" push -q origin gh-pages
