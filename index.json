@@ -2,12 +2,12 @@
   "packages": [
     {
       "package": "m365-copilot2api",
-      "version": "1.6.7-0001",
+      "version": "1.6.30-0001",
       "dname": "Copilot2API",
       "desc": "M365 Copilot2API 本地网关（群晖 DSM 版）。把 Microsoft 365 Copilot 转换为 OpenAI / Anthropic 兼容 API，供任意 OpenAI 客户端（Claude Code、OpenWebUI、ChatBox、Cherry Studio 等）调用。自带 Web 管理控制台：账号授权（设备码登录为主，手动粘贴回调地址作备用）、API Key 管理与额度（含 auto 智能路由模型池）、代理池、用量统计、/chat 轻量对话端。服务端口 4141，安装向导可设置管理员密码。升级请在套件中心安装新版 SPK。",
-      "link": "https://github.com/kosje/M365-Copilot2API-DSM/releases/download/v1.6.7/m365-copilot2api-1.6.7.spk",
-      "md5": "6d9cebd352afc89ec6ff79c38a2c98a8",
-      "size": 7895040,
+      "link": "https://github.com/kosje/M365-Copilot2API-DSM/releases/download/v1.6.30/m365-copilot2api-1.6.30.spk",
+      "md5": "ae0e069f15a11a739ed217bb1f17c18b",
+      "size": 8028160,
       "thumbnail": [
         "https://kosje.github.io/M365-Copilot2API-DSM/icon_72.png"
       ],
