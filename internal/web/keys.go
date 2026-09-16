@@ -14,10 +14,15 @@ import (
 )
 
 type apiKeyRecord struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Prefix        string     `json:"prefix"`
-	Hash          string     `json:"hash"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Prefix string `json:"prefix"`
+	Hash   string `json:"hash"`
+	// Raw is the cleartext key. It is READ-ONLY for migrations: older revisions
+	// persisted it, and openAPIKeys converts any leftover into Hash. It must
+	// never be set on a record that is stored or handed to a client, because
+	// that would put every key back into plaintext on disk and in the console.
+	// flush() clears it defensively.
 	Raw           string     `json:"raw,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	LastUsedAt    *time.Time `json:"lastUsedAt,omitempty"`
@@ -146,10 +151,16 @@ func openAPIKeys() *apiKeyStore {
 	if e == nil && json.Unmarshal(b, s) == nil {
 		migrated := false
 		for i := range s.Keys {
-			if s.Keys[i].Raw != "" && s.Keys[i].Hash == "" {
-				s.Keys[i].Hash = keyHash(s.Keys[i].Raw)
-				migrated = true
+			if s.Keys[i].Raw == "" {
+				continue
 			}
+			// Hash first (a legacy record may carry only the cleartext), then
+			// drop the cleartext so the rewrite on disk stops containing it.
+			if s.Keys[i].Hash == "" {
+				s.Keys[i].Hash = keyHash(s.Keys[i].Raw)
+			}
+			s.Keys[i].Raw = ""
+			migrated = true
 		}
 		if migrated {
 			_ = s.flush()
@@ -159,6 +170,11 @@ func openAPIKeys() *apiKeyStore {
 }
 func (s *apiKeyStore) flush() error {
 	s.mu.Lock()
+	// Invariant: the cleartext never reaches disk. Enforced here rather than
+	// only at the call sites so a future caller cannot silently reintroduce it.
+	for i := range s.Keys {
+		s.Keys[i].Raw = ""
+	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	s.mu.Unlock()
 	if err != nil {
@@ -176,9 +192,9 @@ func (s *apiKeyStore) create(name string) (apiKeyRecord, string, error) {
 		return apiKeyRecord{}, "", e
 	}
 	raw := "m365_" + hex.EncodeToString(b)
-	r := apiKeyRecord{ID: hex.EncodeToString(b[:8]), Name: name, Prefix: raw[:12], Hash: keyHash(raw), Raw: raw, CreatedAt: time.Now()}
+	stored := apiKeyRecord{ID: hex.EncodeToString(b[:8]), Name: name, Prefix: raw[:12], Hash: keyHash(raw), CreatedAt: time.Now()}
 	s.mu.Lock()
-	s.Keys = append(s.Keys, r)
+	s.Keys = append(s.Keys, stored)
 	s.mu.Unlock()
 	if err := s.persist.flushNowBlocking(); err != nil {
 		s.mu.Lock()
@@ -186,16 +202,25 @@ func (s *apiKeyStore) create(name string) (apiKeyRecord, string, error) {
 		s.mu.Unlock()
 		return apiKeyRecord{}, "", err
 	}
+	// The cleartext is returned exactly once, here. Everything that leaves this
+	// function is redacted: no hash, no cleartext.
+	return publicKeyRecord(stored), raw, nil
+}
+
+// publicKeyRecord returns a copy safe to hand to a client. Neither the hash nor
+// the cleartext may leave the process, so GET /api/admin/keys cannot be used to
+// harvest live keys.
+func publicKeyRecord(r apiKeyRecord) apiKeyRecord {
 	r.Hash = ""
-	return r, raw, nil
+	r.Raw = ""
+	return r
 }
 func (s *apiKeyStore) list() []apiKeyRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]apiKeyRecord, len(s.Keys))
-	copy(out, s.Keys)
-	for i := range out {
-		out[i].Hash = ""
+	for i := range s.Keys {
+		out[i] = publicKeyRecord(s.Keys[i])
 	}
 	return out
 }
@@ -363,6 +388,38 @@ func (s *apiKeyStore) lookupRaw(raw string) (apiKeyRecord, bool) {
 		}
 	}
 	return apiKeyRecord{}, false
+}
+
+// lookupByID resolves a key record by ID, refusing revoked keys. Used by the
+// in-process /chat proxy, which identifies the key by ID because it must not
+// hold key cleartext.
+func (s *apiKeyStore) lookupByID(id string) (apiKeyRecord, bool) {
+	if id == "" {
+		return apiKeyRecord{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Keys {
+		if s.Keys[i].ID == id && !s.Keys[i].Revoked {
+			return s.Keys[i], true
+		}
+	}
+	return apiKeyRecord{}, false
+}
+
+// recordIDForKeyHash finds the live key whose hash matches, so a legacy
+// cleartext key can be migrated to an ID reference without keeping the
+// cleartext.
+func (s *apiKeyStore) recordIDForKeyHash(raw string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := keyHash(raw)
+	for i := range s.Keys {
+		if s.Keys[i].Hash == h && !s.Keys[i].Revoked {
+			return s.Keys[i].ID, true
+		}
+	}
+	return "", false
 }
 func (s *apiKeyStore) valid(raw string) bool {
 	s.mu.Lock()

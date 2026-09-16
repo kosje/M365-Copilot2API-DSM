@@ -22,6 +22,24 @@ func apiKeyFromRequest(r *http.Request) (apiKeyRecord, bool) {
 	return rec, ok
 }
 
+// internalAuthKey marks a request already authenticated in-process, by a
+// handler that resolved the key record itself. The /chat UI proxy uses this so
+// it can call /v1 on a chat user's behalf without storing that user's
+// cleartext key anywhere.
+//
+// A remote client cannot set request context values, so this cannot be forged
+// over the network. adminMiddleware honours it only for /v1/ paths.
+type internalAuthKey struct{}
+
+func withInternalAuth(ctx context.Context, rec apiKeyRecord) context.Context {
+	return context.WithValue(ctx, internalAuthKey{}, rec)
+}
+
+func internalAuthFrom(r *http.Request) (apiKeyRecord, bool) {
+	rec, ok := r.Context().Value(internalAuthKey{}).(apiKeyRecord)
+	return rec, ok
+}
+
 // requestModelAllowed checks the per-key model whitelist for the resolved
 // model. Returns true when no record or no whitelist is configured.
 func requestModelAllowed(r *http.Request, model string) bool {

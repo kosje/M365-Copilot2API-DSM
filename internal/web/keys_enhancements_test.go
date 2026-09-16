@@ -1,6 +1,8 @@
 package web
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,7 +88,7 @@ func TestKeyExpiryAndWhitelistUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("M365_API_KEYS", dir+"/api-keys.json")
 	store := openAPIKeys()
-	rec, _, err := store.create("test")
+	rec, raw, err := store.create("test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +103,9 @@ func TestKeyExpiryAndWhitelistUpdate(t *testing.T) {
 	if err != nil || !updated {
 		t.Fatalf("update failed: %v %v", updated, err)
 	}
-	got, ok := store.lookupRaw(mustRawKey(t, store, rec.ID))
+	// The cleartext comes from create's return value, not from the store: the
+	// store no longer retains it (see TestAPIKeyCleartextNeverPersisted).
+	got, ok := store.lookupRaw(raw)
 	if !ok {
 		t.Fatal("key not resolvable")
 	}
@@ -110,18 +114,79 @@ func TestKeyExpiryAndWhitelistUpdate(t *testing.T) {
 	}
 }
 
-// mustRawKey reads back the raw key material (only persisted when Raw != "").
-func mustRawKey(t *testing.T, s *apiKeyStore, id string) string {
-	t.Helper()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, k := range s.Keys {
-		if k.ID == id && k.Raw != "" {
-			return k.Raw
+// The cleartext key must not survive in memory, on disk, or in anything handed
+// back to a client.
+func TestAPIKeyCleartextNeverPersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/api-keys.json"
+	t.Setenv("M365_API_KEYS", path)
+
+	store := openAPIKeys()
+	rec, raw, err := store.create("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw == "" {
+		t.Fatal("create must return the cleartext once")
+	}
+	if rec.Raw != "" {
+		t.Fatalf("record returned by create leaks the cleartext: %q", rec.Raw)
+	}
+	if rec.Hash != "" {
+		t.Fatal("record returned by create leaks the hash")
+	}
+
+	// In memory.
+	store.mu.Lock()
+	for _, k := range store.Keys {
+		if k.Raw != "" {
+			store.mu.Unlock()
+			t.Fatalf("store retains cleartext for key %s", k.ID)
 		}
 	}
-	t.Fatal("raw key not found (create persists Raw)")
-	return ""
+	store.mu.Unlock()
+
+	// On disk.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), raw) {
+		t.Fatal("api-keys.json contains the cleartext key")
+	}
+	if strings.Contains(string(b), "\"raw\"") {
+		t.Fatal(`api-keys.json still carries a "raw" field`)
+	}
+	// The hash must be there, otherwise the key would not authenticate.
+	if !strings.Contains(string(b), keyHash(raw)) {
+		t.Fatal("api-keys.json does not contain the key hash")
+	}
+
+	// Via the console listing.
+	for _, k := range store.list() {
+		if k.Raw != "" || k.Hash != "" {
+			t.Fatalf("list() leaks secrets: raw=%q hash=%q", k.Raw, k.Hash)
+		}
+	}
+
+	// And a legacy file that still carries cleartext must be rewritten without
+	// it, while remaining usable with the same key material.
+	legacy := `{"keys":[{"id":"deadbeef","name":"legacy","prefix":"` + raw[:12] +
+		`","raw":"` + raw + `","createdAt":"2026-01-01T00:00:00Z","revoked":false}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openAPIKeys()
+	if _, ok := reopened.lookupRaw(raw); !ok {
+		t.Fatal("legacy cleartext key was not migrated to a usable hash")
+	}
+	b2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b2), raw) {
+		t.Fatal("migration left the cleartext in api-keys.json")
+	}
 }
 
 func int64p(v int64) *int64 { return &v }

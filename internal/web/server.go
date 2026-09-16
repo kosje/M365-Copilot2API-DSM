@@ -273,7 +273,7 @@ func New() (*Server, error) {
 			sessionTTL = d
 		}
 	}
-	return &Server{
+	s := &Server{
 		tokens:             store,
 		accountPool:        newAccountHealth(),
 		accountConcurrency: newAccountConcurrency(),
@@ -302,7 +302,11 @@ func New() (*Server, error) {
 		generatedImages:      map[string]generatedImage{},
 		convCache:            newConversationCache(),
 		chatUI:               newChatUIStore(),
-	}, nil
+	}
+	// Rewrite any chat user still carrying a cleartext API key from an older
+	// revision into a KeyID reference.
+	s.migrateChatUserKeys()
+	return s, nil
 }
 
 func (s *Server) StartConvCacheGC() {
@@ -566,12 +570,23 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/v1/") {
-			raw := rawAPIKey(r)
-			if raw == "" || !s.apiKeys.valid(raw) {
-				writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "valid API key required")
-				return
+			// An in-process caller (currently the /chat UI proxy) resolves the
+			// key record itself and passes it through the context, so it never
+			// has to keep the cleartext around. Context values cannot be set by
+			// a remote client, so this cannot be forged over the network; the
+			// check is scoped to /v1/ so it can never reach an admin route.
+			var rec apiKeyRecord
+			var recOK bool
+			if injected, ok := internalAuthFrom(r); ok {
+				rec, recOK = injected, true
+			} else {
+				raw := rawAPIKey(r)
+				if raw == "" || !s.apiKeys.valid(raw) {
+					writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "valid API key required")
+					return
+				}
+				rec, recOK = s.apiKeys.lookupRaw(raw)
 			}
-			rec, recOK := s.apiKeys.lookupRaw(raw)
 			if recOK {
 				// Key expiry.
 				if rec.ExpiresAt != nil && time.Now().After(*rec.ExpiresAt) {
@@ -591,7 +606,11 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 				}
 				// Per-key quotas (0 = unlimited). Counted from the usage log.
 				if s.usage != nil && (rec.DailyQuota > 0 || rec.TotalQuota > 0) {
-					p8 := raw
+					// Attribute from the record, not from a presented key: the
+					// in-process /chat caller has no cleartext to present, and
+					// rec.Prefix[:8] is exactly what the usage log stores for an
+					// externally authenticated key.
+					p8 := rec.Prefix
 					if len(p8) > 8 {
 						p8 = p8[:8]
 					}
@@ -3552,6 +3571,18 @@ func (s *Server) bindConversation(acc auth.AccountToken, body *oaiReq, r *http.R
 }
 
 func extractAPIKey(r *http.Request) string {
+	// Prefer the validated key record: it is present for both externally
+	// authenticated requests and in-process /chat calls, and for an external
+	// request rec.Prefix is by construction the same first characters as the
+	// presented key. Deriving attribution from the record keeps /chat working
+	// without ever putting the cleartext key on the wire.
+	if rec, ok := apiKeyFromRequest(r); ok && rec.Prefix != "" {
+		p := rec.Prefix
+		if len(p) > 8 {
+			p = p[:8]
+		}
+		return p
+	}
 	key := strings.TrimSpace(r.Header.Get("X-API-Key"))
 	if key != "" {
 		return key

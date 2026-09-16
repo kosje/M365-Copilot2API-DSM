@@ -7,8 +7,9 @@ package web
 //   - uploaded & generated image cache under <data>/chat/images/ (TTL)
 //   - storage usage stats + retention config + janitor cleanup
 // Chat requests are proxied in-process to s.openaiChat / s.imageGenerations
-// using a per-user dedicated API key, so the existing usage log attributes
-// every request to the right user automatically.
+// using a per-user dedicated API key record (referenced by ID, never by
+// cleartext), so the existing usage log attributes every request to the right
+// user automatically.
 
 import (
 	"bytes"
@@ -41,11 +42,16 @@ const (
 )
 
 type chatUser struct {
-	ID           string     `json:"id"`
-	Username     string     `json:"username"`
-	PasswordHash string     `json:"password_hash"`
-	APIKey       string     `json:"api_key"` // dedicated key; usage log attribution
-	KeyID        string     `json:"key_id"`  // apiKeyRecord.ID for revocation on user delete
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"`
+	// LegacyAPIKey is the cleartext gateway key an older revision stored here.
+	// It is read only, so that installs upgrading from that revision can be
+	// migrated to KeyID by Server.migrateChatUserKeys, and must never be
+	// written again: users.json is a plain file, and the chat proxy no longer
+	// needs the cleartext.
+	LegacyAPIKey string     `json:"api_key,omitempty"`
+	KeyID        string     `json:"key_id"` // apiKeyRecord.ID for revocation on user delete
 	KeyPrefix    string     `json:"key_prefix"`
 	DailyChat    int        `json:"daily_chat"`  // requests/day, 0 = unlimited
 	DailyImage   int        `json:"daily_image"` // generations/day, 0 = unlimited
@@ -467,6 +473,63 @@ func (s *Server) chatAuth(r *http.Request) *chatUser {
 	return nil
 }
 
+// internalChatRequest builds an in-process request to a /v1 endpoint on behalf
+// of a chat user, already authenticated.
+//
+// The user's key *record* travels through the request context rather than the
+// cleartext being put on the wire, so the chat layer never needs to store a
+// usable credential: users.json holds only KeyID (see internalAuthFrom and the
+// /v1 branch of adminMiddleware).
+func (s *Server) internalChatRequest(u *chatUser, target string, body []byte) (*http.Request, error) {
+	if u == nil {
+		return nil, fmt.Errorf("no chat user for internal request")
+	}
+	keyID := u.KeyID
+	if keyID == "" && u.LegacyAPIKey != "" {
+		// Not migrated yet (should not happen once New() has run).
+		if id, ok := s.apiKeys.recordIDForKeyHash(u.LegacyAPIKey); ok {
+			keyID = id
+		}
+	}
+	if keyID == "" {
+		return nil, fmt.Errorf("chat user %q has no API key configured", u.Username)
+	}
+	rec, ok := s.apiKeys.lookupByID(keyID)
+	if !ok {
+		return nil, fmt.Errorf("the API key for chat user %q is missing or revoked", u.Username)
+	}
+	req := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req.WithContext(withInternalAuth(req.Context(), rec)), nil
+}
+
+// migrateChatUserKeys replaces the cleartext key an older revision stored in
+// users.json with a KeyID reference, and rewrites the file so the cleartext
+// does not survive on disk.
+func (s *Server) migrateChatUserKeys() {
+	s.chatUI.mu.Lock()
+	changed := false
+	for _, u := range s.chatUI.Users {
+		if u.LegacyAPIKey == "" {
+			continue
+		}
+		if u.KeyID == "" {
+			if id, ok := s.apiKeys.recordIDForKeyHash(u.LegacyAPIKey); ok {
+				u.KeyID = id
+			}
+		}
+		u.LegacyAPIKey = ""
+		changed = true
+	}
+	if changed {
+		s.chatUI.saveUsers()
+	}
+	s.chatUI.mu.Unlock()
+	if changed {
+		log.Printf("[chat] migrated chat users off stored cleartext API keys")
+	}
+}
+
 // ---------- handlers ----------
 
 func (s *Server) chatPage(w http.ResponseWriter, r *http.Request) {
@@ -844,14 +907,14 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 	if in.Stream {
 		url += "?stream=true"
 	}
-	upReq := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(upBody))
-	upReq.Header.Set("Content-Type", "application/json")
+	upReq, reqErr := s.internalChatRequest(u, url, upBody)
+	if reqErr != nil {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "configuration_error", reqErr.Error())
+		return
+	}
 	// Tag the request so openaiChat can record the M365 conversation context
 	// needed to later re-emit and proxy any generated files.
 	upReq.Header.Set("X-M365-Internal-Conv", convID)
-	if u.APIKey != "" {
-		upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
-	}
 	tw := &teeWriter{ResponseWriter: w, code: http.StatusOK}
 	s.openaiChat(tw, upReq)
 	tw.flushRemaining()
@@ -1113,10 +1176,14 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 	}
 	results := make([]genResult, 0, count)
 	for i := 0; i < count; i++ {
-		upReq := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(upBody))
-		upReq.Header.Set("Content-Type", "application/json")
-		if u.APIKey != "" {
-			upReq.Header.Set("Authorization", "Bearer "+u.APIKey)
+		upReq, reqErr := s.internalChatRequest(u, "/v1/images/generations", upBody)
+		if reqErr != nil {
+			if i == 0 {
+				writeOpenAIError(w, http.StatusServiceUnavailable, "configuration_error", reqErr.Error())
+				return
+			}
+			results = append(results, genResult{err: reqErr.Error()})
+			continue
 		}
 		cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
 		s.imageGenerations(cw, upReq)
@@ -1434,7 +1501,9 @@ func (s *Server) chatAdmin(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, 500, "internal_error", err.Error())
 			return
 		}
-		rec, raw, err := s.apiKeys.create("chat:" + name)
+		// The cleartext key is discarded on purpose: the proxy authenticates
+		// with the record looked up by KeyID (see internalChatRequest).
+		rec, _, err := s.apiKeys.create("chat:" + name)
 		if err != nil {
 			writeOpenAIError(w, 500, "internal_error", "create api key failed")
 			return
@@ -1446,7 +1515,7 @@ func (s *Server) chatAdmin(w http.ResponseWriter, r *http.Request) {
 		if b.DailyImage != nil {
 			di = *b.DailyImage
 		}
-		u := &chatUser{ID: uuid.NewString(), Username: name, PasswordHash: h, APIKey: raw, KeyID: rec.ID, KeyPrefix: rec.Prefix, DailyChat: dc, DailyImage: di, Enabled: true, CreatedAt: time.Now()}
+		u := &chatUser{ID: uuid.NewString(), Username: name, PasswordHash: h, KeyID: rec.ID, KeyPrefix: rec.Prefix, DailyChat: dc, DailyImage: di, Enabled: true, CreatedAt: time.Now()}
 		s.chatUI.Users = append(s.chatUI.Users, u)
 		s.chatUI.saveUsers()
 		jsonOut(w, map[string]any{"status": "created", "id": u.ID})
