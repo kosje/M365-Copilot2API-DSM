@@ -65,7 +65,15 @@ BIN="$ROOT/.spkbin/$PKG-linux-amd64"
 mkdir -p "$(dirname "$BIN")"
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -trimpath \
     -ldflags="-s -w -X m365-copilot2api/internal/web.Version=$VER" -o "$BIN" "$ROOT/cmd/server"
-( cd "$ROOT" && sha256sum "$(basename "$SPK")" > checksums.txt && sha256sum -b "$BIN" | sed "s|.*\*.*/|$PKG-linux-amd64|" >> checksums.txt ) || true
+# 保留摘要、只重写 " *<路径>" 后缀。此前用的 's|.*\*.*/|name|' 会把摘要
+# 一起吃掉，产出 "<名字><名字>"，用户拿 sha256sum -c 根本校验不了——而
+# README 正是让他们这么做的。（历史 Release 里那份正确的 checksums.txt 显然
+# 也不是这条命令生成的。）
+( cd "$ROOT" \
+  && sha256sum "$(basename "$SPK")" > checksums.txt \
+  && sha256sum -b "$BIN" | sed "s| \*.*|  $PKG-linux-amd64|" >> checksums.txt ) || true
+# 生成即校验，别让坏文件流到用户手里。
+( cd "$ROOT" && sha256sum -c checksums.txt ) || { echo "checksums.txt 校验失败"; exit 1; }
 sha256sum "$SPK" "$BIN"
 
 step "发布 Release $TAG"

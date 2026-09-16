@@ -94,9 +94,16 @@ jobs:
           SPK="m365-copilot2api-${{ steps.v.outputs.version }}.spk"
           [ -f "$SPK" ] || { echo "::error::$SPK 不存在"; exit 1; }
           sha256sum "$SPK" > checksums.txt
+          # Keep the digest and rewrite only the " *<path>" suffix. The pattern
+          # used before this was 's|.*\*.*/|name|', which also swallows the
+          # digest and emits "<name><name>" - a checksum file that cannot be
+          # verified with sha256sum -c, which is exactly what the README tells
+          # users to do.
           sha256sum -b m365-copilot2api-linux-amd64 \
-            | sed 's|.*\*|m365-copilot2api-linux-amd64|' >> checksums.txt
+            | sed 's| \*.*|  m365-copilot2api-linux-amd64|' >> checksums.txt
           cat checksums.txt
+          # Catch a malformed file here rather than in a user's terminal.
+          sha256sum -c checksums.txt
 
       # 发版说明：优先用仓库里的 docs/release-notes/<版本>.md，没有就按提交记录
       # 生成。两种情况下都附上完整提交列表。
