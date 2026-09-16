@@ -15,6 +15,11 @@ ERR_FILE = os.path.join(BASE_DIR, "server-error.log")
 PID_FILE = os.path.join(BASE_DIR, "server.pid")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
+def env_admin_password():
+    """Return the configured administrator password, or '' if unset."""
+    return (os.environ.get("M365_ADMIN_PASSWORD") or "").strip()
+
+
 def get_pid():
     try:
         with open(PID_FILE, 'r') as f:
@@ -35,10 +40,26 @@ def start():
         print(f"Server already running (PID {pid})")
         return
 
+    # The administrator password has no default. The service refuses to start
+    # on the retired constant, and a silently generated password would leave
+    # the operator unable to log in, so require an explicit value here too.
+    admin_pw = env_admin_password()
+    if not admin_pw:
+        print("error: M365_ADMIN_PASSWORD is not set.")
+        print("       Set a strong administrator password (>=12 chars, at least")
+        print("       three of: lower, upper, digit, symbol) and retry, e.g.")
+        print("         set M365_ADMIN_PASSWORD=...        (cmd)")
+        print("         $env:M365_ADMIN_PASSWORD='...'     (PowerShell)")
+        sys.exit(2)
+
     env = os.environ.copy()
-    admin_pw = env.get("M365_ADMIN_PASSWORD", "admin123")
+    # Bind to loopback by default; the console speaks plain HTTP, so exposing
+    # it to the LAN hands out the password and session cookie in cleartext.
+    # Put a TLS-terminating reverse proxy in front for remote access, or set
+    # M365_LISTEN explicitly if you accept that risk.
+    listen = env.get("M365_LISTEN") or "127.0.0.1:4141"
     env.update({
-        "M365_LISTEN": "0.0.0.0:4141",
+        "M365_LISTEN": listen,
         "M365_DATA_DIR": os.path.join(DATA_DIR, ""),
         "M365_CONFIG": os.path.join(DATA_DIR, "accounts.json"),
         "M365_TOKEN_CACHE": os.path.join(DATA_DIR, "token-cache.json"),
@@ -47,7 +68,6 @@ def start():
         "M365_ADMIN_PASSWORD": admin_pw,
         "M365_CLEANUP_MODE": "keep_n",
         "M365_CLEANUP_KEEP_N": "3",
-        "PATH": r"D:\go\bin;" + env.get("PATH", ""),
     })
 
     log = open(LOG_FILE, 'w')

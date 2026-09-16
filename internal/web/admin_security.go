@@ -17,6 +17,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// defaultAdminPassword is the RETIRED bootstrap password.
+//
+// It is no longer accepted: a first start with nothing configured now
+// generates a random password (see admin_bootstrap.go). The constant is kept
+// only so that installs still carrying it are detected and migrated away from
+// it - see loadAdminCredentials. Do not reintroduce it as a fallback.
 const defaultAdminPassword = "admin123"
 
 type loginAttempt struct {
@@ -25,9 +31,14 @@ type loginAttempt struct {
 }
 
 type adminPasswordData struct {
-	Hash      string    `json:"hash"`
-	History   []string  `json:"history,omitempty"`
+	Hash      string   `json:"hash"`
+	History   []string `json:"history,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	// MustChange records that this hash came from the random first-start
+	// bootstrap rather than from an operator choice. It is persisted so the
+	// console keeps forcing a change across restarts; any explicit password
+	// change or env override clears it.
+	MustChange bool `json:"must_change,omitempty"`
 }
 
 var commonPasswordBlacklist = []string{
@@ -184,29 +195,41 @@ func loadAdminCredentials() (string, []string, bool, error) {
 			if checkPassword(data.Hash, defaultAdminPassword) {
 				if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" {
 					if envP == defaultAdminPassword {
-						return "", nil, false, errors.New("default administrator password is not allowed; set M365_ADMIN_PASSWORD to a strong password")
+						return "", nil, false, errors.New("M365_ADMIN_PASSWORD must not be the retired default password; choose a strong one")
 					}
 					h, _ := hashPassword(envP)
 					_ = saveAdminPasswordWithHistory(h, data.History, data.Hash)
 					auditLog(nil, "admin_password_override_default", "env overrides persisted default")
 					return h, data.History, false, nil
 				}
-				return "", nil, false, errors.New("default administrator password is not allowed; set M365_ADMIN_PASSWORD to a strong password")
+				// A persisted default password with no env override means this
+				// install predates the switch away from the constant bootstrap.
+				// Replace it with a fresh random secret: the service stays
+				// usable, but no published password remains reachable.
+				h, err := bootstrapAdminPassword("persisted default administrator password replaced")
+				if err != nil {
+					return "", nil, false, err
+				}
+				return h, nil, true, nil
 			}
-			return data.Hash, data.History, false, nil
+			return data.Hash, data.History, data.MustChange, nil
 		}
 		plain := trimmed
 		if plain == defaultAdminPassword {
 			if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" {
 				if envP == defaultAdminPassword {
-					return "", nil, false, errors.New("default administrator password is not allowed")
+					return "", nil, false, errors.New("M365_ADMIN_PASSWORD must not be the retired default password; choose a strong one")
 				}
 				h, _ := hashPassword(envP)
 				_ = saveAdminPasswordWithHistory(h, nil, "")
 				auditLog(nil, "admin_password_override_default", "env overrides persisted plain default")
 				return h, nil, false, nil
 			}
-			return "", nil, false, errors.New("default administrator password is not allowed; set M365_ADMIN_PASSWORD to a strong password")
+			h, err := bootstrapAdminPassword("persisted plain default administrator password replaced")
+			if err != nil {
+				return "", nil, false, err
+			}
+			return h, nil, true, nil
 		}
 		if plain != "" {
 			h, _ := hashPassword(plain)
@@ -221,23 +244,31 @@ func loadAdminCredentials() (string, []string, bool, error) {
 			if plain == defaultAdminPassword {
 				if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" {
 					if envP == defaultAdminPassword {
-						return "", nil, false, errors.New("default administrator password is not allowed")
+						return "", nil, false, errors.New("M365_ADMIN_PASSWORD must not be the retired default password; choose a strong one")
 					}
 					h, _ := hashPassword(envP)
 					_ = saveAdminPasswordWithHistory(h, nil, "")
 					auditLog(nil, "admin_password_override_default", "env overrides legacy default")
 					return h, nil, false, nil
 				}
-				return "", nil, false, errors.New("default administrator password is not allowed; set M365_ADMIN_PASSWORD to a strong password")
+				h, err := bootstrapAdminPassword("legacy default administrator password replaced")
+				if err != nil {
+					return "", nil, false, err
+				}
+				return h, nil, true, nil
 			}
 			if plain != "" {
 				// check if it's already json (when env file is plain path but contains json)
 				var data adminPasswordData
 				if err := json.Unmarshal(b, &data); err == nil && data.Hash != "" {
 					if checkPassword(data.Hash, defaultAdminPassword) {
-						return "", nil, false, errors.New("default administrator password is not allowed")
+						h, err := bootstrapAdminPassword("legacy JSON default administrator password replaced")
+						if err != nil {
+							return "", nil, false, err
+						}
+						return h, nil, true, nil
 					}
-					return data.Hash, data.History, false, nil
+					return data.Hash, data.History, data.MustChange, nil
 				}
 				h, _ := hashPassword(plain)
 				_ = saveAdminPasswordWithHistory(h, nil, "")
@@ -249,7 +280,7 @@ func loadAdminCredentials() (string, []string, bool, error) {
 		if b, err := os.ReadFile(bootstrap); err == nil && strings.TrimSpace(string(b)) != "" {
 			plain := strings.TrimSpace(string(b))
 			if plain == defaultAdminPassword {
-				return "", nil, false, errors.New("default administrator password is not allowed; set a strong password in bootstrap file")
+				return "", nil, false, errors.New("the retired default password must not be used in M365_ADMIN_PASSWORD_BOOTSTRAP_FILE")
 			}
 			if plain != "" {
 				h, _ := hashPassword(plain)
@@ -259,7 +290,7 @@ func loadAdminCredentials() (string, []string, bool, error) {
 	}
 	if p := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); p != "" {
 		if p == defaultAdminPassword {
-			return "", nil, false, errors.New("default administrator password is not allowed; set M365_ADMIN_PASSWORD to a strong password")
+			return "", nil, false, errors.New("M365_ADMIN_PASSWORD must not be the retired default password; choose a strong one")
 		}
 		h, err := hashPassword(p)
 		if err != nil {
@@ -267,19 +298,20 @@ func loadAdminCredentials() (string, []string, bool, error) {
 		}
 		return h, nil, false, nil
 	}
-	// Fresh deployment: bootstrap with the well-known default and force a
-	// change on first login (mustChange=true). The middleware locks every
-	// admin surface except change-password until a strong password is set.
-	// Upgrades from older versions keep working because an existing
-	// persisted/env password is handled above; only truly empty installs hit
-	// this branch. Set M365_REQUIRE_STRONG_ADMIN_PASSWORD=1 to refuse the
-	// bootstrap instead.
-	h, err := hashPassword(defaultAdminPassword)
-	if err != nil {
-		return "", nil, false, err
-	}
+	// Nothing is configured. Historically this branch bootstrapped with the
+	// well-known constant "admin123" and relied on the mustChange gate, which
+	// left the console takeable by anyone who could reach the port before the
+	// operator's first login. Generate a random password instead and hand it
+	// over once, through a 0600 file and the log.
+	//
+	// M365_REQUIRE_STRONG_ADMIN_PASSWORD=1 refuses to bootstrap at all, for
+	// operators who would rather have a failed start than a generated secret.
 	if strings.TrimSpace(os.Getenv("M365_REQUIRE_STRONG_ADMIN_PASSWORD")) == "1" {
 		return "", nil, false, errors.New("administrator password is not configured and bootstrap is disabled (M365_REQUIRE_STRONG_ADMIN_PASSWORD=1); set M365_ADMIN_PASSWORD")
+	}
+	h, err := bootstrapAdminPassword("no administrator password configured")
+	if err != nil {
+		return "", nil, false, err
 	}
 	return h, nil, true, nil
 }
@@ -290,6 +322,13 @@ func loadAdminPassword() (string, bool, error) {
 }
 
 func saveAdminPasswordWithHistory(newHash string, history []string, oldHash string) error {
+	return saveAdminPasswordState(newHash, history, oldHash, false)
+}
+
+// saveAdminPasswordState persists the administrator password hash. mustChange
+// marks the hash as bootstrapped: the console then refuses every admin surface
+// except change-password until the operator picks their own password.
+func saveAdminPasswordState(newHash string, history []string, oldHash string, mustChange bool) error {
 	primary, _ := adminPasswordPaths()
 	if err := os.MkdirAll(filepath.Dir(primary), 0700); err != nil {
 		return err
@@ -302,7 +341,7 @@ func saveAdminPasswordWithHistory(newHash string, history []string, oldHash stri
 	if len(newHistory) > 5 {
 		newHistory = newHistory[:5]
 	}
-	data := adminPasswordData{Hash: newHash, History: newHistory, UpdatedAt: time.Now()}
+	data := adminPasswordData{Hash: newHash, History: newHistory, UpdatedAt: time.Now(), MustChange: mustChange}
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
@@ -622,6 +661,9 @@ func (s *Server) adminChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, 500, "storage_error", "administrator password could not be saved; check the persistent data directory permissions")
 		return
 	}
+	// The generated first-start password has served its purpose; do not leave
+	// the cleartext lying around.
+	removeBootstrapPasswordFile()
 	s.mu.Lock()
 	s.adminPassword = newHash
 	newHist := []string{}
