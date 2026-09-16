@@ -117,6 +117,26 @@ GitHub Pages 只能提供静态 GET，无法按请求过滤架构——DSM 会�
 
 **控制台页脚的 `v0.4.0`** —— 上游 `web/index.html` 里写死的历史遗留字符串，与实际版本无关，以 `/api/version` 为准。
 
+## 脚本的可执行位
+
+`spk/build-spk.sh`、`spk/release.sh`、`spk/gen-feed.sh`、`build_linux.sh`、
+`spk/tests/lifecycle.sh`、`migrate/migrate.sh` 在仓库里是 100755，因为文档就是让
+你直接 `./spk/build-spk.sh` 跑的。
+
+**Windows 上 `core.fileMode` 默认是 false**，`chmod +x` 不会被 git 记录，整个仓库
+的文件模式都会是 100644——照 README 在 WSL 里跑就会 `Permission denied`。要给某个
+文件加上可执行位，用：
+
+```bash
+git update-index --chmod=+x spk/build-spk.sh
+```
+
+CI 里的「assemble the SPK」这一步就是按文档用 `./spk/build-spk.sh` 调用的，所以
+掉权限会立刻变红。
+
+`spk/scripts/*` 保持 100644：DSM 用 `sh <脚本>` 调用它们，套件归档内的权限由
+`build-spk.sh` 打包时统一设置成 755。
+
 ## 生命周期脚本的回归测试
 
 `spk/tests/lifecycle.sh` 会**真的执行**这些钩子（不是语法检查），在临时目录里搭一套模拟的套件树，

@@ -56,14 +56,12 @@ jobs:
   # The project's own audit notes that -race had never been run for exactly that
   # reason; this job is where it happens.
   #
-  # continue-on-error is deliberate for now: a first -race run on a codebase that
-  # has never seen one usually surfaces pre-existing races, and a red gate from
-  # day one is a gate nobody looks at. Flip it to false once this job has gone
-  # green, and do not leave it true indefinitely.
+  # This was initially non-blocking, because the race detector had never been run
+  # and a gate that is red from day one is a gate nobody reads. The first CI run
+  # came back green, so it is a blocking check now.
   race:
     name: go test -race
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
