@@ -482,8 +482,7 @@ func lastMessageRole(messages []oaiMsg) string {
 
 // sanitizeImageAlt makes text safe to embed inside a markdown image alt.
 func sanitizeImageAlt(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
+	s = cleanImagePrompt(s)
 	s = strings.ReplaceAll(s, "]", "")
 	s = strings.ReplaceAll(s, "(", "")
 	s = strings.ReplaceAll(s, ")", "")

@@ -69,6 +69,24 @@ func normalizeImageSize(size string) string {
 	return "1024x1024"
 }
 
+// systemReminderRe / htmlTagRe strip client-injected context and markup that
+// some chat clients (e.g. WorkBuddy) append to the user turn. Without removal
+// the block leaks into the GPT Image 2 prompt (polluting the generated image)
+// and into the markdown alt text, where the leading "<" makes CommonMark
+// renderers treat it as a raw HTML tag and break the image link entirely.
+var systemReminderRe = regexp.MustCompile(`(?is)<system-reminder[\s\S]*?</system-reminder>`)
+var htmlTagRe = regexp.MustCompile(`(?is)<[^>]+>`)
+
+// cleanImagePrompt removes agent-context blocks and any HTML-like markup from a
+// user message, then collapses all whitespace (including newlines) into single
+// spaces. The result is safe to use as an image-generation prompt, a markdown
+// alt text, and a displayed description.
+func cleanImagePrompt(s string) string {
+	s = systemReminderRe.ReplaceAllString(s, " ")
+	s = htmlTagRe.ReplaceAllString(s, " ")
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // imageGenOptions carries the full set of image-generation parameters that can
 // be supplied either via the OpenAI-compatible chat request body
 // (`image_options`) or parsed from the natural-language prompt text.

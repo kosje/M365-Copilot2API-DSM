@@ -2351,11 +2351,14 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	if os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
 			if ut := lastUserContent(body.Messages); ut != "" {
+				// Strip client-injected agent context (<system-reminder> blocks)
+				// and HTML markup so the prompt / alt text / description stay clean.
+				clean := cleanImagePrompt(ut)
 				// Route to the image pipeline when the prompt clearly asks for an
 				// image, OR when the caller explicitly supplied image_options.
-				imageIntent := isImageGenIntent(ut) || body.ImageOptions != nil
-				if imageIntent && !codingIntent(ut) {
-				opts := parseImageOptionsFromText(ut, derefImageOptions(body.ImageOptions))
+				imageIntent := isImageGenIntent(clean) || body.ImageOptions != nil
+				if imageIntent && !codingIntent(clean) {
+				opts := parseImageOptionsFromText(clean, derefImageOptions(body.ImageOptions))
 				// Normalise up-front so the logged size (and any future direct
 				// use of opts.Size) reflects what the upstream actually receives
 				// rather than the raw ratio label the caller passed in.
@@ -2368,17 +2371,17 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					imgStart := time.Now()
-					imgs, convID, ierr := s.generateChatImages(r, ut, opts, body.Attachments, body.AccountID, body.User)
+					imgs, convID, ierr := s.generateChatImages(r, clean, opts, body.Attachments, body.AccountID, body.User)
 					if ierr == nil && len(imgs) > 0 {
 						used, limit = bumpAPIKeyImageQuota(keyPrefix, len(imgs))
 						var sb strings.Builder
 						sb.WriteString("已为你生成图片：\n\n")
 						for _, u := range imgs {
-							sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
+							sb.WriteString("![" + sanitizeImageAlt(clean) + "](" + u + ")\n\n")
 						}
 						// Append a copyable summary of the resolved parameters and
 						// the today's quota so the caller can reproduce / track usage.
-						sb.WriteString("\n" + opts.summary(ut) + "\n")
+						sb.WriteString("\n" + opts.summary(clean) + "\n")
 						sb.WriteString("\n" + imageQuotaLine(used, limit) + "\n")
 						log.Printf("[image-route] chat intent routed to image pipeline (upstream GPT Image 2), images=%d conv=%s dur_ms=%d size=%s style=%s count=%d negative=%q", len(imgs), convID, time.Since(imgStart).Milliseconds(), opts.Size, opts.Style, opts.Count, opts.Negative)
 						if s.usage != nil {
@@ -2388,7 +2391,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 								Model:        "gpt-image-2",
 								Endpoint:     "/v1/chat/completions#image-route",
 								Stream:       body.Stream,
-								InputTokens:  EstimateTokens(ut),
+								InputTokens:  EstimateTokens(clean),
 								OutputTokens: int64(len(imgs)),
 								DurationMs:   time.Since(imgStart).Milliseconds(),
 								Status:       http.StatusOK,
@@ -2405,7 +2408,7 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 							Model:        "gpt-image-2",
 							Endpoint:     "/v1/chat/completions#image-route",
 							Stream:       body.Stream,
-							InputTokens:  EstimateTokens(ut),
+							InputTokens:  EstimateTokens(clean),
 							DurationMs:   time.Since(imgStart).Milliseconds(),
 							Status:       http.StatusBadGateway,
 						})
