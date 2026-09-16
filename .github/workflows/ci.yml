@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: formatting, static analysis, tests.
+  test:
+    name: build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # .gitattributes pins text files to LF, so this is stable across platforms.
+      # Without it a checkout on Windows produces a tree where every Go file is
+      # reported as unformatted.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      # The packaging target, so a change that only breaks the linux/amd64
+      # static build (or pulls in cgo) fails here.
+      - name: cross-compile for the SPK payload
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /dev/null ./cmd/server
+
+  # The race detector needs cgo, so it cannot run on a bare Windows dev machine.
+  # The project's own audit notes that -race had never been run for exactly that
+  # reason; this job is where it happens.
+  #
+  # continue-on-error is deliberate for now: a first -race run on a codebase that
+  # has never seen one usually surfaces pre-existing races, and a red gate from
+  # day one is a gate nobody looks at. Flip it to false once this job has gone
+  # green, and do not leave it true indefinitely.
+  race:
+    name: go test -race
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  # The lifecycle hooks decide whether accounts survive an upgrade or an
+  # uninstall, and they only ever run on a NAS. Until this job existed the only
+  # way to exercise them was by hand on real hardware.
+  package:
+    name: shell hooks and SPK assembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # /bin/sh is dash on the runner, which is a much stricter POSIX check than
+      # bash and closer to what DSM's busybox shell accepts.
+      - name: POSIX syntax check on the lifecycle hooks
+        run: |
+          for f in spk/scripts/* spk/build-spk.sh spk/release.sh spk/gen-feed.sh spk/tests/lifecycle.sh migrate/migrate.sh; do
+            [ -e "$f" ] || continue
+            echo "sh -n $f"
+            sh -n "$f"
+          done
+
+      - name: lifecycle hook behaviour
+        run: bash spk/tests/lifecycle.sh
+
+      # build-spk.sh carries its own consistency self-checks (dsmuidir is
+      # actually delivered, ui/config key matches dsmappname, all seven icon
+      # sizes present, binary executable inside the archive, INFO version not
+      # below the published feed). Running it here keeps those honest.
+      - name: assemble the SPK
+        run: ./spk/build-spk.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spk
+          path: "*.spk"
+          if-no-files-found: error
+          retention-days: 7
