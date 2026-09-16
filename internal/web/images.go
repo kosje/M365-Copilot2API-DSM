@@ -506,9 +506,9 @@ func (s *Server) generatedImageFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Cache-Control", "no-store")
 		if os.IsNotExist(err) {
-			http.Error(w, "?????????????????????????????", http.StatusNotFound)
+			http.Error(w, "图片不存在或已清理；旧版本的内存图片无法恢复，请重新生成。", http.StatusNotFound)
 		} else {
-			http.Error(w, "?????????????", http.StatusInternalServerError)
+			http.Error(w, "图片读取失败，请稍后重试。", http.StatusInternalServerError)
 		}
 		return
 	}

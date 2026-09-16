@@ -51,6 +51,9 @@ func TestGeneratedImageSurvivesServerRestart(t *testing.T) {
 	if rr.Code != 404 || rr.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("expired image status=%d", rr.Code)
 	}
+	if !strings.Contains(rr.Body.String(), "请重新生成") {
+		t.Fatalf("unreadable error message: %q", rr.Body.String())
+	}
 }
 
 func TestGeneratedImageStorageFailureReturnsNoURL(t *testing.T) {
