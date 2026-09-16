@@ -119,7 +119,10 @@ EOF
 
 do_import(){
   local src="${1:-}"; local force=0 data_override=""
-  shift 2>/dev/null || true
+  # Consume only the archive path. Shifting two positions also swallowed the
+  # flag that followed it, so `import x.tar.gz --data-dir D` ignored the
+  # override and wrote into the auto-detected directory instead.
+  [ $# -gt 0 ] && shift 1
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1; shift;;

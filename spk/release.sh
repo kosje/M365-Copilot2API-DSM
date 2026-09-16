@@ -26,6 +26,34 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
 step "检查工作区"
 [ -z "$(git -C "$ROOT" status --porcelain)" ] || { echo "有未提交改动，先提交再发版"; exit 1; }
+
+step "把版本号写入 spk/INFO"
+# INFO 的 version 是 DSM 唯一认的编号（X.Y.Z-BBBB），此前靠人工维护，出过
+# 套件中心显示 1.6.5-0004 而控制台显示 1.5.7 的事故。这里以命令行传入的版本号
+# 为唯一来源自动改写：同版本递增 build 号，换版本从 0001 起。
+INFO="$ROOT/spk/INFO"
+CUR="$(grep -m1 '^version=' "$INFO" | cut -d'"' -f2)"
+CUR_VER="${CUR%%-*}"
+CUR_BUILD="${CUR##*-}"
+# A malformed INFO (no -BBBB suffix) must not abort the release in
+# arithmetic expansion.
+case "$CUR_BUILD" in
+    ''|*[!0-9]*) CUR_BUILD=0 ;;
+esac
+if [ "$CUR_VER" = "$VER" ]; then
+    BUILD="$(printf '%04d' $((10#${CUR_BUILD} + 1)))"
+else
+    BUILD="0001"
+fi
+NEWVER="${VER}-${BUILD}"
+if [ "$NEWVER" != "$CUR" ]; then
+    sed -i.bak "s/^version=\"[^\"]*\"/version=\"${NEWVER}\"/" "$INFO" && rm -f "$INFO.bak"
+    echo "  INFO version: $CUR -> $NEWVER"
+    git -C "$ROOT" add spk/INFO
+    git -C "$ROOT" commit -q -m "chore(spk): INFO version $NEWVER"
+else
+    echo "  INFO version 已是 $NEWVER"
+fi
 git -C "$ROOT" diff --quiet "@{upstream}" 2>/dev/null || echo "  提醒：本地与远程 main 不一致，记得 push"
 
 step "构建 SPK $VER"
@@ -43,11 +71,13 @@ sha256sum "$SPK" "$BIN"
 step "发布 Release $TAG"
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     echo "  $TAG 已存在，改为覆盖上传资产"
-    gh release upload "$TAG" --repo "$REPO" --clobber "$SPK" "$BIN"
+    gh release upload "$TAG" --repo "$REPO" --clobber "$SPK" "$BIN" "$ROOT/checksums.txt"
 else
     echo "  创建 $TAG（发布说明请随后在网页端补充）"
-    gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes "见提交记录。" "$SPK" "$BIN"
+    gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes "见提交记录。" "$SPK" "$BIN" "$ROOT/checksums.txt"
 fi
+# README 让用户比对 Release 页的 SHA256，而 checksums.txt 此前只生成不上传。
+echo "  已附带 checksums.txt"
 
 step "更新套件来源 feed"
 [ -d "$PAGES" ] || { echo "缺少 gh-pages 工作树，先执行：git worktree add .gh-pages origin/gh-pages"; exit 1; }

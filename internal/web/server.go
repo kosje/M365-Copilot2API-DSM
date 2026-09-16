@@ -756,6 +756,12 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]any{"status": "authenticated", "must_change_password": mustChange})
 }
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
+	// POST only. This handler is on the public allow-list, so without a method
+	// check any page could end the session with a bare <img src=...>.
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
 	if c, e := r.Cookie("m365_admin_session"); e == nil {
 		s.mu.Lock()
 		delete(s.adminSessions, c.Value)

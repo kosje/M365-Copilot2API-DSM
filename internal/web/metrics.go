@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,7 +34,11 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 				presented = strings.TrimSpace(v[7:])
 			}
 		}
-		if token == "" || presented != token {
+		// Constant time: a byte-by-byte comparison leaks the token's prefix
+		// through timing. The query parameter is still accepted for
+		// compatibility, but it lands in access logs and Referer headers, so
+		// `Authorization: Bearer` is the form to prefer.
+		if token == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
 			writeOpenAIError(w, http.StatusForbidden, "auth_error", "metrics token required")
 			return
 		}

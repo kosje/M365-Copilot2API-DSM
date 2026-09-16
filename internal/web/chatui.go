@@ -612,6 +612,11 @@ func (s *Server) chatSessionH(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) chatLogout(w http.ResponseWriter, r *http.Request) {
+	// POST only, for the same reason as adminLogout: it is publicly reachable.
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
 	if c, err := r.Cookie(chatSessionCookie); err == nil && c.Value != "" {
 		s.chatUI.mu.Lock()
 		delete(s.chatUI.Sessions, c.Value)

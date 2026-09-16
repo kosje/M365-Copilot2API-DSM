@@ -1,23 +1,38 @@
 #!/usr/bin/env bash
-set -e
-export GOPATH="D:/work/M365-build/gopath"
-export GOCACHE="D:/work/M365-build/gocache"
-export GOPROXY="https://goproxy.cn,direct"
+# 在 Linux / WSL 下构建 linux/amd64 二进制（SPK 与 Docker 的载荷）。
+#
+# 此前这个脚本把构建目录、Go 路径和版本来源都写死在一台机器的目录布局上
+# （D:/work/M365-build、C:/Users/pguoy/go/bin/go.exe，版本取自仓库外的 FPK
+# manifest），换台机器必然失败，升版本也容易漏改。现在全部改为相对脚本自身推导，
+# Go 直接用 PATH 里的那个，版本优先取命令行参数、其次取 spk/INFO。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="${1:-${ROOT}/m365-copilot2api-linux-amd64}"
+VER="${2:-$(grep -m1 '^version=' "${ROOT}/spk/INFO" | cut -d'"' -f2 | cut -d- -f1)}"
+
+if ! command -v go >/dev/null 2>&1; then
+    echo "error: go not found on PATH" >&2
+    exit 1
+fi
+
 export GOOS=linux
 export GOARCH=amd64
 export CGO_ENABLED=0
-cd "D:/work/M365-build"
-echo "go version:"
-"C:/Users/pguoy/go/bin/go.exe" version
-echo "=== sync web/ -> internal/web/web/ (go:embed reads internal/web/web/) ==="
-# The //go:embed directive in internal/web/security_http.go resolves relative to
-# that file's directory, so internal/web/web/ is what gets compiled in. Keep the
-# two copies in sync automatically to avoid stale embedded assets.
-cp -f web/index.html web/chat.html web/import.html web/login.html web/conversation.html web/debug.html internal/web/web/
-echo "=== build linux/amd64 -> FPK app dir ==="
-# -a forces full rebuild (incl. //go:embed web assets) so frontend changes are actually baked in.
-# Version injected from the FPK manifest (single source of truth) for /api/version & update check.
-APP_VERSION=$(grep -m1 '^version=' /d/work/M365-fpk/m365-copilot2api/manifest | cut -d= -f2 | tr -d ' \r')
-echo "APP_VERSION=${APP_VERSION}"
-"C:/Users/pguoy/go/bin/go.exe" build -a -trimpath -ldflags="-s -w -X m365-copilot2api/internal/web.Version=${APP_VERSION}" -o "D:/work/M365-fpk/m365-copilot2api/app/m365-copilot2api" ./cmd/server
-echo "BUILD_EXIT=$?"
+export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+
+echo "go version: $(go version)"
+echo "version:    ${VER}"
+
+# go:embed 读 internal/web/web/，构建前先同步前端，否则打进的是陈旧页面。
+echo "=== sync web/ -> internal/web/web/ ==="
+cp -f "${ROOT}"/web/*.html "${ROOT}/internal/web/web/"
+
+echo "=== build linux/amd64 -> ${OUT} ==="
+cd "${ROOT}"
+# -a 强制全量重建，确保 //go:embed 的前端资源被重新打包而不是命中缓存。
+go build -a -trimpath \
+    -ldflags="-s -w -X m365-copilot2api/internal/web.Version=${VER}" \
+    -o "${OUT}" ./cmd/server
+
+ls -l "${OUT}"
