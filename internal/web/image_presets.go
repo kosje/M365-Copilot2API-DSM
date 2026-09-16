@@ -2,6 +2,8 @@ package web
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -59,7 +61,196 @@ func normalizeImageSize(size string) string {
 	if validImageSizes[s] {
 		return s
 	}
+	// Accept aspect-ratio labels (e.g. "16:9", "竖屏") and translate them to the
+	// pixel size the upstream GPT Image 2 pipeline expects.
+	if px, ok := ratioToImageSize[s]; ok {
+		return px
+	}
 	return "1024x1024"
+}
+
+// imageGenOptions carries the full set of image-generation parameters that can
+// be supplied either via the OpenAI-compatible chat request body
+// (`image_options`) or parsed from the natural-language prompt text.
+type imageGenOptions struct {
+	Size     string `json:"size"`
+	Count    int    `json:"count"`
+	Style    string `json:"style"`
+	Negative string `json:"negative"`
+	Quality  string `json:"quality"`
+	EditImage string `json:"editImage"` // data URI of a base image for 图生图 (edit) mode
+}
+
+// derefImageOptions returns the value behind a possibly-nil pointer, defaulting
+// to an empty option set. Used when merging explicitly-supplied image_options
+// with natural-language hints parsed from the prompt.
+func derefImageOptions(p *imageGenOptions) imageGenOptions {
+	if p == nil {
+		return imageGenOptions{}
+	}
+	return *p
+}
+
+// ratioToImageSize maps aspect-ratio labels (and a few Chinese synonyms) to the
+// pixel sizes accepted by the upstream GPT Image 2 pipeline.
+var ratioToImageSize = map[string]string{
+	"1:1": "1024x1024", "正方形": "1024x1024", "方图": "1024x1024",
+	"3:4": "864x1152", "4:3": "1152x864",
+	"2:3": "832x1216", "3:2": "1216x832",
+	"9:16": "720x1280", "竖屏": "720x1280", "竖图": "720x1280",
+	"16:9": "1280x720", "横屏": "1280x720", "横图": "1280x720",
+}
+
+// styleKeywords maps user-spoken style synonyms (Chinese + English) to the
+// canonical style keys understood by composeImagePrompt.
+var styleKeywords = map[string]string{
+	"写实": "photo", "写实摄影": "photo", "照片": "photo", "photo": "photo", "photorealistic": "photo",
+	"动漫": "anime", "二次元": "anime", "anime": "anime",
+	"3d": "3d", "3d渲染": "3d", "c4d": "3d", "三维": "3d",
+	"扁平": "flat", "扁平插画": "flat", "flat": "flat",
+	"水彩": "watercolor", "watercolor": "watercolor",
+	"油画": "oil", "oil": "oil",
+	"像素": "pixel", "像素艺术": "pixel", "pixel": "pixel", "像素风": "pixel",
+	"赛博朋克": "cyberpunk", "cyberpunk": "cyberpunk",
+	"水墨": "ink", "ink": "ink", "国风": "ink",
+	"线条": "sketch", "线稿": "sketch", "sketch": "sketch",
+	"贴纸": "sticker", "sticker": "sticker", "卡通贴纸": "sticker",
+	"表情包": "emote", "emote": "emote", "chibi": "emote",
+}
+
+// normalize returns the validated size + clamped count for this option set.
+func (o imageGenOptions) normalize() (size string, count int) {
+	size = normalizeImageSize(o.Size)
+	count = o.Count
+	if count <= 0 {
+		count = 1
+	}
+	if count > 4 {
+		count = 4
+	}
+	return
+}
+
+// buildPrompt composes the final upstream GPT Image 2 prompt from the raw
+// description and the style/negative/quality options, prefixing the size.
+func (o imageGenOptions) buildPrompt(description string) string {
+	composed := composeImagePrompt(description, o.Style, o.Negative, o.Quality)
+	size := normalizeImageSize(o.Size)
+	return fmt.Sprintf("Generate an image with GPT Image 2. Size: %s. %s. Return the image URL directly.", size, composed)
+}
+
+// parseImageOptionsFromText fills in any option fields left empty by scanning
+// the user's natural-language prompt for size / style / count / quality /
+// negative hints. Structured `base` values (e.g. from image_options) win; only
+// blank fields are inferred from text. This lets API clients either pass explicit
+// JSON parameters or simply describe what they want in Chinese/English.
+func parseImageOptionsFromText(text string, base imageGenOptions) imageGenOptions {
+	out := base
+	low := strings.ToLower(text)
+
+	// size: explicit "1024x1024" or ratio label / Chinese synonym
+	if out.Size == "" {
+		for ratio, px := range ratioToImageSize {
+			if strings.Contains(text, ratio) {
+				out.Size = px
+				break
+			}
+		}
+		if out.Size == "" {
+			// direct WxH token, but only if it is a valid size
+			for vs := range validImageSizes {
+				if strings.Contains(low, vs) {
+					out.Size = vs
+					break
+				}
+			}
+		}
+	}
+
+	// style
+	if out.Style == "" {
+		for kw, key := range styleKeywords {
+			if strings.Contains(text, kw) {
+				out.Style = key
+				break
+			}
+		}
+	}
+
+	// count: "<number>张/幅/张图/张图片" (Chinese), or "N images"
+	if out.Count <= 0 {
+		for _, re := range []*regexp.Regexp{
+			regexp.MustCompile(`(\d{1,2})\s*(张|幅|张图|张图片|张图)`),
+			regexp.MustCompile(`(\d{1,2})\s*images?`),
+		} {
+			if m := re.FindStringSubmatch(text); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+					out.Count = n
+					break
+				}
+			}
+		}
+	}
+
+	// quality: 高清 / hd
+	if out.Quality == "" {
+		if strings.Contains(text, "高清") || strings.Contains(low, "hd") || strings.Contains(text, "超清") {
+			out.Quality = "hd"
+		}
+	}
+
+	// negative: clause after explicit negative keywords
+	if out.Negative == "" {
+		for _, kw := range []string{"不要有", "不要包含", "不要", "避免", "去除", "去掉", "请勿", "别加", "别出现", "不要出现"} {
+			if idx := strings.Index(text, kw); idx >= 0 {
+				tail := text[idx+len(kw):]
+				// trim at sentence punctuation
+				for _, p := range []string{"。", "，", ",", "！", "!", "？", "?", "；", ";", "\n"} {
+					if cut := strings.Index(tail, p); cut >= 0 {
+						tail = tail[:cut]
+					}
+				}
+				tail = strings.TrimSpace(tail)
+				if tail != "" && len([]rune(tail)) <= 40 {
+					out.Negative = tail
+				}
+				break
+			}
+		}
+	}
+
+	return out
+}
+
+// imageGenOptionsSummary renders a human-readable summary of the resolved
+// options for the "完整提示词建议" block returned to the caller.
+func (o imageGenOptions) summary(description string) string {
+	size, count := o.normalize()
+	var b strings.Builder
+	ratio := imageRatioLabels[size]
+	if ratio == "" {
+		ratio = size
+	}
+	b.WriteString("【本次生图参数】\n")
+	fmt.Fprintf(&b, "• 描述：%s\n", strings.TrimSpace(description))
+	fmt.Fprintf(&b, "• 比例：%s（%s）\n", ratio, size)
+	if l, ok := imageStyleLabels[strings.ToLower(o.Style)]; ok {
+		fmt.Fprintf(&b, "• 风格：%s\n", l)
+	} else if o.Style != "" {
+		fmt.Fprintf(&b, "• 风格：%s\n", o.Style)
+	}
+	if strings.EqualFold(o.Quality, "hd") {
+		b.WriteString("• 质量：高清\n")
+	}
+	if count > 1 {
+		fmt.Fprintf(&b, "• 数量：%d 张\n", count)
+	}
+	if o.Negative != "" {
+		fmt.Fprintf(&b, "• 排除：%s\n", o.Negative)
+	}
+	// full re-usable prompt built the same way the upstream receives it
+	fmt.Fprintf(&b, "\n完整提示词（可直接复用）：\n%s\n", o.buildPrompt(description))
+	return b.String()
 }
 
 // imageStyleLabels maps style keys to their Chinese display names (used in the

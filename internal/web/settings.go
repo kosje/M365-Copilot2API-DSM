@@ -49,6 +49,10 @@ type runtimeSettings struct {
 	MaxOutputTokens            int            `json:"maxOutputTokens"`
 	ChatTimeoutSeconds         int            `json:"chatTimeoutSeconds"`
 	ImageTimeoutSeconds        int            `json:"imageTimeoutSeconds"`
+	// DailyImageLimit caps how many images the chat-endpoint image router may
+	// generate per day per API key (0 = unlimited). The used count is shown to
+	// the caller after each generation and enforced as a 429 when exceeded.
+	DailyImageLimit            int            `json:"dailyImageLimit"`
 	LogLevel                   string         `json:"logLevel"`
 	DebugLogPath               string         `json:"debugLogPath"`
 	ListenAddress              string         `json:"listenAddress"`
@@ -206,6 +210,7 @@ func defaultRuntimeSettings() runtimeSettings {
 		MaxToolCallsPerTurn: envInt("M365_MAX_TOOL_CALLS_PER_TURN", 32), MaxToolRounds: envInt("M365_MAX_TOOL_ROUNDS", 512),
 		ContextWindow: envInt("M365_CONTEXT_WINDOW", 128000), MaxOutputTokens: envInt("M365_MAX_OUTPUT_TOKENS", 16384),
 		ChatTimeoutSeconds: envInt("M365_CHAT_TIMEOUT_SECONDS", 120), ImageTimeoutSeconds: envInt("M365_IMAGE_TIMEOUT_SECONDS", 300), LogLevel: firstNonEmptySetting(os.Getenv("M365_LOG_LEVEL"), "info"),
+		DailyImageLimit: envInt("M365_DAILY_IMAGE_LIMIT", 100),
 		DebugLogPath: os.Getenv("M365_DEBUG_LOG"), ListenAddress: os.Getenv("M365_LISTEN"), ConfigPath: os.Getenv("M365_CONFIG"),
 		TokenCachePath: os.Getenv("M365_TOKEN_CACHE"), SessionCachePath: os.Getenv("M365_SESSION_CACHE"), OutboundProxy: os.Getenv(outbound.EnvProxy), ClientID: os.Getenv("M365_CLIENT_ID"),
 		Authority: os.Getenv("M365_AUTHORITY"), RedirectURI: os.Getenv("M365_REDIRECT_URI"), Scope: os.Getenv("M365_SCOPE"),
@@ -276,6 +281,9 @@ func firstNonEmptySetting(values ...string) string {
 func validateSettings(v runtimeSettings) error {
 	if v.MaxToolCallsPerTurn < 1 || v.MaxToolCallsPerTurn > 64 {
 		return fmt.Errorf("每轮工具调用数必须为 1-64")
+	}
+	if v.DailyImageLimit < 0 || v.DailyImageLimit > 10000 {
+		return fmt.Errorf("每日生图额度(dailyImageLimit)必须为 0-10000（0=不限）")
 	}
 	if v.MaxToolRounds < 1 || v.MaxToolRounds > 512 {
 		return fmt.Errorf("最大工具轮次必须为 1-512")

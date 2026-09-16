@@ -419,14 +419,15 @@ func toolNames(tools []chathub.Tool) []string {
 // draw an image. Used to auto-route a chat request to the image pipeline so the
 // caller does not need a separate image endpoint.
 var imageGenIntentPatterns = []string{
-	"生成图片", "生成一张图", "生成一张", "生成插画", "生成海报", "生成logo", "生成 logo",
-	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图",
-	"生图", "出图", "配图", "配张图", "插图", "插画", "海报", "头像", "封面图",
+	"生成图片", "生成一张图", "生成一张", "生成插画", "生成海报", "生成logo", "生成 logo", "生成图", "生图",
+	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图", "画",
+	"出图", "配图", "配张图", "插图", "插画", "海报", "头像", "封面图",
 	"帮我画", "给我画", "创作一张图", "设计一张图", "文生图", "文字生成图片",
-	"做个图", "来张图", "一张图", "ai绘画", "ai 绘画",
+	"做个图", "来张图", "来一张", "给我一张", "一张图", "ai绘画", "ai 绘画",
+	"图片生成", "生成一张图片", "画一只", "画一朵", "画一个",
 	"generate an image", "generate image", "draw an image", "create an image",
 	"make an image", "text to image", "generate a picture", "an image of",
-	"paint a picture", "generate me an", "ai image",
+	"paint a picture", "generate me an", "ai image", "image of",
 }
 
 // codingIntentPatterns: phrases that signal the user wants code/editing work

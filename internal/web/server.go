@@ -1607,6 +1607,11 @@ type chatBody struct {
 	Reasoning       *reasoningConfig  `json:"reasoning,omitempty"`
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 	ResponseFormat  *responseFormat   `json:"response_format,omitempty"`
+	// ImageOptions carries explicit image-generation parameters for the
+	// chat-endpoint image router. When present (even with empty fields) it forces
+	// image routing; any blank field is then inferred from the natural-language
+	// prompt via parseImageOptionsFromText.
+	ImageOptions *imageGenOptions `json:"image_options,omitempty"`
 }
 
 type responseFormat struct {
@@ -1987,6 +1992,10 @@ type oaiReq struct {
 	Reasoning           *reasoningConfig     `json:"reasoning,omitempty"`
 	ReasoningEffort     string               `json:"reasoning_effort,omitempty"`
 	Metadata            *oaiMetadata         `json:"metadata,omitempty"`
+	// ImageOptions carries explicit image-generation parameters for the
+	// chat-endpoint image router. When present it forces image routing; blank
+	// fields are inferred from the natural-language prompt.
+	ImageOptions *imageGenOptions `json:"image_options,omitempty"`
 }
 
 type oaiMetadata struct {
@@ -2341,47 +2350,66 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
 	if os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true" {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
-			if ut := lastUserContent(body.Messages); ut != "" && isImageGenIntent(ut) && !codingIntent(ut) {
-				imgStart := time.Now()
-				imgs, convID, ierr := s.generateChatImages(r, ut, 1, "1024x1024", body.Attachments, body.AccountID, body.User)
-				if ierr == nil && len(imgs) > 0 {
-					var sb strings.Builder
-					sb.WriteString("已为你生成图片：\n\n")
-					for _, u := range imgs {
-						sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
+			if ut := lastUserContent(body.Messages); ut != "" {
+				// Route to the image pipeline when the prompt clearly asks for an
+				// image, OR when the caller explicitly supplied image_options.
+				imageIntent := isImageGenIntent(ut) || body.ImageOptions != nil
+				if imageIntent && !codingIntent(ut) {
+				opts := parseImageOptionsFromText(ut, derefImageOptions(body.ImageOptions))
+				// Normalise up-front so the logged size (and any future direct
+				// use of opts.Size) reflects what the upstream actually receives
+				// rather than the raw ratio label the caller passed in.
+				opts.Size = normalizeImageSize(opts.Size)
+				keyPrefix := extractAPIKey(r)
+					used, limit := getAPIKeyImageQuota(keyPrefix)
+					if limit > 0 && used >= limit {
+						writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error",
+							fmt.Sprintf("今日图片额度已用完（%d/%d），明天再试或联系管理员调整 dailyImageLimit。", used, limit))
+						return
 					}
-					log.Printf("[image-route] chat intent routed to image pipeline (upstream GPT Image 2), images=%d conv=%s dur_ms=%d", len(imgs), convID, time.Since(imgStart).Milliseconds())
-					// Record usage so the admin console shows image-route calls;
-					// previously these were invisible and looked like the
-					// request never reached the gateway.
+					imgStart := time.Now()
+					imgs, convID, ierr := s.generateChatImages(r, ut, opts, body.Attachments, body.AccountID, body.User)
+					if ierr == nil && len(imgs) > 0 {
+						used, limit = bumpAPIKeyImageQuota(keyPrefix, len(imgs))
+						var sb strings.Builder
+						sb.WriteString("已为你生成图片：\n\n")
+						for _, u := range imgs {
+							sb.WriteString("![" + sanitizeImageAlt(ut) + "](" + u + ")\n\n")
+						}
+						// Append a copyable summary of the resolved parameters and
+						// the today's quota so the caller can reproduce / track usage.
+						sb.WriteString("\n" + opts.summary(ut) + "\n")
+						sb.WriteString("\n" + imageQuotaLine(used, limit) + "\n")
+						log.Printf("[image-route] chat intent routed to image pipeline (upstream GPT Image 2), images=%d conv=%s dur_ms=%d size=%s style=%s count=%d negative=%q", len(imgs), convID, time.Since(imgStart).Milliseconds(), opts.Size, opts.Style, opts.Count, opts.Negative)
+						if s.usage != nil {
+							s.usage.record(UsageRecord{
+								Time:         time.Now(),
+								APIKeyPrefix: keyPrefix,
+								Model:        "gpt-image-2",
+								Endpoint:     "/v1/chat/completions#image-route",
+								Stream:       body.Stream,
+								InputTokens:  EstimateTokens(ut),
+								OutputTokens: int64(len(imgs)),
+								DurationMs:   time.Since(imgStart).Milliseconds(),
+								Status:       http.StatusOK,
+							})
+						}
+						s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), sb.String(), body.Stream)
+						return
+					}
+					log.Printf("[image-route] intent detected but generation failed (%v); falling back to normal chat", ierr)
 					if s.usage != nil {
 						s.usage.record(UsageRecord{
 							Time:         time.Now(),
-							APIKeyPrefix: extractAPIKey(r),
+							APIKeyPrefix: keyPrefix,
 							Model:        "gpt-image-2",
 							Endpoint:     "/v1/chat/completions#image-route",
 							Stream:       body.Stream,
 							InputTokens:  EstimateTokens(ut),
-							OutputTokens: int64(len(imgs)),
 							DurationMs:   time.Since(imgStart).Milliseconds(),
-							Status:       http.StatusOK,
+							Status:       http.StatusBadGateway,
 						})
 					}
-					s.writeChatCompletionText(w, r, firstNonEmpty(body.Model, "m365-copilot"), sb.String(), body.Stream)
-					return
-				}
-				log.Printf("[image-route] intent detected but generation failed (%v); falling back to normal chat", ierr)
-				if s.usage != nil {
-					s.usage.record(UsageRecord{
-						Time:         time.Now(),
-						APIKeyPrefix: extractAPIKey(r),
-						Model:        "gpt-image-2",
-						Endpoint:     "/v1/chat/completions#image-route",
-						Stream:       body.Stream,
-						InputTokens:  EstimateTokens(ut),
-						DurationMs:   time.Since(imgStart).Milliseconds(),
-						Status:       http.StatusBadGateway,
-					})
 				}
 			}
 		}
