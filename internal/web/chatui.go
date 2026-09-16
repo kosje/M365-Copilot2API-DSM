@@ -37,7 +37,7 @@ const (
 	chatSessionCookie = "m365_chat_session"
 	chatSessionTTL    = 7 * 24 * time.Hour
 	maxChatUploadFile = 12 << 20 // per-image cap after base64 (~9MB raw)
-	maxChatImages     = 4         // per message
+	maxChatImages     = 4        // per message
 	maxChatConvMsgs   = 300
 )
 
@@ -67,11 +67,11 @@ type chatConfig struct {
 }
 
 type chatMessage struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Images  []string `json:"images,omitempty"` // uploaded image file IDs
-	Gen     []string `json:"gen_images,omitempty"` // generated image file IDs
-	Model   string   `json:"model,omitempty"` // upstream model used for assistant replies
+	Role    string    `json:"role"`
+	Content string    `json:"content"`
+	Images  []string  `json:"images,omitempty"`     // uploaded image file IDs
+	Gen     []string  `json:"gen_images,omitempty"` // generated image file IDs
+	Model   string    `json:"model,omitempty"`      // upstream model used for assistant replies
 	Time    time.Time `json:"time"`
 }
 
@@ -1316,10 +1316,10 @@ type chatCaptureWriter struct {
 	code   int
 }
 
-func (c *chatCaptureWriter) Header() http.Header { return c.header }
-func (c *chatCaptureWriter) WriteHeader(code int) { c.code = code }
+func (c *chatCaptureWriter) Header() http.Header         { return c.header }
+func (c *chatCaptureWriter) WriteHeader(code int)        { c.code = code }
 func (c *chatCaptureWriter) Write(p []byte) (int, error) { return c.buf.Write(p) }
-func (c *chatCaptureWriter) Flush() {}
+func (c *chatCaptureWriter) Flush()                      {}
 
 // chatReport saves an assistant-generated HTML report server-side so the user
 // can open it as a standalone page (tables can be copied into Excel etc.).
@@ -1446,9 +1446,9 @@ func (s *Server) chatAdmin(w http.ResponseWriter, r *http.Request) {
 		DailyImage *int   `json:"dailyImage"`
 		Enabled    *bool  `json:"enabled"`
 		// config fields
-		ConvRetentionDays   *int `json:"convRetentionDays"`
-		ImageRetentionHours *int `json:"imageRetentionHours"`
-		MaxStorageMB        *int `json:"maxStorageMB"`
+		ConvRetentionDays   *int   `json:"convRetentionDays"`
+		ImageRetentionHours *int   `json:"imageRetentionHours"`
+		MaxStorageMB        *int   `json:"maxStorageMB"`
 		Scope               string `json:"scope"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&b) != nil || b.Action == "" {

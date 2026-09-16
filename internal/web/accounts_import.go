@@ -26,9 +26,10 @@ type importAccountsResult struct {
 }
 
 // importAccounts accepts a multipart upload containing either:
-//   1) a raw accounts.json in the app's own format {"accounts":[...]}, or
-//   2) a migration archive (gzip/tar.gz) produced by migrate.sh, from which
-//      m365-migration/data/accounts.json is extracted.
+//  1. a raw accounts.json in the app's own format {"accounts":[...]}, or
+//  2. a migration archive (gzip/tar.gz) produced by migrate.sh, from which
+//     m365-migration/data/accounts.json is extracted.
+//
 // Each account is upserted into the token store. Refresh tokens are kept
 // verbatim: encryptRefreshToken is idempotent for already-encrypted values, so
 // re-saving does not double-encrypt. The master key falls back to a built-in

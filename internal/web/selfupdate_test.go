@@ -11,10 +11,10 @@ func TestSemverAtLeast(t *testing.T) {
 		{"v2.0.0", "1.9.9", true},
 		{"v1.4.0", "1.4.0", false},
 		{"v1.3.3", "1.3.4", false},
-		{"v1.10.0", "1.9.0", true},  // numeric, not lexicographic
-		{"v1.3.10", "1.3.9", true},  // numeric, not lexicographic
-		{"1.4.0", "v1.3.9", true},   // optional v prefix on either side
-		{"v1.4", "1.3.9", true},     // partial semver
+		{"v1.10.0", "1.9.0", true}, // numeric, not lexicographic
+		{"v1.3.10", "1.3.9", true}, // numeric, not lexicographic
+		{"1.4.0", "v1.3.9", true},  // optional v prefix on either side
+		{"v1.4", "1.3.9", true},    // partial semver
 		{"v1.4.0-beta", "1.3.9", true},
 
 		// Fourth component: the DSM build numbers packaging-only revisions as

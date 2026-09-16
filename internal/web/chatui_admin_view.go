@@ -14,8 +14,9 @@ import (
 // ---------- admin: browse user conversations & manage generated images ----------
 
 // chatAdminConvs lists (or fetches) conversations of a chat user, for admin review.
-//   GET  /api/chatui/admin/convs?user=<id>          → conversation list (no messages)
-//   GET  /api/chatui/admin/convs?user=<id>&id=<cid> → full message list of one conversation
+//
+//	GET  /api/chatui/admin/convs?user=<id>          → conversation list (no messages)
+//	GET  /api/chatui/admin/convs?user=<id>&id=<cid> → full message list of one conversation
 func (s *Server) chatAdminConvs(w http.ResponseWriter, r *http.Request) {
 	if !s.validAdminSession(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "administrator login required")
@@ -90,7 +91,8 @@ func (s *Server) chatAdminConvs(w http.ResponseWriter, r *http.Request) {
 
 // chatAdminImages lists generated/stored images with metadata and (optionally)
 // which user/conversation referenced them.
-//   GET /api/chatui/admin/images?user=<id|all>
+//
+//	GET /api/chatui/admin/images?user=<id|all>
 func (s *Server) chatAdminImages(w http.ResponseWriter, r *http.Request) {
 	if !s.validAdminSession(r) {
 		writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "administrator login required")

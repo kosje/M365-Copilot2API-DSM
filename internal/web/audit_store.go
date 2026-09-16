@@ -41,7 +41,6 @@ func auditPath() string {
 	return filepath.Join(dir, "audit.jsonl")
 }
 
-
 func openAuditStore() {
 	globalAudit.mu.Lock()
 	defer globalAudit.mu.Unlock()

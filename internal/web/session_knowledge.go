@@ -24,9 +24,9 @@ import (
 //     reappears later in the conversation, the cached digest is served
 //     instead of the full payload again.
 type sessionKnowledge struct {
-	mu      sync.Mutex
-	files   map[string]*fileEntry // path -> entry
-	digests map[string]string     // content sha -> cached digest
+	mu       sync.Mutex
+	files    map[string]*fileEntry // path -> entry
+	digests  map[string]string     // content sha -> cached digest
 	lastSeen time.Time
 }
 

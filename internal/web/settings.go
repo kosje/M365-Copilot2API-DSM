@@ -42,40 +42,40 @@ var configurableCodexModels = []string{
 }
 
 type runtimeSettings struct {
-	MaxToolCallsPerTurn        int            `json:"maxToolCallsPerTurn"`
-	MaxToolRounds              int            `json:"maxToolRounds"`
-	ContextWindow              int            `json:"contextWindow"`
-	MaxOutputTokens            int            `json:"maxOutputTokens"`
-	ChatTimeoutSeconds         int            `json:"chatTimeoutSeconds"`
-	ImageTimeoutSeconds        int            `json:"imageTimeoutSeconds"`
-	LogLevel                   string         `json:"logLevel"`
-	DebugLogPath               string         `json:"debugLogPath"`
-	ListenAddress              string         `json:"listenAddress"`
-	ConfigPath                 string         `json:"configPath"`
-	TokenCachePath             string         `json:"tokenCachePath"`
-	SessionCachePath           string         `json:"sessionCachePath"`
-	OutboundProxy              string         `json:"outboundProxy"`
-	ProxyPool                  []string       `json:"proxyPool,omitempty"`
-	ClientID                   string         `json:"clientId"`
-	Authority                  string         `json:"authority"`
-	RedirectURI                string         `json:"redirectUri"`
-	Scope                      string         `json:"scope"`
-	ModelMappings              []modelMapping `json:"modelMappings"`
-	ToolPlanningMode           string         `json:"toolPlanningMode"`
-	RateLimitCooldownSeconds   int            `json:"rateLimitCooldownSeconds"`
-	Scenario                   string         `json:"scenario"`
-	MaxConversationMessages    int            `json:"maxConversationMessages"`
-	LicenseType                string         `json:"licenseType"`
-	AccountConcurrencyLimit    int            `json:"accountConcurrencyLimit"`
-	EnableMemoryV2             bool           `json:"enableMemoryV2"`
-	EnableDeepWork             bool           `json:"enableDeepWork"`
-	EnableComputerUse          bool           `json:"enableComputerUse"`
-	EnableRealtimeVoice        bool           `json:"enableRealtimeVoice"`
-	EnableSystemPromptOverride bool           `json:"enableSystemPromptOverride"`
-	EnableDesignerImageGen4o   bool           `json:"enableDesignerImageGen4o"`
-	EnableCodeCanvas           bool           `json:"enableCodeCanvas"`
-	EnableSydneyReconnect      bool           `json:"enableSydneyReconnect"`
-	QuotaRefreshIntervalSeconds int          `json:"quotaRefreshIntervalSeconds"`
+	MaxToolCallsPerTurn         int            `json:"maxToolCallsPerTurn"`
+	MaxToolRounds               int            `json:"maxToolRounds"`
+	ContextWindow               int            `json:"contextWindow"`
+	MaxOutputTokens             int            `json:"maxOutputTokens"`
+	ChatTimeoutSeconds          int            `json:"chatTimeoutSeconds"`
+	ImageTimeoutSeconds         int            `json:"imageTimeoutSeconds"`
+	LogLevel                    string         `json:"logLevel"`
+	DebugLogPath                string         `json:"debugLogPath"`
+	ListenAddress               string         `json:"listenAddress"`
+	ConfigPath                  string         `json:"configPath"`
+	TokenCachePath              string         `json:"tokenCachePath"`
+	SessionCachePath            string         `json:"sessionCachePath"`
+	OutboundProxy               string         `json:"outboundProxy"`
+	ProxyPool                   []string       `json:"proxyPool,omitempty"`
+	ClientID                    string         `json:"clientId"`
+	Authority                   string         `json:"authority"`
+	RedirectURI                 string         `json:"redirectUri"`
+	Scope                       string         `json:"scope"`
+	ModelMappings               []modelMapping `json:"modelMappings"`
+	ToolPlanningMode            string         `json:"toolPlanningMode"`
+	RateLimitCooldownSeconds    int            `json:"rateLimitCooldownSeconds"`
+	Scenario                    string         `json:"scenario"`
+	MaxConversationMessages     int            `json:"maxConversationMessages"`
+	LicenseType                 string         `json:"licenseType"`
+	AccountConcurrencyLimit     int            `json:"accountConcurrencyLimit"`
+	EnableMemoryV2              bool           `json:"enableMemoryV2"`
+	EnableDeepWork              bool           `json:"enableDeepWork"`
+	EnableComputerUse           bool           `json:"enableComputerUse"`
+	EnableRealtimeVoice         bool           `json:"enableRealtimeVoice"`
+	EnableSystemPromptOverride  bool           `json:"enableSystemPromptOverride"`
+	EnableDesignerImageGen4o    bool           `json:"enableDesignerImageGen4o"`
+	EnableCodeCanvas            bool           `json:"enableCodeCanvas"`
+	EnableSydneyReconnect       bool           `json:"enableSydneyReconnect"`
+	QuotaRefreshIntervalSeconds int            `json:"quotaRefreshIntervalSeconds"`
 	// SessionTTLMinutes controls how long a session binding stays alive before
 	// eviction from sessions.json (and from in-memory lookup).
 	SessionTTLMinutes int `json:"sessionTtlMinutes"`
@@ -95,11 +95,11 @@ type runtimeSettings struct {
 	// case-insensitively; values must be existing public model IDs.
 	ModelAliases map[string]string `json:"modelAliases,omitempty"`
 	// Webhook alerts. URL empty = disabled. Type: auto|feishu|telegram|bark|generic.
-	AlertWebhookURL         string   `json:"alertWebhookUrl,omitempty"`
-	AlertWebhookType        string   `json:"alertWebhookType,omitempty"`
-	AlertTelegramChatID     string   `json:"alertTelegramChatId,omitempty"`
-	AlertEvents             []string `json:"alertEvents,omitempty"`             // empty = all
-	AlertErrorRatePercent   int      `json:"alertErrorRatePercent,omitempty"`   // 0 = disabled, 1-100
+	AlertWebhookURL       string   `json:"alertWebhookUrl,omitempty"`
+	AlertWebhookType      string   `json:"alertWebhookType,omitempty"`
+	AlertTelegramChatID   string   `json:"alertTelegramChatId,omitempty"`
+	AlertEvents           []string `json:"alertEvents,omitempty"`           // empty = all
+	AlertErrorRatePercent int      `json:"alertErrorRatePercent,omitempty"` // 0 = disabled, 1-100
 	// Predictive token refresh: refresh tokens nearing expiry every N seconds
 	// (0 = disabled, default 6h).
 	TokenRefreshIntervalSeconds int `json:"tokenRefreshIntervalSeconds,omitempty"`
@@ -107,8 +107,8 @@ type runtimeSettings struct {
 	MetricsToken string `json:"metricsToken,omitempty"`
 	// AutoCompact: when the context budget overflows, summarize dropped
 	// history via an upstream call instead of silently truncating.
-	EnableAutoCompact       bool `json:"enableAutoCompact"`
-	AutoCompactMinTokens    int  `json:"autoCompactMinTokens,omitempty"`    // only compact when dropped history >= this many tokens (default 4000)
+	EnableAutoCompact    bool `json:"enableAutoCompact"`
+	AutoCompactMinTokens int  `json:"autoCompactMinTokens,omitempty"` // only compact when dropped history >= this many tokens (default 4000)
 	// Agent loop detection thresholds: how many identical tool calls / identical
 	// failures before the agent ledger flags a stuck loop (hard stop) or a
 	// repeated failure (hard stop). Raised from the old hardcoded 2/3 so that
@@ -194,37 +194,37 @@ func defaultRuntimeSettings() runtimeSettings {
 		DebugLogPath: os.Getenv("M365_DEBUG_LOG"), ListenAddress: os.Getenv("M365_LISTEN"), ConfigPath: os.Getenv("M365_CONFIG"),
 		TokenCachePath: os.Getenv("M365_TOKEN_CACHE"), SessionCachePath: os.Getenv("M365_SESSION_CACHE"), OutboundProxy: os.Getenv(outbound.EnvProxy), ClientID: os.Getenv("M365_CLIENT_ID"),
 		Authority: os.Getenv("M365_AUTHORITY"), RedirectURI: os.Getenv("M365_REDIRECT_URI"), Scope: os.Getenv("M365_SCOPE"),
-		ModelMappings:              append([]modelMapping(nil), defaultModelMappings...),
-		ToolPlanningMode:           toolPlanningMode(os.Getenv("M365_TOOL_PLANNING_MODE")),
-		RateLimitCooldownSeconds:   envInt("M365_RATE_LIMIT_COOLDOWN_SECONDS", 30),
-		Scenario:                   firstNonEmptySetting(os.Getenv("M365_SCENARIO"), "OfficeWebIncludedCopilot"),
-		MaxConversationMessages:    envInt("M365_MAX_CONVERSATION_MESSAGES", 600),
-		LicenseType:                firstNonEmptySetting(os.Getenv("M365_LICENSE_TYPE"), "Starter"),
-		AccountConcurrencyLimit:    envInt("M365_ACCOUNT_CONCURRENCY_LIMIT", 8),
-		EnableMemoryV2:             os.Getenv("M365_ENABLE_MEMORY_V2") == "true",
-		EnableDeepWork:             os.Getenv("M365_ENABLE_DEEP_WORK") == "true",
-		EnableComputerUse:          os.Getenv("M365_ENABLE_COMPUTER_USE") == "true",
-		EnableRealtimeVoice:        os.Getenv("M365_ENABLE_REALTIME_VOICE") == "true",
-		EnableSystemPromptOverride: os.Getenv("M365_ENABLE_SYSTEM_PROMPT_OVERRIDE") == "true",
-		EnableDesignerImageGen4o:   os.Getenv("M365_ENABLE_DESIGNER_IMAGE_GEN_4O") == "true",
-		EnableCodeCanvas:           os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
-		EnableSydneyReconnect:      os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
+		ModelMappings:               append([]modelMapping(nil), defaultModelMappings...),
+		ToolPlanningMode:            toolPlanningMode(os.Getenv("M365_TOOL_PLANNING_MODE")),
+		RateLimitCooldownSeconds:    envInt("M365_RATE_LIMIT_COOLDOWN_SECONDS", 30),
+		Scenario:                    firstNonEmptySetting(os.Getenv("M365_SCENARIO"), "OfficeWebIncludedCopilot"),
+		MaxConversationMessages:     envInt("M365_MAX_CONVERSATION_MESSAGES", 600),
+		LicenseType:                 firstNonEmptySetting(os.Getenv("M365_LICENSE_TYPE"), "Starter"),
+		AccountConcurrencyLimit:     envInt("M365_ACCOUNT_CONCURRENCY_LIMIT", 8),
+		EnableMemoryV2:              os.Getenv("M365_ENABLE_MEMORY_V2") == "true",
+		EnableDeepWork:              os.Getenv("M365_ENABLE_DEEP_WORK") == "true",
+		EnableComputerUse:           os.Getenv("M365_ENABLE_COMPUTER_USE") == "true",
+		EnableRealtimeVoice:         os.Getenv("M365_ENABLE_REALTIME_VOICE") == "true",
+		EnableSystemPromptOverride:  os.Getenv("M365_ENABLE_SYSTEM_PROMPT_OVERRIDE") == "true",
+		EnableDesignerImageGen4o:    os.Getenv("M365_ENABLE_DESIGNER_IMAGE_GEN_4O") == "true",
+		EnableCodeCanvas:            os.Getenv("M365_ENABLE_CODE_CANVAS") == "true",
+		EnableSydneyReconnect:       os.Getenv("M365_ENABLE_SYDNEY_RECONNECT") == "true",
 		QuotaRefreshIntervalSeconds: envInt("M365_QUOTA_REFRESH_INTERVAL_SECONDS", 300),
-		SessionTTLMinutes:          envInt("M365_SESSION_TTL_MINUTES", 120),
-		ContextTTLMinutes:          envInt("M365_CONTEXT_TTL_MINUTES", 120),
-		ContextSimilarity:          envFloat("M365_CONTEXT_SIMILARITY", 0.6),
-		PublicIdentityPolicy:       os.Getenv("M365_PUBLIC_IDENTITY_POLICY") == "true",
-		ModelAliases:               map[string]string{},
+		SessionTTLMinutes:           envInt("M365_SESSION_TTL_MINUTES", 120),
+		ContextTTLMinutes:           envInt("M365_CONTEXT_TTL_MINUTES", 120),
+		ContextSimilarity:           envFloat("M365_CONTEXT_SIMILARITY", 0.6),
+		PublicIdentityPolicy:        os.Getenv("M365_PUBLIC_IDENTITY_POLICY") == "true",
+		ModelAliases:                map[string]string{},
 		TokenRefreshIntervalSeconds: envInt("M365_TOKEN_REFRESH_INTERVAL_SECONDS", 21600),
-		EnableAutoCompact:          os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
-		AutoCompactMinTokens:       envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
-		LoopSameLimit:              envInt("M365_LOOP_SAME_LIMIT", 6),
-		LoopRepeatLimit:            envInt("M365_LOOP_REPEAT_LIMIT", 5),
-		HideReasoning:              os.Getenv("M365_HIDE_REASONING") == "true",
-		ToolResultMode:            firstNonEmptySetting(os.Getenv("M365_TOOL_RESULT_MODE"), "full"),
-		AutonomyBoost:             os.Getenv("M365_AUTONOMY_BOOST") == "true",
-		EnableRepoMap:             os.Getenv("M365_ENABLE_REPO_MAP") == "true",
-		EnableFileSummaryCache:    os.Getenv("M365_ENABLE_FILE_SUMMARY_CACHE") == "true",
+		EnableAutoCompact:           os.Getenv("M365_ENABLE_AUTO_COMPACT") != "false",
+		AutoCompactMinTokens:        envInt("M365_AUTO_COMPACT_MIN_TOKENS", 4000),
+		LoopSameLimit:               envInt("M365_LOOP_SAME_LIMIT", 6),
+		LoopRepeatLimit:             envInt("M365_LOOP_REPEAT_LIMIT", 5),
+		HideReasoning:               os.Getenv("M365_HIDE_REASONING") == "true",
+		ToolResultMode:              firstNonEmptySetting(os.Getenv("M365_TOOL_RESULT_MODE"), "full"),
+		AutonomyBoost:               os.Getenv("M365_AUTONOMY_BOOST") == "true",
+		EnableRepoMap:               os.Getenv("M365_ENABLE_REPO_MAP") == "true",
+		EnableFileSummaryCache:      os.Getenv("M365_ENABLE_FILE_SUMMARY_CACHE") == "true",
 	}
 }
 func settingsPath() string {

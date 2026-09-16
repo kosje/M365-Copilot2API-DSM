@@ -29,8 +29,8 @@ type loginAttempt struct {
 }
 
 type adminPasswordData struct {
-	Hash      string   `json:"hash"`
-	History   []string `json:"history,omitempty"`
+	Hash      string    `json:"hash"`
+	History   []string  `json:"history,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// MustChange records that this hash came from the random first-start
 	// bootstrap rather than from an operator choice. It is persisted so the

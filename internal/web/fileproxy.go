@@ -169,10 +169,10 @@ func (s *Server) fetchGeneratedFile(internalConv, filename string) (string, erro
 	account := chathub.Account{AccessToken: ctx.AccessToken, OID: ctx.OID, TID: ctx.TID}
 	prompt := fmt.Sprintf("请把你刚刚生成的文件 %s 的完整二进制内容以 base64 编码原样输出，放在一个单独的 ```base64file 代码块中。不要省略、不要截断、不要总结，必须包含文件的全部字节，也不要在代码块前后添加任何说明文字。", filename)
 	req := chathub.Request{
-		Text:            prompt,
-		Tone:            "magic",
-		Locale:          "en-us",
-		Market:          "en-us",
+		Text:           prompt,
+		Tone:           "magic",
+		Locale:         "en-us",
+		Market:         "en-us",
 		ConversationID: ctx.ConvID,
 		SessionID:      ctx.SessID,
 		Started:        false,

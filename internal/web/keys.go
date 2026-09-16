@@ -56,7 +56,9 @@ type minuteCounter struct {
 	n      int64
 }
 
-func newKeyRateWindow() *keyRateWindow { return &keyRateWindow{counts: map[string]*minuteCounter{}, nowFunc: time.Now} }
+func newKeyRateWindow() *keyRateWindow {
+	return &keyRateWindow{counts: map[string]*minuteCounter{}, nowFunc: time.Now}
+}
 
 // allow reports whether one more request is permitted for the key this minute.
 // Unknown keys (no limit configured) are always allowed.
@@ -127,6 +129,7 @@ func modelAllowed(model string, whitelist []string) bool {
 	}
 	return false
 }
+
 type apiKeyStore struct {
 	mu      sync.Mutex
 	Path    string

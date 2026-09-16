@@ -9,20 +9,20 @@ import (
 // "auto" (empty value from the UI) means no style injection — the upstream
 // model decides freely.
 var imageStylePresets = map[string]string{
-	"":          "",
-	"auto":      "",
-	"photo":     "photorealistic photography, natural lighting, sharp focus, high detail",
-	"anime":     "anime illustration style, clean line art, vibrant colors, cel shading",
-	"3d":        "3D render, C4D, octane render, soft studio lighting, high detail",
-	"flat":      "flat vector illustration, minimal geometric shapes, bold colors",
+	"":           "",
+	"auto":       "",
+	"photo":      "photorealistic photography, natural lighting, sharp focus, high detail",
+	"anime":      "anime illustration style, clean line art, vibrant colors, cel shading",
+	"3d":         "3D render, C4D, octane render, soft studio lighting, high detail",
+	"flat":       "flat vector illustration, minimal geometric shapes, bold colors",
 	"watercolor": "watercolor painting, soft washes, paper texture, delicate edges",
-	"oil":       "classical oil painting, rich texture, visible brush strokes",
-	"pixel":     "pixel art style, 16-bit retro game aesthetic, crisp pixels",
-	"cyberpunk": "cyberpunk style, neon lights, rain-slicked streets, futuristic mood",
-	"ink":       "Chinese ink wash painting (shuimo), elegant brushwork, minimal composition",
-	"sketch":    "minimal single-weight line art sketch, clean white background",
-	"sticker":   "cute kawaii sticker design, thick white outline, rounded shapes, flat colors",
-	"emote":     "chibi meme sticker, exaggerated expression, simple flat background",
+	"oil":        "classical oil painting, rich texture, visible brush strokes",
+	"pixel":      "pixel art style, 16-bit retro game aesthetic, crisp pixels",
+	"cyberpunk":  "cyberpunk style, neon lights, rain-slicked streets, futuristic mood",
+	"ink":        "Chinese ink wash painting (shuimo), elegant brushwork, minimal composition",
+	"sketch":     "minimal single-weight line art sketch, clean white background",
+	"sticker":    "cute kawaii sticker design, thick white outline, rounded shapes, flat colors",
+	"emote":      "chibi meme sticker, exaggerated expression, simple flat background",
 }
 
 // composeImagePrompt builds the final upstream prompt from the raw description

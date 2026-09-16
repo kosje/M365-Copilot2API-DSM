@@ -104,10 +104,10 @@ func (s *Server) summarizeHistory(r *http.Request, dropped []oaiMsg) (string, er
 		OID:         acc.OID,
 		TID:         acc.TID,
 	}, chathub.Request{
-		Text:        compactSummaryPrompt + "\n\n<conversation>\n" + text + "\n</conversation>",
-		Tone:        tone,
-		LicenseType: cfg.LicenseType,
-		Scenario:    cfg.Scenario,
+		Text:         compactSummaryPrompt + "\n\n<conversation>\n" + text + "\n</conversation>",
+		Tone:         tone,
+		LicenseType:  cfg.LicenseType,
+		Scenario:     cfg.Scenario,
 		FeatureFlags: s.featureFlags(),
 	})
 	if err != nil {

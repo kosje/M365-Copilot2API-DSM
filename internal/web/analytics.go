@@ -14,28 +14,28 @@ import (
 // The snapshot is persisted next to settings.json (throttled) so the numbers
 // survive restarts on the NAS.
 type analytics struct {
-	mu sync.Mutex
-	v  analyticsSnapshot
-	dirty bool
+	mu       sync.Mutex
+	v        analyticsSnapshot
+	dirty    bool
 	lastSave time.Time
-	path string
+	path     string
 }
 
 type analyticsSnapshot struct {
-	StartedAt        int64  `json:"startedAt"`
-	RequestsTotal    int64  `json:"requestsTotal"`
-	CompletionsTotal int64  `json:"completionsTotal"`
-	FailoversTotal   int64  `json:"failoversTotal"`
-	StuckLoopRejects int64  `json:"stuckLoopRejects"`
-	AutoCompacts     int64  `json:"autoCompacts"`
-	ToolCallsObserved int64 `json:"toolCallsObserved"`
+	StartedAt             int64 `json:"startedAt"`
+	RequestsTotal         int64 `json:"requestsTotal"`
+	CompletionsTotal      int64 `json:"completionsTotal"`
+	FailoversTotal        int64 `json:"failoversTotal"`
+	StuckLoopRejects      int64 `json:"stuckLoopRejects"`
+	AutoCompacts          int64 `json:"autoCompacts"`
+	ToolCallsObserved     int64 `json:"toolCallsObserved"`
 	ToolResultsCompressed int64 `json:"toolResultsCompressed"`
 	ToolResultsCapped     int64 `json:"toolResultsCapped"`
 	ToolResultsDeduped    int64 `json:"toolResultsDeduped"`
 	FileSummariesServed   int64 `json:"fileSummariesServed"`
-	CharsSaved       int64  `json:"charsSaved"`
-	RepoMapInjections int64  `json:"repoMapInjections"`
-	LastRequestAt    int64  `json:"lastRequestAt"`
+	CharsSaved            int64 `json:"charsSaved"`
+	RepoMapInjections     int64 `json:"repoMapInjections"`
+	LastRequestAt         int64 `json:"lastRequestAt"`
 }
 
 var globalAnalytics = &analytics{v: analyticsSnapshot{StartedAt: time.Now().Unix()}}
@@ -136,30 +136,46 @@ func (a *analytics) reset() {
 
 // ---- record helpers (cheap; safe from any goroutine) ----
 
-func analyticsRequest()            { globalAnalytics.bump(func(s *analyticsSnapshot) { s.RequestsTotal++; s.LastRequestAt = time.Now().Unix() }) }
-func analyticsCompletion()         { globalAnalytics.bump(func(s *analyticsSnapshot) { s.CompletionsTotal++ }) }
-func analyticsFailover()           { globalAnalytics.bump(func(s *analyticsSnapshot) { s.FailoversTotal++ }) }
-func analyticsStuckLoopReject()    { globalAnalytics.bump(func(s *analyticsSnapshot) { s.StuckLoopRejects++ }) }
-func analyticsAutoCompact()        { globalAnalytics.bump(func(s *analyticsSnapshot) { s.AutoCompacts++ }) }
-func analyticsRepoMapInjection()   { globalAnalytics.bump(func(s *analyticsSnapshot) { s.RepoMapInjections++ }) }
+func analyticsRequest() {
+	globalAnalytics.bump(func(s *analyticsSnapshot) { s.RequestsTotal++; s.LastRequestAt = time.Now().Unix() })
+}
+func analyticsCompletion() { globalAnalytics.bump(func(s *analyticsSnapshot) { s.CompletionsTotal++ }) }
+func analyticsFailover()   { globalAnalytics.bump(func(s *analyticsSnapshot) { s.FailoversTotal++ }) }
+func analyticsStuckLoopReject() {
+	globalAnalytics.bump(func(s *analyticsSnapshot) { s.StuckLoopRejects++ })
+}
+func analyticsAutoCompact() { globalAnalytics.bump(func(s *analyticsSnapshot) { s.AutoCompacts++ }) }
+func analyticsRepoMapInjection() {
+	globalAnalytics.bump(func(s *analyticsSnapshot) { s.RepoMapInjections++ })
+}
 func analyticsToolCallsObserved(n int) {
-	if n <= 0 { return }
+	if n <= 0 {
+		return
+	}
 	globalAnalytics.bump(func(s *analyticsSnapshot) { s.ToolCallsObserved += int64(n) })
 }
 func analyticsToolCompressed(saved int) {
-	if saved <= 0 { return }
+	if saved <= 0 {
+		return
+	}
 	globalAnalytics.bump(func(s *analyticsSnapshot) { s.ToolResultsCompressed++; s.CharsSaved += int64(saved) })
 }
 func analyticsToolCapped(saved int) {
-	if saved <= 0 { return }
+	if saved <= 0 {
+		return
+	}
 	globalAnalytics.bump(func(s *analyticsSnapshot) { s.ToolResultsCapped++; s.CharsSaved += int64(saved) })
 }
 func analyticsToolDeduped(saved int) {
-	if saved <= 0 { return }
+	if saved <= 0 {
+		return
+	}
 	globalAnalytics.bump(func(s *analyticsSnapshot) { s.ToolResultsDeduped++; s.CharsSaved += int64(saved) })
 }
 func analyticsFileSummaryServed(saved int) {
-	if saved <= 0 { return }
+	if saved <= 0 {
+		return
+	}
 	globalAnalytics.bump(func(s *analyticsSnapshot) { s.FileSummariesServed++; s.CharsSaved += int64(saved) })
 }
 

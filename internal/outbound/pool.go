@@ -185,6 +185,7 @@ func (p *Pool) WebSocketDialer() *websocket.Dialer {
 	}
 	return base
 }
+
 // Len reports how many proxies are configured. A pool with no entries dials
 // directly (see HTTPClient), so callers that care about the connection path must
 // treat an empty pool as "no proxy" rather than as "proxied".
