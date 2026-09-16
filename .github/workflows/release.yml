@@ -194,40 +194,58 @@ jobs:
             echo "已推送 feed: ${{ steps.v.outputs.infover }}"
           fi
 
-      - name: 确认线上 feed 已生效
+      # 硬门禁：校验**已推送到 gh-pages 的** feed。这是套件中心最终会读到的
+      # 内容，而且不受 CDN 影响，所以可以立即断言。
+      - name: 校验已推送的 feed 与产物一致
         run: |
           set -eu
-          # Pages 地址是 <owner>.github.io/<repo>/，不是 <owner>.github.io/<owner>/<repo>/。
-          # 从 GITHUB_REPOSITORY 推导，避免依赖事件负载里的字段。
-          PAGES_HOST="${GITHUB_REPOSITORY%%/*}.github.io"
-          PAGES_REPO="${GITHUB_REPOSITORY##*/}"
-          URL="https://${PAGES_HOST}/${PAGES_REPO}/index.json"
-          echo "feed: $URL"
-
           SPK="m365-copilot2api-${{ steps.v.outputs.version }}.spk"
+          WANT_VER="${{ steps.v.outputs.infover }}"
           WANT_MD5="$(md5sum "$SPK" | cut -d' ' -f1)"
           WANT_SIZE="$(wc -c < "$SPK" | tr -d ' ')"
 
-          # Pages 构建需要时间；轮询而不是死等。只认完整匹配，不信缓存。
-          for i in $(seq 1 24); do
-            BODY="$(curl -sS -H 'Cache-Control: no-cache' "$URL" || true)"
-            GOT_VER="$(printf '%s' "$BODY" | jq -r '.packages[0].version' 2>/dev/null || echo '')"
-            GOT_MD5="$(printf '%s' "$BODY" | jq -r '.packages[0].md5' 2>/dev/null || echo '')"
-            GOT_SIZE="$(printf '%s' "$BODY" | jq -r '.packages[0].size' 2>/dev/null || echo '')"
-            if [ "$GOT_VER" = "${{ steps.v.outputs.infover }}" ]; then
-              # 版本对了还不够：md5/size 必须对得上刚上传的那个文件，否则套件
-              # 中心会下载到一个校验失败或大小不符的包。
-              [ "$GOT_MD5" = "$WANT_MD5" ]   || { echo "::error::feed md5=$GOT_MD5，SPK 实际=$WANT_MD5"; exit 1; }
-              [ "$GOT_SIZE" = "$WANT_SIZE" ] || { echo "::error::feed size=$GOT_SIZE，SPK 实际=$WANT_SIZE"; exit 1; }
-              echo "线上 feed 已生效且与产物一致"
+          git fetch -q --no-tags origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+          git show origin/gh-pages:index.json > feed-pushed.json
+
+          GOT_VER="$(jq -r '.packages[0].version' feed-pushed.json)"
+          GOT_MD5="$(jq -r '.packages[0].md5' feed-pushed.json)"
+          GOT_SIZE="$(jq -r '.packages[0].size' feed-pushed.json)"
+          echo "gh-pages : version=$GOT_VER md5=$GOT_MD5 size=$GOT_SIZE"
+          echo "本地产物 : version=$WANT_VER md5=$WANT_MD5 size=$WANT_SIZE"
+
+          # 只比版本是不够的：feed 里 md5/size 与产物不一致，套件中心会下载到
+          # 一个校验失败或大小不符的包，而且它会认为更新存在。
+          [ "$GOT_VER"  = "$WANT_VER"  ] || { echo "::error::feed version=$GOT_VER，期望 $WANT_VER"; exit 1; }
+          [ "$GOT_MD5"  = "$WANT_MD5"  ] || { echo "::error::feed md5=$GOT_MD5，期望 $WANT_MD5"; exit 1; }
+          [ "$GOT_SIZE" = "$WANT_SIZE" ] || { echo "::error::feed size=$GOT_SIZE，期望 $WANT_SIZE"; exit 1; }
+          echo "已推送的 feed 与产物完全一致"
+
+      # 线上 URL 单独看，而且只告警。GitHub Pages 的 Cache-Control 是
+      # max-age=600，同一路径下改了内容也要十分钟才会刷新，所以"线上还没变"
+      # 说明不了任何问题——把它当成发布失败只会制造假红。真正的门禁是上一步。
+      - name: 观察 Pages 是否已刷新（仅告警）
+        continue-on-error: true
+        run: |
+          set -eu
+          # Pages 地址是 <owner>.github.io/<repo>/，不是 <owner>.github.io/<owner>/<repo>/。
+          PAGES_HOST="${GITHUB_REPOSITORY%%/*}.github.io"
+          PAGES_REPO="${GITHUB_REPOSITORY##*/}"
+          URL="https://${PAGES_HOST}/${PAGES_REPO}/index.json"
+          SPK="m365-copilot2api-${{ steps.v.outputs.version }}.spk"
+          WANT_MD5="$(md5sum "$SPK" | cut -d' ' -f1)"
+          echo "feed: $URL"
+          for i in $(seq 1 20); do
+            BODY="$(curl -sS "$URL" || true)"
+            GOT="$(printf '%s' "$BODY" | jq -r '.packages[0].md5' 2>/dev/null || echo '')"
+            if [ "$GOT" = "$WANT_MD5" ]; then
+              echo "Pages 已在提供新 feed"
               printf '%s' "$BODY" | jq .
               exit 0
             fi
-            echo "  等待 Pages 构建… ($i)  当前 version=${GOT_VER:-<空>}"
+            echo "  等待 Pages 刷新… ($i)  当前 md5=${GOT:-<空>}  期望 ${WANT_MD5}"
             sleep 15
           done
-          echo "::error::线上 feed 仍未出现 ${{ steps.v.outputs.infover }}，请检查 gh-pages 与 Pages 构建"
-          exit 1
+          echo "::warning::Pages 尚未提供新 feed。这不是发布失败：gh-pages 分支上的内容已校验通过，Pages 缓存 max-age=600，通常十分钟内刷新，套件中心随后即可看到更新。"
 
       - uses: actions/upload-artifact@v4
         if: always()
