@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,15 @@ type auditEntry struct {
 }
 
 const maxAuditInMemory = 500
+
+// auditMaxBytes bounds a single audit.jsonl. It is a variable rather than a
+// constant so tests can lower it without having to write megabytes of entries.
+var auditMaxBytes = int64(5 << 20)
+
+// auditKeepGenerations is how many rolled-over copies are kept alongside the
+// live file, so the audit trail costs at most (1 + auditKeepGenerations) ×
+// auditMaxBytes on disk no matter how long the process runs.
+const auditKeepGenerations = 1
 
 type auditStore struct {
 	mu      sync.Mutex
@@ -74,6 +84,10 @@ func (a *auditStore) append(e auditEntry) {
 	if path == "" {
 		return
 	}
+	// The log grows on every auditLog call and nothing trimmed it, so on a
+	// device that stays up for months it grew without bound. Bound it here,
+	// where the write already happens, rather than from a background loop.
+	a.rotateIfNeeded(path)
 	b, err := json.Marshal(e)
 	if err != nil {
 		return
@@ -88,6 +102,27 @@ func (a *auditStore) append(e auditEntry) {
 	}
 	defer f.Close()
 	_, _ = f.Write(b)
+}
+
+// rotateIfNeeded rolls audit.jsonl over once it passes auditMaxBytes, keeping
+// auditKeepGenerations previous copies. Rotation is checked on every append
+// rather than from a ticker: audit events are rare, so one os.Stat per entry is
+// cheap, and it means the bound holds even if the process never ticks.
+func (a *auditStore) rotateIfNeeded(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() < auditMaxBytes {
+		return
+	}
+	for gen := auditKeepGenerations; gen >= 1; gen-- {
+		from := path
+		if gen > 1 {
+			from = fmt.Sprintf("%s.%d", path, gen-1)
+		}
+		to := fmt.Sprintf("%s.%d", path, gen)
+		if _, err := os.Stat(from); err == nil {
+			_ = os.Rename(from, to)
+		}
+	}
 }
 
 func (a *auditStore) list(limit int) []auditEntry {
