@@ -1,12 +1,42 @@
+# 行尾策略：仓库内容一律 LF，检出到哪个平台都一样。
+#
+# 为什么必须显式声明：Windows 上 core.autocrlf=true 会把工作区检出成 CRLF。
+# 在这种工作区里改一个文件再提交，git 存进去的就是 CRLF——于是
+#   1) diff 变成"整个文件全部改动"，评审时看不出真实改动（本项目出现过一次：
+#      26 个原本 LF 的文件被改成 CRLF，连没碰过的 login.html 都被卷进去）；
+#   2) gofmt -l 会把所有 Go 文件标为未格式化，CI 直接红。
+*.go            text eol=lf
+*.py            text eol=lf
+*.js            text eol=lf
+*.html          text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.mod           text eol=lf
+*.sum           text eol=lf
+*.example       text eol=lf
+*.txt           text eol=lf
+*.ps1           text eol=lf
+INFO            text eol=lf
+LICENSE         text eol=lf
+Dockerfile      text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+.dockerignore   text eol=lf
+
 # DSM 在安装/启停时直接执行 spk/scripts/ 下的脚本。一旦带上 CRLF，
 # shebang 会变成 "#!/bin/sh\r"，DSM 报 bad interpreter 并把套件置为损坏。
-# 强制这些文件始终以 LF 检出，不受 core.autocrlf 影响。
 *.sh            text eol=lf
 spk/scripts/*   text eol=lf
 spk/INFO        text eol=lf
 spk/conf/*      text eol=lf
 spk/ui/config   text eol=lf
 spk/WIZARD_UIFILES/*  text eol=lf
+
+# cmd.exe 对 LF 结尾的批处理文件比较挑剔，这两个保持 CRLF。
+*.bat           text eol=crlf
 
 # 图标是二进制，别做任何换行处理
 *.png           binary
