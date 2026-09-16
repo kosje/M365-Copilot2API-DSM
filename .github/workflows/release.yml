@@ -197,19 +197,36 @@ jobs:
       - name: 确认线上 feed 已生效
         run: |
           set -eu
-          # Pages 构建需要一点时间；轮询而不是死等。
-          for i in $(seq 1 20); do
-            BODY="$(curl -sS -H 'Cache-Control: no-cache' \
-              "https://kosje.github.io/${{ github.repository_owner }}/M365-Copilot2API-DSM/index.json" || true)"
-            if printf '%s' "$BODY" | grep -q "${{ steps.v.outputs.infover }}"; then
-              echo "线上 feed 已是 ${{ steps.v.outputs.infover }}"
-              printf '%s' "$BODY" | python3 -m json.tool
+          # Pages 地址是 <owner>.github.io/<repo>/，不是 <owner>.github.io/<owner>/<repo>/。
+          # 从 GITHUB_REPOSITORY 推导，避免依赖事件负载里的字段。
+          PAGES_HOST="${GITHUB_REPOSITORY%%/*}.github.io"
+          PAGES_REPO="${GITHUB_REPOSITORY##*/}"
+          URL="https://${PAGES_HOST}/${PAGES_REPO}/index.json"
+          echo "feed: $URL"
+
+          SPK="m365-copilot2api-${{ steps.v.outputs.version }}.spk"
+          WANT_MD5="$(md5sum "$SPK" | cut -d' ' -f1)"
+          WANT_SIZE="$(wc -c < "$SPK" | tr -d ' ')"
+
+          # Pages 构建需要时间；轮询而不是死等。只认完整匹配，不信缓存。
+          for i in $(seq 1 24); do
+            BODY="$(curl -sS -H 'Cache-Control: no-cache' "$URL" || true)"
+            GOT_VER="$(printf '%s' "$BODY" | jq -r '.packages[0].version' 2>/dev/null || echo '')"
+            GOT_MD5="$(printf '%s' "$BODY" | jq -r '.packages[0].md5' 2>/dev/null || echo '')"
+            GOT_SIZE="$(printf '%s' "$BODY" | jq -r '.packages[0].size' 2>/dev/null || echo '')"
+            if [ "$GOT_VER" = "${{ steps.v.outputs.infover }}" ]; then
+              # 版本对了还不够：md5/size 必须对得上刚上传的那个文件，否则套件
+              # 中心会下载到一个校验失败或大小不符的包。
+              [ "$GOT_MD5" = "$WANT_MD5" ]   || { echo "::error::feed md5=$GOT_MD5，SPK 实际=$WANT_MD5"; exit 1; }
+              [ "$GOT_SIZE" = "$WANT_SIZE" ] || { echo "::error::feed size=$GOT_SIZE，SPK 实际=$WANT_SIZE"; exit 1; }
+              echo "线上 feed 已生效且与产物一致"
+              printf '%s' "$BODY" | jq .
               exit 0
             fi
-            echo "  等待 Pages 构建… ($i)"
+            echo "  等待 Pages 构建… ($i)  当前 version=${GOT_VER:-<空>}"
             sleep 15
           done
-          echo "::error::线上 feed 仍未出现 ${{ steps.v.outputs.infover }}，请检查 Pages 构建"
+          echo "::error::线上 feed 仍未出现 ${{ steps.v.outputs.infover }}，请检查 gh-pages 与 Pages 构建"
           exit 1
 
       - uses: actions/upload-artifact@v4
