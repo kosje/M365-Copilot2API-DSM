@@ -999,13 +999,18 @@ func (s *Server) persistChatUserMessage(m map[string]any) (string, []string) {
 			case "image_url":
 				if iu, ok := pm["image_url"].(map[string]any); ok {
 					if u, ok := iu["url"].(string); ok && strings.HasPrefix(u, "data:image/") {
-						if data, err := base64.StdEncoding.DecodeString(strings.SplitN(u, ",", 2)[1]); err == nil {
-							ct := "image/png"
-							if idx := strings.Index(u, ";"); idx > 5 {
-								ct = u[5:idx]
-							}
-							if id, err := s.chatUI.saveImage(data, ct); err == nil && len(imgs) < maxChatImages {
-								imgs = append(imgs, id)
+						// "data:image/png" with no comma has no payload, and
+						// SplitN(...)[1] panicked on it. The value comes straight
+						// from the caller, so it is not something to assume.
+						if sep := strings.IndexByte(u, ','); sep >= 0 {
+							if data, err := base64.StdEncoding.DecodeString(u[sep+1:]); err == nil {
+								ct := "image/png"
+								if idx := strings.Index(u, ";"); idx > 5 {
+									ct = u[5:idx]
+								}
+								if id, err := s.chatUI.saveImage(data, ct); err == nil && len(imgs) < maxChatImages {
+									imgs = append(imgs, id)
+								}
 							}
 						}
 					}

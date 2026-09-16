@@ -54,7 +54,13 @@ func imageURLs(raw []json.RawMessage) []string {
 
 func isImageURL(s string) bool {
 	if strings.HasPrefix(s, "data:image/") {
-		_, err := base64.StdEncoding.DecodeString(strings.SplitN(s, ",", 2)[1])
+		// Index the separator rather than assuming it exists: SplitN returns a
+		// one-element slice when there is no comma, and [1] panicked on it.
+		sep := strings.IndexByte(s, ',')
+		if sep < 0 {
+			return false
+		}
+		_, err := base64.StdEncoding.DecodeString(s[sep+1:])
 		return err == nil
 	}
 	u, err := url.Parse(s)

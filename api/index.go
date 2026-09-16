@@ -43,8 +43,17 @@ func initServer() {
 	s.InitM365CloudClient()
 	s.StartConvCacheGC()
 	s.RefreshExpiredTokens()
-	// StartAutoCleanup/StartPreheatPool are long-running loops; skip them in
-	// an ephemeral serverless environment where instances are short-lived.
+	// Not a loop: this loads audit.jsonl into memory so the console can show the
+	// audit log. cmd/server/main.go calls it, and skipping it here meant the
+	// audit view was silently empty on this deployment shape.
+	web.OpenAuditStore()
+	// Deliberately not called here, unlike cmd/server/main.go, because each one
+	// is a long-running background loop and this entry point runs in short-lived
+	// instances: StartAutoCleanup, StartPreheatPool, StartChatJanitor,
+	// StartQuotaRefresh, StartTokenRefresh, StartAlertMonitor and
+	// StartUpdateChecker. A token that expires between instances is refreshed on
+	// demand instead (RefreshExpiredTokens above covers the common case), and
+	// nothing here relies on a loop having run.
 	handler = s.Routes()
 	log.Println("m365-copilot2api serverless instance ready")
 }
