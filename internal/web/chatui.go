@@ -876,6 +876,7 @@ func (s *Server) chatProxy(w http.ResponseWriter, r *http.Request) {
 				failed = append(failed, iu)
 				continue
 			}
+			rawData, ct = stripImageMetadata(rawData, ct)
 			if id, err := s.chatUI.saveImage(rawData, ct); err == nil {
 				gen = append(gen, id)
 			} else {
@@ -1199,6 +1200,7 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 			results = append(results, genResult{err: fmt.Sprintf("第 %d 张数据无效", i+1)})
 			continue
 		}
+		img, _ = stripImageMetadata(img, "image/png")
 		id, err := s.chatUI.saveImage(img, "image/png")
 		if err != nil {
 			if i == 0 {

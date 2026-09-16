@@ -493,6 +493,7 @@ func (s *Server) storeGeneratedImage(data []byte, contentType string) string {
 			delete(s.generatedImages, oldestID)
 		}
 	}
+	data, contentType = stripImageMetadata(data, contentType)
 	s.generatedImages[id] = generatedImage{Data: append([]byte(nil), data...), ContentType: contentType, ExpiresAt: now.Add(generatedImageTTL)}
 	return id
 }
@@ -669,6 +670,7 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 		if strings.HasPrefix(strings.ToLower(u), "data:image/") {
 			if _, payload, ok := strings.Cut(u, ","); ok {
 				if data, err := base64.StdEncoding.DecodeString(payload); err == nil && len(data) > 0 {
+					data, _ = stripImageMetadata(data, "image/png")
 					if id, serr := s.chatUI.saveImage(data, "image/png"); serr == nil {
 						b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
 						continue
@@ -686,6 +688,7 @@ func (s *Server) upstreamImagesToMarkdown(baseURL string, urls []string, acc aut
 		}
 		if err == nil {
 			if data, derr := base64.StdEncoding.DecodeString(b64); derr == nil && len(data) > 0 {
+				data, ct = stripImageMetadata(data, ct)
 				if id, serr := s.chatUI.saveImage(data, ct); serr == nil {
 					b.WriteString(fmt.Sprintf("\n![生成图片 %d](%s/api/chatui/file/%s)", idx, baseURL, id))
 					continue
