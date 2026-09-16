@@ -2,6 +2,8 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math/big"
@@ -130,4 +132,70 @@ func removeBootstrapPasswordFile() {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Printf("[admin] could not remove bootstrap password file %s: %v", path, err)
 	}
+}
+
+// adminEnvFingerprintPath is where the fingerprint of the last password applied
+// from an external source is recorded, so a plain restart does not keep
+// reapplying it. Returns "" when the data directory is unknown.
+func adminEnvFingerprintPath() string {
+	if dir := strings.TrimSpace(os.Getenv("M365_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "admin-envhash")
+	}
+	return ""
+}
+
+// fingerprintOf returns the hex digest recorded for a plaintext password.
+func fingerprintOf(plain string) string {
+	sum := sha256.Sum256([]byte(plain))
+	return hex.EncodeToString(sum[:])
+}
+
+// passwordFingerprintMatches reports whether plain was the last password
+// applied from an external source. An unknown data directory never matches, so
+// the caller treats the value as new - the previous behaviour.
+func passwordFingerprintMatches(plain string) bool {
+	path := adminEnvFingerprintPath()
+	if path == "" {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(b)) == fingerprintOf(plain)
+}
+
+func writePasswordFingerprint(plain string) {
+	path := adminEnvFingerprintPath()
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(fingerprintOf(plain)), 0600); err != nil {
+		log.Printf("[admin] could not record the password fingerprint at %s: %v", path, err)
+	}
+}
+
+// readAndConsumePasswordReset reads a pending administrator password and
+// deletes the file, so the cleartext does not outlive its single use.
+//
+// This is how the DSM package hands over the password from its install wizard:
+// passing it through M365_ADMIN_PASSWORD would expose it in
+// /proc/<pid>/environ for the lifetime of the process, and leaving it on disk
+// would keep it around indefinitely. Note that the value participates in the
+// fingerprint comparison, unlike M365_ADMIN_PASSWORD_BOOTSTRAP_FILE - which is
+// only consulted when no password is stored at all, and therefore cannot
+// implement "reinstall to reset the password" once a data directory survives an
+// uninstall.
+func readAndConsumePasswordReset(path string) (string, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	// Delete before applying: a failure to apply must not leave the cleartext
+	// on disk indefinitely. The operator still knows the value they typed.
+	if rerr := os.Remove(path); rerr != nil {
+		log.Printf("[admin] could not remove the password reset file %s: %v", path, rerr)
+	}
+	plain := strings.TrimSpace(string(b))
+	if plain == "" {
+		return "", false
+	}
+	return plain, true
 }

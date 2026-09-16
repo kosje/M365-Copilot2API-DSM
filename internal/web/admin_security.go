@@ -1,9 +1,7 @@
 package web
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -155,6 +153,33 @@ func loadAdminCredentials() (string, []string, bool, error) {
 		}
 	}
 
+	// Install-wizard password handed over through a file instead of the
+	// environment. The DSM package uses this so the cleartext never appears in
+	// /proc/<pid>/environ for the lifetime of the process; the file is deleted
+	// as soon as it is read so it does not linger on disk either.
+	//
+	// It shares the fingerprint written by the M365_ADMIN_PASSWORD path below,
+	// so re-running an install with the same wizard password does not keep
+	// undoing a password the operator changed in the console afterwards.
+	if resetPath := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD_RESET_FILE")); resetPath != "" {
+		if pending, ok := readAndConsumePasswordReset(resetPath); ok {
+			if pending == defaultAdminPassword {
+				return "", nil, false, errors.New("the administrator password in M365_ADMIN_PASSWORD_RESET_FILE must not be the retired default; choose a strong one")
+			}
+			if adminEnvFingerprintPath() != "" && !passwordFingerprintMatches(pending) {
+				h, prev, err := applyExternalAdminPassword(pending)
+				if err != nil {
+					return "", nil, false, err
+				}
+				writePasswordFingerprint(pending)
+				auditLog(nil, "admin_password_reset", "install wizard password applied from M365_ADMIN_PASSWORD_RESET_FILE")
+				log.Printf("[admin] password reset from the install wizard password file (value changed)")
+				return h, prev, false, nil
+			}
+			auditLog(nil, "admin_password_reset", "install wizard password file ignored (same as the last applied value)")
+		}
+	}
+
 	// Install-wizard / env password: whenever M365_ADMIN_PASSWORD differs from
 	// the last value applied from the environment (tracked in
 	// <data dir>/admin-envhash), reset the administrator password to it.
@@ -163,27 +188,13 @@ func loadAdminCredentials() (string, []string, bool, error) {
 	// routine restart after the password was changed in the web UI) does NOT
 	// override the web-set password.
 	if envP := strings.TrimSpace(os.Getenv("M365_ADMIN_PASSWORD")); envP != "" && envP != defaultAdminPassword {
-		if dir := strings.TrimSpace(os.Getenv("M365_DATA_DIR")); dir != "" {
-			marker := filepath.Join(dir, "admin-envhash")
-			sum := sha256.Sum256([]byte(envP))
-			mark := hex.EncodeToString(sum[:])
-			changed := true
-			if b, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(b)) == mark {
-				changed = false
-			}
-			if changed {
-				var prev adminPasswordData
-				if bb, err := os.ReadFile(primary); err == nil {
-					_ = json.Unmarshal([]byte(strings.TrimSpace(string(bb))), &prev)
-				}
-				if h, herr := hashPassword(envP); herr == nil {
-					if err := saveAdminPasswordWithHistory(h, prev.History, prev.Hash); err == nil {
-						_ = os.WriteFile(marker, []byte(mark), 0600)
-						auditLog(nil, "admin_password_reset", "install wizard password applied (env value changed)")
-						log.Printf("[admin] password reset from M365_ADMIN_PASSWORD (wizard/env value changed)")
-						return h, prev.History, false, nil
-					}
-				}
+		if adminEnvFingerprintPath() != "" && !passwordFingerprintMatches(envP) {
+			h, prev, err := applyExternalAdminPassword(envP)
+			if err == nil {
+				writePasswordFingerprint(envP)
+				auditLog(nil, "admin_password_reset", "install wizard password applied (env value changed)")
+				log.Printf("[admin] password reset from M365_ADMIN_PASSWORD (wizard/env value changed)")
+				return h, prev, false, nil
 			}
 		}
 	}
@@ -319,6 +330,25 @@ func loadAdminCredentials() (string, []string, bool, error) {
 func loadAdminPassword() (string, bool, error) {
 	hash, _, mustChange, err := loadAdminCredentials()
 	return hash, mustChange, err
+}
+
+// applyExternalAdminPassword installs plain as the administrator password,
+// carrying the existing history forward so password reuse is still detected.
+// It returns the new hash and the history to keep in memory.
+func applyExternalAdminPassword(plain string) (string, []string, error) {
+	h, err := hashPassword(plain)
+	if err != nil {
+		return "", nil, err
+	}
+	primary, _ := adminPasswordPaths()
+	var prev adminPasswordData
+	if bb, rerr := os.ReadFile(primary); rerr == nil {
+		_ = json.Unmarshal([]byte(strings.TrimSpace(string(bb))), &prev)
+	}
+	if err := saveAdminPasswordWithHistory(h, prev.History, prev.Hash); err != nil {
+		return "", nil, err
+	}
+	return h, prev.History, nil
 }
 
 func saveAdminPasswordWithHistory(newHash string, history []string, oldHash string) error {

@@ -2,26 +2,97 @@
 # Put back anything the payload swap removed, then hand ownership back to the
 # service account. Existing files win: the new package must never overwrite
 # live account data with defaults.
+#
+# The snapshot is only deleted once the restore has been verified. The previous
+# revision always exited 0: a failed `cp` (with its error redirected to
+# /dev/null) would delete the only copy and still let Package Center report a
+# successful upgrade, so the operator discovered the loss only by logging in.
 
-set -u
+set -eu
 
-VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+PKG="${SYNOPKG_PKGNAME:-m365-copilot2api}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
-BACKUP="$VAR_DIR/data-preupgrade"
+LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-postupgrade.log}"
+
+log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+
+# Must match preupgrade's retain_base().
+retain_base() {
+    for vol in ${SYNOPKG_PKGDEST_VOL:-} /volume1 /volume2 /volume3 /volume4 /volume5; do
+        [ -n "$vol" ] || continue
+        [ -d "$vol/@appdata" ] || continue
+        printf '%s/@appdata/%s\n' "$vol" "$PKG"
+        return 0
+    done
+    printf '%s\n' "$VAR_DIR/.."
+}
+
+RETAIN="$(retain_base)"
+BACKUP="$RETAIN/preupgrade-snapshot"
+PREVIOUS="$BACKUP.previous"
+# Where revisions before this one kept their snapshot. Restore it if present so
+# an install that upgrades across this change still recovers.
+LEGACY_BACKUP="$VAR_DIR/data-preupgrade"
 
 mkdir -p "$DATA_DIR"
 
+# restore_from <dir>: merge missing files in, then confirm the result is usable.
+# Returns non-zero without deleting anything when the merge cannot be trusted.
+restore_from() {
+    src="$1"
+    [ -d "$src" ] || return 1
+    # A snapshot that holds files but no accounts.json cannot be trusted: the
+    # data is incomplete. Keep it for inspection instead of deleting the only
+    # copy. (A snapshot with nothing in it at all is a legitimately empty
+    # install and is cleaned up normally.)
+    if [ ! -s "$src/accounts.json" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+        log "postupgrade: snapshot at $src has no accounts.json; keeping it"
+        return 1
+    fi
+    if ! cp -an "$src/." "$DATA_DIR/"; then
+        log "postupgrade: restore from $src failed; keeping it for manual recovery"
+        return 1
+    fi
+    if [ -s "$src/accounts.json" ] && [ ! -s "$DATA_DIR/accounts.json" ]; then
+        log "postupgrade: $DATA_DIR/accounts.json is still missing after restoring from $src"
+        return 1
+    fi
+    return 0
+}
+
+restored=0
 if [ -d "$BACKUP" ]; then
-    cp -an "$BACKUP/." "$DATA_DIR/" 2>/dev/null
-    rm -rf "$BACKUP"
+    if restore_from "$BACKUP"; then
+        rm -rf "$BACKUP" "$PREVIOUS" 2>/dev/null || true
+        restored=1
+        log "postupgrade: restored $DATA_DIR from $BACKUP"
+    else
+        log "postupgrade: keeping $BACKUP (and $PREVIOUS) for manual recovery"
+    fi
+elif [ -d "$LEGACY_BACKUP" ]; then
+    if restore_from "$LEGACY_BACKUP"; then
+        rm -rf "$LEGACY_BACKUP" 2>/dev/null || true
+        restored=1
+        log "postupgrade: restored $DATA_DIR from the pre-1.6.6 snapshot at $LEGACY_BACKUP"
+    else
+        log "postupgrade: keeping $LEGACY_BACKUP for manual recovery"
+    fi
+fi
+
+if [ "$restored" = 0 ] && [ ! -s "$DATA_DIR/accounts.json" ] && [ -d "$PREVIOUS" ]; then
+    log "postupgrade: $DATA_DIR has no accounts.json; trying the previous snapshot at $PREVIOUS"
+    if restore_from "$PREVIOUS"; then
+        log "postupgrade: recovered from $PREVIOUS"
+    fi
 fi
 
 OWNER="$(stat -c '%U:%G' "$VAR_DIR" 2>/dev/null || true)"
 if [ -n "$OWNER" ] && [ "$OWNER" != "root:root" ]; then
-    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null
+    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null || true
 elif [ -n "${SYNOPKG_PKGNAME:-}" ] && id "$SYNOPKG_PKGNAME" >/dev/null 2>&1; then
-    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null
+    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null || true
 fi
-chmod 700 "$DATA_DIR" 2>/dev/null
+chmod 700 "$DATA_DIR" 2>/dev/null || true
 
 exit 0

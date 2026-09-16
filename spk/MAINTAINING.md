@@ -77,7 +77,21 @@ grep -c '设备码登录（推荐）'              web/index.html               
 
 **套件用户名不要猜** —— `conf/privilege` 的 `run-as: package` 产生什么账号名不可硬编码，猜错则 `chown` 静默跳过，数据目录留在 root 名下、服务写不进去。脚本改为从 DSM 建好的 `var` 目录继承属主。
 
-**向导密码的重置走 `M365_ADMIN_PASSWORD`** —— 不是 `M365_ADMIN_PASSWORD_BOOTSTRAP_FILE`。后者只在「完全没有密码」时才生效，而数据目录跨卸载留存，持久化密码永远优先，于是「重装改密码」形同虚设。应用侧靠 `<data dir>/admin-envhash` 指纹判断值是否变化。
+**向导密码走 `M365_ADMIN_PASSWORD_RESET_FILE`，不是 `M365_ADMIN_PASSWORD`** —— `postinst` 把向导口令写进
+`var/admin-password-reset`（0600），`start-stop-status` 只导出**文件路径**；服务启动时读取、**立即删除**该文件，
+并把口令的 sha256 指纹写进 `<data dir>/admin-envhash`。指纹一致就不再应用，所以「重装填新密码 = 重置」成立，
+日常重启不会覆盖你在网页端改过的密码。改用文件而非环境变量的原因：常驻进程的环境变量对**同 uid 的任何进程**
+可读（`/proc/<pid>/environ`），而旧实现把明文一直留在 `var/admin-password-wizard` 里从不删除。
+
+`M365_ADMIN_PASSWORD_BOOTSTRAP_FILE` 仍然刻意不用：它只在「完全没有密码」时才生效，而数据目录跨卸载留存，
+持久化密码永远优先，于是「重装改密码」形同虚设。
+
+**在包目录里放快照等于没放** —— `preupgrade` 快照与 `preuninst` 留存都放在
+`<卷>/@appdata/m365-copilot2api/` 下，**不在** `/var/packages/<pkg>/` 里。如果 DSM 升级时清掉包目录（这正是
+快照存在的理由），放在里面的副本会跟原件一起消失。保留旧位置的回填逻辑，便于跨版本升级。
+
+**复制失败必须让升级失败** —— `cp` 的退出码要检查，且**校验通过之前不能删唯一副本**。旧实现把 `cp` 的错误
+重定向到 `/dev/null` 再无条件 `rm -rf`，磁盘满时会从「有备份」直接变成「没备份」，而套件中心仍显示升级成功。
 
 **`git show HEAD:path` 会施加检出过滤** —— 查仓库里真实的行尾要用 `git cat-file -p`，或直接数 CR 字节。
 
@@ -103,11 +117,36 @@ GitHub Pages 只能提供静态 GET，无法按请求过滤架构——DSM 会�
 
 **控制台页脚的 `v0.4.0`** —— 上游 `web/index.html` 里写死的历史遗留字符串，与实际版本无关，以 `/api/version` 为准。
 
+## 生命周期脚本的回归测试
+
+`spk/tests/lifecycle.sh` 会**真的执行**这些钩子（不是语法检查），在临时目录里搭一套模拟的套件树，
+模拟「DSM 把包目录清空」这一悲观场景，断言快照、回填、留存、口令交付的结果。
+
+```bash
+bash spk/tests/lifecycle.sh     # 34 项断言
+```
+
+历史教训是：这些脚本看着没问题，但 `cp` 失败被吞、postupgrade 恒 `exit 0`、留存目录放在包目录里，
+任何一条都能静默丢掉全部账号。改动这几个脚本后务必跑一遍。
+
 ## 待验证
 
-下面两条需要在真机上确认，我没有 NAS 的访问权限：
+下面几条需要在真机上确认，我没有 NAS 的访问权限：
 
-1. **卸载留存目录是否真的有效** —— `preuninst` 把数据复制到 `/var/packages/m365-copilot2api/keep`。如果 DSM 卸载时整个删除 `/var/packages/<pkg>/`，这个留存就失效了。飞牛版把它放在包目录**之外**（`/vol1/@appdata/...`），显然是刻意的。
-   验证：装好后 `sudo touch /var/packages/m365-copilot2api/keep/probe`，卸载（不勾删除数据），看文件是否还在。
+1. **`@appdata` 是否可写、路径是否如预期** —— 快照与留存现在放在
+   `<卷>/@appdata/m365-copilot2api/`。`retain_base()` 会依次探测 `$SYNOPKG_PKGDEST_VOL`、`/volume1`…
+   `/volume5` 里的 `@appdata`，取第一个存在的；全都不存在时回退到包目录的上一级。选中的路径会写进套件日志。
+   验证：`grep -i '@appdata' /var/packages/m365-copilot2api/var/data/app.log` 或套件日志。
 
-2. **「删除数据」是否真的删干净** —— `preuninst` 判断的 `pkgwizard_delete_data` 变量，因为没提供卸载向导，**永远不会被设置**。若 DSM 自带的删除选项走别的机制，勾了之后 `keep` 里的副本可能仍在盘上——M365 token 不会被真正清除，这是隐私问题。
+2. **卸载后留存目录是否真的还在** —— 现在它在包目录之外，**理论上**不受卸载影响，这正是改动的目的。
+   验证：装好 → 卸载（不勾删除数据）→ 看
+   `/volume1/@appdata/m365-copilot2api/keep/accounts.json` 是否还在。
+
+3. **「删除数据」是否真的删干净** —— `preuninst` 会响应 `pkgwizard_delete_data=true` 与
+   `SYNOPKG_PKG_STATUS=UNINSTALL_DELDATA` 两种信号。因为本套件没有卸载向导，这两个变量可能永远不会被设置，
+   此时留存副本会保留（M365 token 不会被清除）。验证：勾选删除数据后卸载，看
+   `/volume1/@appdata/m365-copilot2api/keep/` 是否还在；若还在，需要手工删除，或补一个卸载向导。
+
+4. **`admin-password-reset` 的权限位** —— `postinst` 用 `umask 077` + `chmod 600` 写入。Windows 不映射
+   POSIX 权限位，本地测试只能跳过这一项。验证：安装后 `stat -c '%a' /var/packages/m365-copilot2api/var/admin-password-reset`
+   应为 600；并确认首次启动后该文件已被服务删除。

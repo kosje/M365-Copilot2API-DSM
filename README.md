@@ -52,8 +52,13 @@
 2. 套件中心 → 右上角**手动安装** → 选择该 SPK
 3. 会提示「由第三方开发者提供，未经 Synology 验证」→ 点**确定**
    > DSM 7 取消了 DSM 6 时代的「任何发布者」信任级别开关，所有社区套件都会弹这个提示，**签名也无法消除**，属正常现象。
-4. 在安装向导中设置**管理员密码**（≥8 位）
+4. 在安装向导中设置**管理员密码**（至少 12 位，且需含大写、小写、数字、符号中的至少三类）
 5. 安装完成后访问 `http://群晖IP:4141`，或点击桌面上的 **Copilot2API** 图标
+
+> **安全提示：控制台是明文 HTTP。** 端口同时服务 API 与控制台，且不加密，因此管理员密码和会话 Cookie
+> 会在局域网上明文传输。接口必须能被局域网客户端访问，所以套件不会默认只监听回环。若你的网络不可信，
+> 请在群晖**反向代理**后面套一层 HTTPS 再对外暴露，详见 [SECURITY.md](SECURITY.md)。服务启动时若发现
+> 监听在非回环地址上，会在日志里打一条明确告警。
 
 ### 首次配置
 
@@ -64,16 +69,21 @@
 
 ## 升级与卸载
 
-**升级**：直接在套件中心手动安装新版 SPK 即可，**无需卸载**。`preupgrade` / `postupgrade` 钩子会在替换前快照数据目录、替换后回填，账号与 API Key 不会丢失。
+**升级**：直接在套件中心手动安装新版 SPK 即可，**无需卸载**。`preupgrade` 会在替换前把数据目录快照到
+**包目录之外**（`<卷>/@appdata/m365-copilot2api/preupgrade-snapshot`），`postupgrade` 在替换后回填并校验
+`accounts.json` 确实存在才清理快照。快照复制失败会**中止升级**而不是继续——拒绝升级可以重来，丢账号不能。
 
-**卸载**：默认**保留数据**到 `/var/packages/m365-copilot2api/keep`，重新安装时自动回填。要彻底清除请在卸载时勾选「删除数据」。
+**卸载**：默认**保留数据**到 `<卷>/@appdata/m365-copilot2api/keep`，重新安装时自动回填（仅在数据目录里
+还没有 `accounts.json` 时回填，否则会把你主动删掉的 API Key 复活）。要彻底清除请在该路径下手动删除；
+`preuninst` 也会把路径写进套件日志。
 
 **数据位置**：
 
 ```
-/var/packages/m365-copilot2api/var/data/     账号、API Key、用量、会话缓存
-/var/packages/m365-copilot2api/target/bin/   二进制
-/var/packages/m365-copilot2api/keep/         卸载留存
+<卷>/@appdata/m365-copilot2api/keep/                 卸载留存（重装自动回填）
+<卷>/@appdata/m365-copilot2api/preupgrade-snapshot/  升级快照（校验通过即删除）
+/var/packages/m365-copilot2api/var/data/             账号、API Key、用量、会话缓存
+/var/packages/m365-copilot2api/target/bin/           二进制
 ```
 
 ## 与上游 fnOS 版的差异

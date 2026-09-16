@@ -3,43 +3,101 @@
 # environment. Everything the service needs at runtime is prepared here
 # because the service itself runs unprivileged.
 
-set -u
+set -eu
 
-VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+PKG="${SYNOPKG_PKGNAME:-m365-copilot2api}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
-WIZARD_PW="$VAR_DIR/admin-password-wizard"
-KEEP_DIR="/var/packages/m365-copilot2api/keep"
+# Consumed and deleted by the service on its next start (see
+# M365_ADMIN_PASSWORD_RESET_FILE in internal/web/admin_bootstrap.go).
+RESET_PW="$VAR_DIR/admin-password-reset"
+LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-postinst.log}"
+MIN_PASSWORD_LEN=12
+
+log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+
+# Must match preupgrade's retain_base().
+retain_base() {
+    for vol in ${SYNOPKG_PKGDEST_VOL:-} /volume1 /volume2 /volume3 /volume4 /volume5; do
+        [ -n "$vol" ] || continue
+        [ -d "$vol/@appdata" ] || continue
+        printf '%s/@appdata/%s\n' "$vol" "$PKG"
+        return 0
+    done
+    printf '%s\n' "$VAR_DIR/.."
+}
+
+RETAIN="$(retain_base)"
+KEEP_DIR="$RETAIN/keep"
+# Where revisions before this one kept the retained copy.
+LEGACY_KEEP_DIR="/var/packages/$PKG/keep"
 
 mkdir -p "$DATA_DIR"
 
-# Restore user data left behind by a previous uninstall, without ever
-# clobbering files this install already produced.
-if [ -d "$KEEP_DIR" ] && [ -f "$KEEP_DIR/accounts.json" ]; then
-    cp -an "$KEEP_DIR/." "$DATA_DIR/" 2>/dev/null
-    echo "restored retained data from $KEEP_DIR on $(date)" >> "$DATA_DIR/restore.log" 2>/dev/null
+# Restore user data left behind by a previous uninstall.
+#
+# Only when this really is a fresh start: if accounts.json is already present
+# this is an upgrade or a repair over live data, and filling in missing files
+# from the retained copy would resurrect credentials the operator deliberately
+# deleted - a revoked API key, an old password hash. The previous revision
+# merged unconditionally, which did exactly that.
+restore_keep() {
+    src="$1"
+    [ -d "$src" ] && [ -f "$src/accounts.json" ] || return 1
+    if ! cp -an "$src/." "$DATA_DIR/"; then
+        log "postinst: restoring from $src failed"
+        return 1
+    fi
+    printf 'restored retained data from %s on %s\n' "$src" "$(date)" >> "$DATA_DIR/restore.log" 2>/dev/null || true
+    log "postinst: restored retained data from $src"
+}
+
+if [ -s "$DATA_DIR/accounts.json" ]; then
+    log "postinst: $DATA_DIR already holds accounts.json; not merging retained data"
+elif restore_keep "$KEEP_DIR" || restore_keep "$LEGACY_KEEP_DIR"; then
+    :
+else
+    log "postinst: no retained data to restore"
 fi
 
-# Stash the wizard password for start-stop-status to export as
-# M365_ADMIN_PASSWORD. The app fingerprints that value and re-applies it only
-# when it changes, so a reinstall with a new password resets a forgotten one
-# while ordinary restarts leave a console-changed password alone.
+# Hand the wizard password to the service through a file it consumes on the next
+# start, rather than exporting M365_ADMIN_PASSWORD from start-stop-status. The
+# environment of a long-running process is readable by any process running as
+# the same user (/proc/<pid>/environ), and the previous revision kept the
+# cleartext in $VAR_DIR/admin-password-wizard for the lifetime of the install.
+# The service deletes this file as soon as it has read it.
 if [ -n "${pkgwizard_admin_password:-}" ]; then
-    printf '%s' "$pkgwizard_admin_password" > "$WIZARD_PW"
-    chmod 600 "$WIZARD_PW"
+    if [ "${#pkgwizard_admin_password}" -lt "$MIN_PASSWORD_LEN" ]; then
+        # The wizard enforces the same rule in the UI; check it here too,
+        # because the installer can be driven non-interactively.
+        log "postinst: wizard password is shorter than $MIN_PASSWORD_LEN characters; not applying it"
+        rm -f "$RESET_PW" 2>/dev/null || true
+    else
+        umask 077
+        if printf '%s' "$pkgwizard_admin_password" > "$RESET_PW"; then
+            chmod 600 "$RESET_PW" 2>/dev/null || true
+            log "postinst: staged the install wizard password for the next service start"
+        else
+            log "postinst: could not stage the install wizard password"
+        fi
+    fi
 fi
+# Clear any staging file from an earlier revision, now that its cleartext has
+# been superseded.
+rm -f "$VAR_DIR/admin-password-wizard" 2>/dev/null || true
 
 # Hand everything under var/ to the service account. Take the owner from the
 # var directory DSM itself created rather than guessing a username: the
 # account name that conf/privilege's "run-as: package" produces is not
 # something to hardcode, and a wrong guess would silently skip the chown and
-# leave the data directory root-owned — which the unprivileged service cannot
+# leave the data directory root-owned - which the unprivileged service cannot
 # write to.
 OWNER="$(stat -c '%U:%G' "$VAR_DIR" 2>/dev/null || true)"
 if [ -n "$OWNER" ] && [ "$OWNER" != "root:root" ]; then
-    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null
+    chown -R "$OWNER" "$VAR_DIR" 2>/dev/null || true
 elif [ -n "${SYNOPKG_PKGNAME:-}" ] && id "$SYNOPKG_PKGNAME" >/dev/null 2>&1; then
-    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null
+    chown -R "$SYNOPKG_PKGNAME:$SYNOPKG_PKGNAME" "$VAR_DIR" 2>/dev/null || true
 fi
-chmod 700 "$DATA_DIR" 2>/dev/null
+chmod 700 "$DATA_DIR" 2>/dev/null || true
 
 exit 0

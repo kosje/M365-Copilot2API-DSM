@@ -1,17 +1,84 @@
 #!/bin/sh
 # Snapshot the data directory before DSM replaces the package payload, so a
 # failed or partial upgrade cannot take the M365 accounts with it.
+#
+# Two rules, both learned the hard way:
+#
+#  1. The snapshot must live OUTSIDE /var/packages/<pkg>/. If DSM clears the
+#     package directory during an upgrade - which is the whole reason this hook
+#     exists - then a snapshot stored inside it disappears together with the
+#     original, and the hook silently protects nothing. The fnOS port of this
+#     project keeps its retained data outside the package directory too.
+#
+#  2. A failed copy must abort the upgrade. The previous revision ran
+#     `cp ... 2>/dev/null` without checking the exit status and then deleted the
+#     only copy with `rm -rf`. Disk-full or a permission error therefore turned
+#     "we have a backup" into "we have nothing", silently.
+#
+# Exiting non-zero makes DSM abort the upgrade. That is deliberate: refusing to
+# upgrade is recoverable, losing the accounts is not.
 
-set -u
+set -eu
 
-VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/m365-copilot2api/var}"
+PKG="${SYNOPKG_PKGNAME:-m365-copilot2api}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
-BACKUP="$VAR_DIR/data-preupgrade"
+LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-preupgrade.log}"
 
-if [ -d "$DATA_DIR" ]; then
-    rm -rf "$BACKUP"
-    cp -a "$DATA_DIR" "$BACKUP" 2>/dev/null
-    chmod 700 "$BACKUP" 2>/dev/null
+log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+
+# retain_base prints a directory outside the package tree. DSM's persistent
+# per-package data lives under <volume>/@appdata, so prefer that and only fall
+# back to the package's parent if no volume exposes it.
+retain_base() {
+    for vol in ${SYNOPKG_PKGDEST_VOL:-} /volume1 /volume2 /volume3 /volume4 /volume5; do
+        [ -n "$vol" ] || continue
+        [ -d "$vol/@appdata" ] || continue
+        printf '%s/@appdata/%s\n' "$vol" "$PKG"
+        return 0
+    done
+    printf '%s\n' "$VAR_DIR/.."
+}
+
+RETAIN="$(retain_base)"
+BACKUP="$RETAIN/preupgrade-snapshot"
+PREVIOUS="$BACKUP.previous"
+
+if [ ! -d "$DATA_DIR" ]; then
+    log "preupgrade: no data directory at $DATA_DIR; nothing to snapshot"
+    exit 0
 fi
 
+# Keep the previous snapshot until the new one is verified, so a failed run
+# cannot leave the operator with no copy at all.
+if [ -d "$BACKUP" ]; then
+    rm -rf "$PREVIOUS" 2>/dev/null || true
+    if ! mv "$BACKUP" "$PREVIOUS"; then
+        log "preupgrade: cannot rotate $BACKUP out of the way; aborting"
+        exit 1
+    fi
+fi
+
+if ! mkdir -p "$RETAIN"; then
+    log "preupgrade: cannot create $RETAIN; aborting"
+    exit 1
+fi
+
+if ! cp -a "$DATA_DIR" "$BACKUP"; then
+    log "preupgrade: snapshot copy failed - aborting the upgrade rather than risking the data"
+    if [ ! -d "$BACKUP" ] && [ -d "$PREVIOUS" ]; then
+        mv "$PREVIOUS" "$BACKUP" 2>/dev/null || true
+    fi
+    exit 1
+fi
+
+# An accounts.json that exists in the source but not in the snapshot means the
+# snapshot is not usable; fail here rather than discovering it during restore.
+if [ -s "$DATA_DIR/accounts.json" ] && [ ! -s "$BACKUP/accounts.json" ]; then
+    log "preupgrade: snapshot at $BACKUP is missing accounts.json; aborting"
+    exit 1
+fi
+
+SIZE="$(du -sk "$BACKUP" 2>/dev/null | awk '{print $1}')"
+log "preupgrade: snapshot of $DATA_DIR written to $BACKUP (${SIZE:-?} KiB); previous copy kept at $PREVIOUS"
 exit 0
