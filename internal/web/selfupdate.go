@@ -228,20 +228,46 @@ func refreshUpdateInfo() updateInfo {
 	return info
 }
 
+// updateRefreshMu serialises refreshes. updateMu only guards the cached values,
+// and holding it across the outbound requests would block every reader; without
+// a separate single-flight lock, N concurrent callers that all observe a stale
+// cache each run their own round of requests (up to four mirrors with a 12s
+// timeout each).
+var updateRefreshMu sync.Mutex
+
 // cachedUpdateInfo returns the cached check result, refreshing when stale
-// (30 min for success, 10 min for failures).
+// (30 min for success, 10 min for failures). Concurrent callers share a single
+// refresh.
 func cachedUpdateInfo() updateInfo {
+	if info, ok := cachedUpdateInfoFresh(); ok {
+		return info
+	}
+	updateRefreshMu.Lock()
+	defer updateRefreshMu.Unlock()
+	// Another goroutine may have completed a refresh while we waited.
+	if info, ok := cachedUpdateInfoFresh(); ok {
+		return info
+	}
+	return refreshUpdateInfo()
+}
+
+// cachedUpdateInfoFresh reports the cached result when it is still within its
+// TTL.
+func cachedUpdateInfoFresh() (updateInfo, bool) {
 	updateMu.Lock()
 	cached, at, failed := lastUpdateInfo, lastCheckAt, lastCheckFailed
 	updateMu.Unlock()
+	if at.IsZero() {
+		return updateInfo{}, false
+	}
 	ttl := 30 * time.Minute
 	if failed {
 		ttl = 10 * time.Minute
 	}
-	if !at.IsZero() && time.Since(at) < ttl {
-		return cached
+	if time.Since(at) < ttl {
+		return cached, true
 	}
-	return refreshUpdateInfo()
+	return updateInfo{}, false
 }
 
 // updateHandler serves GET /api/update (public): real update check with

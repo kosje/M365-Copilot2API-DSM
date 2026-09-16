@@ -1,0 +1,45 @@
+# Keep the build context to source only. Without this file `COPY . .` pulled in
+# the local .env, accounts.json, the data directory, .git and any built SPK - all
+# of which then sat in an image layer and in the build cache.
+.git
+.gitignore
+.github
+
+# Local configuration and runtime state
+.env
+.env.*
+data/
+secrets/
+accounts.json
+conversations.json
+sessions.json
+*.token
+*.tokens
+*.pid
+*.har
+debug-logs.jsonl
+*.log
+
+# Build output and packaging assets
+*.spk
+*.exe
+*.exe~
+.spkbuild*
+.spkbin/
+.spkverify*/
+.gh-pages/
+checksums.txt
+gocache/
+gopath/
+
+# Not needed to build the binary
+docs/
+tests/
+migrate/
+scripts/
+spk/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store

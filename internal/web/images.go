@@ -610,7 +610,38 @@ func downloadImageAsBase64WithToken(url, token string) (b64, contentType string,
 	return downloadImageWithContext(ctx, url, token)
 }
 
+// imageDownloadClient builds the client used to fetch a remote image that a
+// model response pointed at.
+//
+// A plain http.DefaultClient is wrong here on three counts: it follows up to ten
+// redirects with no re-validation, it ignores the configured outbound proxy, and
+// it applies no restriction on the target address. The chat UI caches whatever
+// this returns and serves it back from /api/chatui/file/, so an unrestricted
+// fetch is a read primitive against the local network.
+func imageDownloadClient() *http.Client {
+	c := outbound.UntrustedHTTPClient(30 * time.Second)
+	if outbound.UsingProxy() {
+		// The guard lives on the dialer, and a configured proxy owns the dial.
+		log.Printf("[image-download] an outbound proxy is configured; downloads are not " +
+			"address-restricted because the proxy performs the connection")
+	}
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 4 {
+			return fmt.Errorf("image download: too many redirects")
+		}
+		// Re-validate every hop: the first URL passing the check says nothing
+		// about where a 302 leads.
+		return chathub.ValidateRemoteDownloadURL(req.URL.String())
+	}
+	return c
+}
+
 func downloadImageWithContext(ctx context.Context, url, token string) (b64, contentType string, err error) {
+	// Fail early with a clear message; the dial-time guard in
+	// outbound.DialControl is what actually makes this unforgeable.
+	if err := chathub.ValidateRemoteDownloadURL(url); err != nil {
+		return "", "", err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", "", err
@@ -618,7 +649,7 @@ func downloadImageWithContext(ctx context.Context, url, token string) (b64, cont
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := imageDownloadClient().Do(req)
 	if err != nil {
 		return "", "", err
 	}
@@ -633,38 +664,32 @@ func downloadImageWithContext(ctx context.Context, url, token string) (b64, cont
 	if len(body) > maxGeneratedImageBytes {
 		return "", "", fmt.Errorf("generated image exceeds size limit")
 	}
-	ct := resp.Header.Get("Content-Type")
+	ct := normalizeImageContentType(resp.Header.Get("Content-Type"), body)
 	if ct == "" {
-		ct = http.DetectContentType(body)
+		return "", "", fmt.Errorf("image download: response is not an image (content-type %q)", resp.Header.Get("Content-Type"))
 	}
 	enc := base64.StdEncoding.EncodeToString(body)
 	return enc, ct, nil
 }
 
-func downloadImageAsDataURI(url string) (string, error) {
-	b64, ct, err := downloadImageAsBase64(url)
-	if err != nil {
-		return url, nil
+// normalizeImageContentType returns the content type when it really is an image
+// and "" otherwise. The stored type decides the file extension, and only known
+// image extensions can be read back out, so accepting a non-image type here
+// would file arbitrary bytes under a misleading name.
+func normalizeImageContentType(raw string, body []byte) string {
+	ct := strings.TrimSpace(raw)
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
 	}
-	return "data:" + ct + ";base64," + b64, nil
-}
-
-func downloadImageAsDataURIWithToken(url, token string) (string, error) {
-	b64, ct, err := downloadImageAsBase64WithToken(url, token)
-	if err != nil {
-		urlPreview := url
-		if len(urlPreview) > 80 {
-			urlPreview = urlPreview[:80]
-		}
-		log.Printf("[image-download] failed url=%s token_len=%d err=%v", urlPreview, len(token), err)
-		return url, nil
+	switch strings.ToLower(ct) {
+	case "", "application/octet-stream", "binary/octet-stream":
+		// Some CDNs serve images with no useful type; fall back to sniffing.
+		ct = http.DetectContentType(body)
 	}
-	urlPreview := url
-	if len(urlPreview) > 80 {
-		urlPreview = urlPreview[:80]
+	if !strings.HasPrefix(strings.ToLower(ct), "image/") {
+		return ""
 	}
-	log.Printf("[image-download] ok url=%s ct=%s size=%d", urlPreview, ct, len(b64))
-	return "data:" + ct + ";base64," + b64, nil
+	return ct
 }
 
 // upstreamImagesToMarkdown delivers images in the standard content field.

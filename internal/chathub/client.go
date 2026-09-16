@@ -444,7 +444,20 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 	_ = phase
 	attachCh := make(chan error, 1)
 	if len(req.Attachments) > 0 {
-		go func() { attachCh <- c.uploadAttachments(ctx, acc, req.ConversationID, req.Attachments) }()
+		go func() {
+			// Never let a panic in this goroutine take the process down; the
+			// channel is buffered so a panic still has somewhere to report.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("chathub attachment upload panic: %v", r)
+					select {
+					case attachCh <- fmt.Errorf("attachment upload panicked: %v", r):
+					default:
+					}
+				}
+			}()
+			attachCh <- c.uploadAttachments(ctx, acc, req.ConversationID, req.Attachments)
+		}()
 	}
 
 	dialStarted := time.Now()
@@ -466,6 +479,11 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 		}
 		if reused {
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("chathub pool warm panic: %v", r)
+					}
+				}()
 				warmCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				warmReqID := uuid.NewString()
@@ -517,16 +535,27 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 			connWriteMu.Lock()
 			defer connWriteMu.Unlock()
 		}
+		// Refresh per write rather than setting it once: a write deadline that
+		// has already expired cannot be recovered from, so a single early
+		// SetWriteDeadline would silently break every later write - including
+		// the keepalive pings - on a long-lived call.
+		_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 		return conn.WriteMessage(msgType, data)
 	}
 
-	returnConn := false
+	// The connection is always closed when the request ends.
+	//
+	// Earlier revisions carried a `returnConn` flag and a Pool.Return path that
+	// would have handed the socket back to the pool, but no code path ever set
+	// the flag to true, so the branch was unreachable and Return was dead code.
+	// Setting it is not simply a matter of flipping a boolean: the pool's park
+	// goroutine is the connection's permanent single reader (gorilla poisons a
+	// conn after any read error, including deadline expiry), so a socket cannot
+	// safely be handed back once a request has read from it. The pool therefore
+	// warms the TLS and websocket handshake so the first request is fast, and
+	// each taken connection is used once.
 	defer func() {
-		if returnConn && conn != nil && c.Pool != nil {
-			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			c.Pool.Return(acc.OID, acc.TID, conn)
-		} else if conn != nil {
+		if conn != nil {
 			conn.Close()
 		}
 	}()
@@ -534,24 +563,29 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 	phase = PhaseUpload
 	if len(req.Attachments) > 0 {
 		if attachErr := <-attachCh; attachErr != nil {
-			returnConn = false
 			return Result{}, fmt.Errorf("upload attachment: %w", attachErr)
 		}
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
-	_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	if reused {
+		// The pool's park goroutine owns the read for a pooled connection, so a
+		// deadline set here would fire against *its* ReadMessage - capping every
+		// reused response at 45s, and gorilla does not let a connection recover
+		// from a read deadline. Bounding comes from the loop deadline below and
+		// from ctx cancellation instead.
+		_ = conn.SetReadDeadline(time.Time{})
+	} else {
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+	}
 
 	if !reused {
 		if err := wsWrite(websocket.TextMessage, []byte(`{"protocol":"json","version":1}`+rs)); err != nil {
-			returnConn = false
 			if errors.Is(err, context.Canceled) {
 				return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: err}
 			}
 			return Result{}, &DialError{Status: 0, Kind: "WS_HANDSHAKE", cause: fmt.Errorf("handshake send: %w", err)}
 		}
 		if _, _, err := conn.ReadMessage(); err != nil {
-			returnConn = false
 			if errors.Is(err, context.Canceled) {
 				return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: err}
 			}
@@ -578,7 +612,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 	payloadSentAt := time.Now()
 	ts := Timestamps{RequestSent: payloadSentAt.UTC().Format(time.RFC3339Nano)}
 	if err := wsWrite(websocket.TextMessage, []byte(payload)); err != nil {
-		returnConn = false
 		if errors.Is(err, context.Canceled) {
 			return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: err}
 		}
@@ -713,7 +746,16 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		defer close(readCh)
+		// A panic here would kill the process: internal/web's recover
+		// middleware wraps handlers, not goroutines. A goroutine that dies
+		// without closing readCh also strands the loop below, so the deferred
+		// close is the important part.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("chathub ws reader panic: %v", r)
+			}
+			close(readCh)
+		}()
 		for {
 			if reused {
 				var msg []byte
@@ -762,11 +804,21 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 			}
 		}
 	}()
+	// Enforce the deadline with a timer, not only with the loop condition: that
+	// condition is re-evaluated only after a read arrives, so a stalled reader
+	// blocked here forever. That is reachable - the pool's park goroutine can
+	// exit - and a request stuck here keeps an account concurrency slot, which
+	// eventually takes the account out of service entirely.
+	deadlineTimer := time.NewTimer(time.Until(deadline))
+	defer deadlineTimer.Stop()
 	for time.Now().Before(deadline) {
 		var read wsRead
 		select {
+		case <-deadlineTimer.C:
+			_ = conn.Close()
+			return Result{}, &DialError{Status: 0, Kind: "WS_READ_TIMEOUT",
+				cause: fmt.Errorf("no upstream response within %s", time.Since(startedAt).Truncate(time.Second))}
 		case <-ctx.Done():
-			returnConn = false
 			_ = conn.Close()
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: ctx.Err()}
@@ -775,19 +827,16 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 		case r, ok := <-readCh:
 			if !ok {
 				if ctx.Err() != nil {
-					returnConn = false
 					if errors.Is(ctx.Err(), context.Canceled) {
 						return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: ctx.Err()}
 					}
 					return Result{}, &DialError{Status: 0, Kind: "WS_READ_TIMEOUT", cause: ctx.Err()}
 				}
-				returnConn = false
 				return Result{}, fmt.Errorf("ws read before completion: %w", io.ErrUnexpectedEOF)
 			}
 			read = r
 		}
 		if read.err != nil {
-			returnConn = false
 			if errors.Is(read.err, context.Canceled) {
 				return Result{}, &DialError{Status: 0, Kind: "CLIENT_CANCELED", cause: fmt.Errorf("ws read before completion: %w", read.err)}
 			}
@@ -842,7 +891,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 						beforeTools := len(seenStreamTools)
 						for _, ev := range extractToolEvents(arg, seenStreamTools) {
 							if err := onEvent(ev); err != nil {
-								returnConn = false
 								return Result{}, err
 							}
 						}
@@ -858,7 +906,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 						ev.Raw = eventRaw(arg)
 						if ev.Kind != "text" && onEvent != nil {
 							if err := onEvent(ev); err != nil {
-								returnConn = false
 								return Result{}, err
 							}
 						}
@@ -900,11 +947,9 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 						// 33-47 upstream frames into 2-3 giant SSE chunks.
 						if streamed.Len() > 0 {
 							if err := emitDelta(w); err != nil {
-								returnConn = false
 								return Result{}, err
 							}
 						} else if err := emitSnapshot(w); err != nil {
-							returnConn = false
 							return Result{}, err
 						}
 					}
@@ -1017,7 +1062,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 								// ChatHub often sends the first visible text as a full snapshot,
 								// followed by cursor deltas. Emit only the unseen suffix.
 								if err := emitSnapshot(text); err != nil {
-									returnConn = false
 									return Result{}, err
 								}
 							}
@@ -1055,32 +1099,26 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 							log.Printf("[chathub] result.value=%q (non-Success)", rawResult)
 							low := strings.ToLower(rawResult)
 							if strings.Contains(low, "throttl") {
-								returnConn = false
 								return Result{}, ErrMeteringThrottled
 							}
-							returnConn = false
 							return Result{}, fmt.Errorf("upstream result error: %s", rawResult)
 						}
 						if mi, ok := res["meteringInformation"]; ok && mi != nil {
 							meteringInformation = mi
 							if meterErr := checkMeteringError(mi); meterErr != nil {
 								log.Printf("[chathub] meteringError in type:2 frame: %v", meterErr)
-								returnConn = false
 								return Result{}, meterErr
 							}
 						}
 						if msg, ok := res["message"].(string); ok {
 							final = msg
 							if imageLimitDetected(final) {
-								returnConn = false
 								return Result{}, ErrImageLimit
 							}
 							if rateLimited(final) {
-								returnConn = false
 								return Result{}, ErrRateLimitNotice
 							}
 							if IsContentPolicyBlock(final) {
-								returnConn = false
 								return Result{}, ErrOffensiveContent
 							}
 						}
@@ -1092,7 +1130,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 
 			if int(t) == 3 {
 				if errObj, ok := obj["error"].(map[string]any); ok {
-					returnConn = false
 					errCode, _ := errObj["code"].(string)
 					errMsg, _ := errObj["message"].(string)
 					switch errCode {
@@ -1115,35 +1152,28 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 				// handler already rejects notice finals, so this only fires
 				// on frame-order anomalies.
 				if rateLimited(final) {
-					returnConn = false
 					return Result{}, ErrRateLimitNotice
 				}
 				text, ferr := finalizeText(streamed.String(), final, skippedSnapshots, emitDelta)
 				if ferr != nil {
-					returnConn = false
 					return Result{}, ferr
 				}
 				if text == "" {
 					text = strings.Join(deltas, "")
 				}
 				if imageLimitDetected(text) {
-					returnConn = false
 					return Result{}, ErrImageLimit
 				}
 				if rateLimited(text) {
-					returnConn = false
 					return Result{}, ErrRateLimitNotice
 				}
 				if text == "" {
-					returnConn = false
 					return Result{}, ErrEmptyCompletion
 				}
 				if offense != "" {
-					returnConn = false
 					return Result{}, ErrOffensiveContent
 				}
 				if IsContentPolicyBlock(text) {
-					returnConn = false
 					return Result{}, ErrOffensiveContent
 				}
 				result := Result{
@@ -1175,7 +1205,6 @@ func (c *Client) chatWithHandlers(ctx context.Context, acc Account, req Request,
 	// Reaching the overall deadline without a SignalR completion frame is
 	// an incomplete upstream response. Do not return accumulated deltas as if
 	// they were a successful, finished answer.
-	returnConn = false
 	return Result{}, fmt.Errorf("chathub response deadline exceeded before completion")
 }
 
@@ -1259,18 +1288,20 @@ func BuildWSURLWithOptions(acc Account, sessionID, conversationID, requestID, li
 func (c *Client) downloadClient() *http.Client {
 	base := c.HTTPClient
 	if base == nil {
-		base = http.DefaultClient
+		base = outbound.HTTPClient()
 	}
-	return &http.Client{
-		Transport: base.Transport,
-		Timeout:   base.Timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("attachment download: too many redirects")
-			}
-			return validateRemoteDownloadURL(req.URL.String())
-		},
+	// An attachment URL is request data, not configuration, so this fetch gets
+	// the dial-time address guard: validateRemoteDownloadURL alone is racy,
+	// because the hostname can resolve to a public address for the check and to
+	// a private one for the connection that follows.
+	client := outbound.UntrustedClientFrom(base, 60*time.Second)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("attachment download: too many redirects")
+		}
+		return validateRemoteDownloadURL(req.URL.String())
 	}
+	return client
 }
 
 func (c *Client) uploadAttachments(ctx context.Context, acc Account, conversationID string, attachments []Attachment) error {

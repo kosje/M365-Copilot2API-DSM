@@ -28,12 +28,21 @@ var (
 	clientsMu sync.RWMutex
 	clients   = directClients()
 	proxyPool *Pool
+	// clientsAreDirect records whether the current clients dial directly rather
+	// than through a configured proxy. Only a direct dialer can carry the
+	// per-address guard, so this decides whether UntrustedHTTPClient can install
+	// one.
+	clientsAreDirect = true
 )
 
 func directClients() *Clients {
 	tlsCache := tls.NewLRUClientSessionCache(32)
 	httpTLSConf := &tls.Config{ClientSessionCache: tlsCache}
 	wsTLSConf := &tls.Config{ClientSessionCache: tlsCache, NextProtos: []string{"http/1.1"}}
+	// No dial-time address guard here: this transport also serves endpoints the
+	// operator configured (the OAuth authority, the upstream gateway), which may
+	// legitimately be private. UntrustedHTTPClient clones it and adds the guard
+	// for content fetched from URLs that came out of data.
 	t := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -55,6 +64,61 @@ func directClients() *Clients {
 		},
 	}
 }
+
+// UntrustedHTTPClient returns a client for fetching a URL that came out of data
+// rather than out of configuration - a model response, an attachment link, a
+// link scraped from a completion.
+//
+// Validating such a URL by resolving the hostname and then dialling separately
+// is racy: the name can resolve to a public address for the check and to
+// 127.0.0.1 for the connection (DNS rebinding). When the gateway dials directly,
+// this client re-checks the address actually being connected to. When a proxy is
+// configured it cannot - the proxy's dialer owns the connection - and the proxy
+// is trusted to reach the target instead; UsingProxy reports that so callers can
+// say so in a log.
+func UntrustedHTTPClient(timeout time.Duration) *http.Client {
+	return UntrustedClientFrom(HTTPClient(), timeout)
+}
+
+// UntrustedClientFrom is UntrustedHTTPClient starting from an explicitly injected
+// client, so a caller that was handed its own transport keeps using it.
+func UntrustedClientFrom(base *http.Client, timeout time.Duration) *http.Client {
+	c := &http.Client{Timeout: timeout}
+	if base == nil || base.Transport == nil {
+		return c
+	}
+	bt, ok := base.Transport.(*http.Transport)
+	if !ok {
+		c.Transport = base.Transport
+		return c
+	}
+	t := bt.Clone()
+	if !UsingProxy() {
+		t.DialContext = (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Control:   DialControl,
+		}).DialContext
+	}
+	c.Transport = t
+	return c
+}
+
+// UsingProxy reports whether outbound requests actually go through a proxy
+// rather than dialling directly.
+//
+// An empty pool counts as direct: Pool.HTTPClient falls back to the direct
+// client when it has no entries, so reporting "proxied" there would wrongly
+// excuse the gateway from the address guard.
+func UsingProxy() bool {
+	clientsMu.RLock()
+	p, direct := proxyPool, clientsAreDirect
+	clientsMu.RUnlock()
+	if p != nil && p.Len() > 0 {
+		return true
+	}
+	return !direct
+}
 func ConfigureFromEnv() error {
 	raw := strings.TrimSpace(os.Getenv("M365_PROXY_POOL"))
 	if raw != "" {
@@ -70,6 +134,7 @@ func Configure(raw string) error {
 	clientsMu.Lock()
 	clients = c
 	proxyPool = nil
+	clientsAreDirect = strings.TrimSpace(raw) == ""
 	clientsMu.Unlock()
 	return nil
 }
@@ -80,6 +145,7 @@ func ConfigurePool(raw []string) error {
 	}
 	clientsMu.Lock()
 	proxyPool = p
+	clientsAreDirect = false
 	clientsMu.Unlock()
 	return nil
 }

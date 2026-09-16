@@ -559,7 +559,13 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/auth/device/start" || r.URL.Path == "/api/auth/device/status" || r.URL.Path == "/api/version" || r.URL.Path == "/api/update" || r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/api/admin/login" || r.URL.Path == "/api/admin/session" || r.URL.Path == "/api/admin/change-password" || r.URL.Path == "/api/admin/logout" || r.URL.Path == "/api/auth/start" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/callback" || r.URL.Path == "/api/auth/device/start" || r.URL.Path == "/api/auth/device/status" || r.URL.Path == "/api/version" || r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/metrics" {
+			// /api/update is deliberately NOT here: it makes several outbound
+			// requests to GitHub (and to third-party mirrors) while holding a
+			// lock, so leaving it unauthenticated let anyone on the network use
+			// the gateway as an amplifier and block the admin endpoint behind
+			// that lock. The console calls it after login; a 401 there just
+			// means the update banner does not render.
 			next.ServeHTTP(w, r)
 			return
 		}

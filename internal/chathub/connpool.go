@@ -2,6 +2,7 @@ package chathub
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -20,6 +21,9 @@ type pooledConn struct {
 	writeMu   sync.Mutex
 	frames    chan []byte
 	errs      chan error
+	// closeOnce makes closing frames idempotent: the park goroutine, evict()
+	// and GC() can all reach it, and closing a channel twice panics.
+	closeOnce sync.Once
 }
 
 const (
@@ -27,12 +31,37 @@ const (
 	poolConnTTL   = 300 * time.Second
 )
 
+// closeFrames releases whoever is waiting on the frame channel. Closing frames
+// is what unblocks the reader in chat(): a consumer that only selects on
+// frames/errs/ctx would otherwise wait forever, because chat()'s overall
+// deadline is only re-evaluated once a read arrives.
+func (pc *pooledConn) closeFrames() {
+	if pc.frames == nil {
+		return
+	}
+	pc.closeOnce.Do(func() { close(pc.frames) })
+}
+
+// recordErr delivers err to a taken connection's error channel without blocking
+// and without panicking if the receiver has already given up.
+func (pc *pooledConn) recordErr(err error) {
+	if pc.errs == nil {
+		return
+	}
+	select {
+	case pc.errs <- err:
+	default:
+	}
+}
+
 type ConnPool struct {
-	mu     sync.Mutex
-	conns  map[string][]*pooledConn // key = oid|tid
-	dialer *websocket.Dialer
-	header http.Header
-	stop   chan struct{}
+	mu        sync.Mutex
+	conns     map[string][]*pooledConn // key = oid|tid
+	dialer    *websocket.Dialer
+	header    http.Header
+	stop      chan struct{}
+	closeOnce sync.Once
+	closed    bool
 }
 
 func NewConnPool(dialer *websocket.Dialer, header http.Header) *ConnPool {
@@ -57,15 +86,22 @@ func (p *ConnPool) startPark(key string, pc *pooledConn) {
 	pc.frames = make(chan []byte, 64)
 	pc.errs = make(chan error, 1)
 	go func() {
+		// A panic in this goroutine would take down the whole process, and
+		// internal/web's recover middleware does not wrap goroutines.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[connpool] park panic oid/key=%s: %v", key, r)
+				pc.recordErr(fmt.Errorf("connpool reader panicked: %v", r))
+				pc.closeFrames()
+				pc.conn.Close()
+			}
+		}()
 		for {
 			_, msg, err := pc.conn.ReadMessage()
 			if err != nil {
 				if pc.taken.Load() {
-					select {
-					case pc.errs <- err:
-					default:
-					}
-					close(pc.frames)
+					pc.recordErr(err)
+					pc.closeFrames()
 				} else {
 					p.evict(key, pc)
 				}
@@ -73,6 +109,10 @@ func (p *ConnPool) startPark(key string, pc *pooledConn) {
 			}
 			if strings.HasPrefix(string(msg), `{"type":6}`) && !pc.taken.Load() {
 				pc.writeMu.Lock()
+				// Refresh per write: an expired write deadline is terminal, so
+				// setting it once at dial time would silently break every later
+				// keepalive on a connection that has been parked for a while.
+				_ = pc.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_ = pc.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":6}`+rs))
 				pc.writeMu.Unlock()
 				continue
@@ -81,6 +121,13 @@ func (p *ConnPool) startPark(key string, pc *pooledConn) {
 				select {
 				case pc.frames <- msg:
 				case <-time.After(30 * time.Second):
+					// The consumer stopped draining. Leaving here without
+					// closing frames strands the request forever, and that
+					// request holds an account concurrency slot. Signal the
+					// error, release the reader, and drop the connection.
+					pc.recordErr(fmt.Errorf("pooled connection stalled: no reader for 30s"))
+					pc.closeFrames()
+					pc.conn.Close()
 					return
 				}
 			}
@@ -98,11 +145,17 @@ func (p *ConnPool) evict(key string, target *pooledConn) {
 		}
 	}
 	p.mu.Unlock()
+	// A consumer may have taken this connection between the read error and the
+	// eviction, in which case it is waiting on frames.
+	target.closeFrames()
 	target.conn.Close()
 }
 
 func (p *ConnPool) Take(ctx context.Context, oid, tid string, wsURL string) (*websocket.Conn, *sync.Mutex, <-chan []byte, <-chan error, bool, error) {
 	_ = wsURL
+	if p.isClosed() {
+		return nil, nil, nil, nil, false, fmt.Errorf("connection pool is closed")
+	}
 	p.mu.Lock()
 	key := p.key(oid, tid)
 	conns := p.conns[key]
@@ -152,6 +205,9 @@ func (p *ConnPool) Warm(ctx context.Context, acc Account, wsURL string) {
 	if wsURL == "" {
 		return
 	}
+	if p.isClosed() {
+		return
+	}
 	key := p.key(acc.OID, acc.TID)
 
 	p.mu.Lock()
@@ -199,32 +255,43 @@ func (p *ConnPool) Warm(ctx context.Context, acc Account, wsURL string) {
 	log.Printf("[connpool] warmed connection oid=%s tid=%s", acc.OID, acc.TID)
 }
 
-func (p *ConnPool) WarmWithProbe(ctx context.Context, acc Account, wsURL string) {
-	p.Warm(ctx, acc, wsURL)
-}
+// WarmWithProbe is retained for callers that want a probe before warming; the
+// probe itself was never implemented, so this is just Warm.
+//
+// Return and Discard were removed: nothing called them, and both simply closed
+// the connection. A pooled connection is never handed back to the pool - chat()
+// always closes it when the request ends - so the pool is a pre-dial cache, not
+// a recycling pool (see the note in client.go).
 
-func (p *ConnPool) Return(oid, tid string, conn *websocket.Conn) {
-	if conn != nil {
-		conn.Close()
+func (p *ConnPool) gcLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.stop:
+			return
+		case <-ticker.C:
+			p.GC()
+		}
 	}
 }
 
-func (p *ConnPool) Discard(oid, tid string, conn *websocket.Conn) {
-	if conn != nil {
-		conn.Close()
-	}
-}
-
+// GC drops connections past their TTL.
+//
+// Closing a websocket is network IO and can block (these connections carry no
+// write deadline), so the victims are collected under the lock and closed after
+// it is released. Closing under the lock would stall every Take/Warm/Stats
+// caller behind a single unresponsive socket.
 func (p *ConnPool) GC() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	now := time.Now()
+	var victims []*pooledConn
 	for k, conns := range p.conns {
 		kept := conns[:0]
 		for _, pc := range conns {
 			if now.Sub(pc.created) > poolConnTTL {
 				pc.taken.Store(true)
-				pc.conn.Close()
+				victims = append(victims, pc)
 			} else {
 				kept = append(kept, pc)
 			}
@@ -235,19 +302,42 @@ func (p *ConnPool) GC() {
 			p.conns[k] = kept
 		}
 	}
+	p.mu.Unlock()
+
+	for _, pc := range victims {
+		pc.closeFrames()
+		pc.conn.Close()
+	}
 }
 
+// Close drops every pooled connection and stops the GC loop. Safe to call more
+// than once: the previous revision closed p.stop unconditionally, so a second
+// call panicked, and Take would still hand out fresh connections afterwards.
 func (p *ConnPool) Close() {
-	close(p.stop)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for k, conns := range p.conns {
-		for _, pc := range conns {
-			pc.taken.Store(true)
+	p.closeOnce.Do(func() {
+		close(p.stop)
+		p.mu.Lock()
+		var victims []*pooledConn
+		for k, conns := range p.conns {
+			for _, pc := range conns {
+				pc.taken.Store(true)
+				victims = append(victims, pc)
+			}
+			delete(p.conns, k)
+		}
+		p.closed = true
+		p.mu.Unlock()
+		for _, pc := range victims {
+			pc.closeFrames()
 			pc.conn.Close()
 		}
-		delete(p.conns, k)
-	}
+	})
+}
+
+func (p *ConnPool) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 func (p *ConnPool) Stats() map[string]any {
@@ -262,17 +352,4 @@ func (p *ConnPool) Stats() map[string]any {
 		}
 	}
 	return map[string]any{"mode": "connpool", "pooled_connections": total, "details": details}
-}
-
-func (p *ConnPool) gcLoop() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-p.stop:
-			return
-		case <-ticker.C:
-			p.GC()
-		}
-	}
 }

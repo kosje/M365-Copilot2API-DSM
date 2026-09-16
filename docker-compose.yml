@@ -1,9 +1,15 @@
 services:
   m365-copilot2api:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: "${APP_VERSION:-dev}"
     image: m365-copilot2api:latest
     container_name: m365-copilot2api
     restart: unless-stopped
+    # Bound to loopback on purpose: the console speaks plain HTTP, so publishing
+    # it on the LAN would put the administrator password and session cookie on
+    # the wire. Terminate TLS in front (or change this mapping deliberately).
     ports:
       - "127.0.0.1:4141:4141"
     environment:
@@ -14,7 +20,13 @@ services:
       M365_SESSION_CACHE: /data/sessions.json
       M365_API_KEYS: /data/api-keys.json
       M365_ADMIN_PASSWORD_FILE: /data/admin-password
-      M365_ADMIN_PASSWORD_BOOTSTRAP_FILE: /run/secrets/m365_admin_password
+      # Read on startup, deleted (best effort; the mount is read-only, so the
+      # deletion is logged and ignored), and fingerprinted into
+      # /data/admin-envhash so a restart does not re-apply it. Changing the
+      # secret and restarting therefore resets a forgotten password. This is the
+      # file form of M365_ADMIN_PASSWORD, which would otherwise expose the
+      # cleartext through /proc/<pid>/environ.
+      M365_ADMIN_PASSWORD_RESET_FILE: /run/secrets/m365_admin_password
       M365_CHAT_TIMEOUT_SECONDS: "120"
       M365_IMAGE_TIMEOUT_SECONDS: "150"
       M365_PUBLIC_IDENTITY_POLICY: "${M365_PUBLIC_IDENTITY_POLICY:-false}"

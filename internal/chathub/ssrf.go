@@ -4,12 +4,23 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"strings"
+
+	"m365-copilot2api/internal/outbound"
 )
 
-// validateRemoteDownloadURL blocks SSRF: only https and public routable
-// addresses are accepted, with a lookup-time recheck against private,
-// loopback, link-local and cloud metadata ranges.
+// ValidateRemoteDownloadURL blocks SSRF on URLs derived from a model response:
+// only https and public routable addresses are accepted, with a lookup-time
+// recheck against private, loopback, link-local and cloud metadata ranges.
+//
+// This is a pre-flight check, and on its own it is racy - a hostname can resolve
+// to a public address here and to 127.0.0.1 for the connection that follows
+// (DNS rebinding). outbound.DialControl is what actually closes that gap, by
+// re-checking the address being dialled; this function exists to fail early with
+// a clear message.
+func ValidateRemoteDownloadURL(raw string) error {
+	return validateRemoteDownloadURL(raw)
+}
+
 func validateRemoteDownloadURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -34,20 +45,9 @@ func validateRemoteDownloadURL(raw string) error {
 	return nil
 }
 
+// ipUnsafe delegates to outbound so the dialer, the web layer and this check all
+// apply one definition of "not safe to fetch". (169.254.169.254 is link-local
+// and covered there.)
 func ipUnsafe(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		// 169.254.0.0/16 link-local is covered above on Go >= 1.17;
-		// 100.64.0.0/10 (CGNAT) is not private per IP.IsPrivate.
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-	}
-	// 169.254.169.254 cloud metadata is link-local; belt and braces.
-	if strings.HasPrefix(ip.String(), "169.254.169.254") {
-		return true
-	}
-	return false
+	return outbound.IsUnsafeIP(ip)
 }
