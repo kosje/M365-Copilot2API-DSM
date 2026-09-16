@@ -302,7 +302,11 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]string{"b64_json": base64.StdEncoding.EncodeToString(imageData)})
 			continue
 		}
-		id := s.storeGeneratedImage(imageData, contentType)
+		id, err := s.storeGeneratedImage(imageData, contentType)
+		if err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "image_storage_error", "generated image could not be saved")
+			return
+		}
 		data = append(data, map[string]string{"url": generatedImageURL(r, id)})
 	}
 
@@ -480,36 +484,6 @@ func downloadDesignerImage(ctx context.Context, rawURL, accessToken string) ([]b
 	return body, contentType, nil
 }
 
-func (s *Server) storeGeneratedImage(data []byte, contentType string) string {
-	id := uuid.NewString()
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.generatedImages == nil {
-		s.generatedImages = map[string]generatedImage{}
-	}
-	for key, item := range s.generatedImages {
-		if now.After(item.ExpiresAt) {
-			delete(s.generatedImages, key)
-		}
-	}
-	if len(s.generatedImages) >= maxGeneratedImages {
-		var oldestID string
-		var oldest time.Time
-		for key, item := range s.generatedImages {
-			if oldestID == "" || item.ExpiresAt.Before(oldest) {
-				oldestID, oldest = key, item.ExpiresAt
-			}
-		}
-		if oldestID != "" {
-			delete(s.generatedImages, oldestID)
-		}
-	}
-	data, contentType = stripImageMetadata(data, contentType)
-	s.generatedImages[id] = generatedImage{Data: append([]byte(nil), data...), ContentType: contentType, ExpiresAt: now.Add(generatedImageTTL)}
-	return id
-}
-
 func generatedImageURL(r *http.Request, id string) string {
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
@@ -528,19 +502,14 @@ func (s *Server) generatedImageFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	now := time.Now()
-	s.mu.Lock()
-	item, ok := s.generatedImages[id]
-	if ok && now.After(item.ExpiresAt) {
-		delete(s.generatedImages, id)
-		ok = false
-	}
-	if ok {
-		item.Data = append([]byte(nil), item.Data...)
-	}
-	s.mu.Unlock()
-	if !ok {
-		http.NotFound(w, r)
+	item, err := s.loadGeneratedImage(id)
+	if err != nil {
+		w.Header().Set("Cache-Control", "no-store")
+		if os.IsNotExist(err) {
+			http.Error(w, "?????????????????????????????", http.StatusNotFound)
+		} else {
+			http.Error(w, "?????????????", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", item.ContentType)
@@ -763,7 +732,11 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 			continue
 		}
 		seen[hash] = true
-		urls = append(urls, generatedImageURL(r, s.storeGeneratedImage(data, ct)))
+		id, err := s.storeGeneratedImage(data, ct)
+		if err != nil {
+			return nil, fmt.Errorf("generated image could not be saved: %w", err)
+		}
+		urls = append(urls, generatedImageURL(r, id))
 	}
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("upstream returned no image resource")

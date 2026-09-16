@@ -17,6 +17,7 @@ import (
 )
 
 func TestChatImagesReachExternalClientProtocols(t *testing.T) {
+	t.Setenv("M365_DATA_DIR", t.TempDir())
 	var data bytes.Buffer
 	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
 		t.Fatal(err)

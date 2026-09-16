@@ -2465,13 +2465,16 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if responseFormat == nil && (forceImageModel || os.Getenv("M365_DISABLE_CHAT_IMAGE_ROUTING") != "true") {
 		if lr := lastMessageRole(body.Messages); lr == "user" {
-			ut := lastUserContent(body.Messages)
 			// WorkBuddy/Claude Code may append <system-reminder> agent context to
 			// the user's text. It contains coding/tool vocabulary and used to make
 			// a clear image request miss this route, after which the text model
 			// spawned a sandbox sub-agent and leaked /mnt/data paths/citations.
-			clean := cleanImagePrompt(ut)
-			imageIntent := body.ImageOptions != nil || shouldUseChatImageRoute(body.Model, clean, body.Attachments)
+			clean := chatImagePrompt(body.Messages)
+			if clean == "" && (forceImageModel || body.ImageOptions != nil) {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image prompt is empty after removing client metadata; send the image description in the current user turn")
+				return
+			}
+			imageIntent := clean != "" && (body.ImageOptions != nil || shouldUseChatImageRoute(body.Model, clean, body.Attachments))
 			if imageIntent {
 				log.Printf("[image-route] id=%s model=%s selected=true explicit=%t", requestID, body.Model, forceImageModel)
 				if !requestModelAllowed(r, "gpt-image-2") {

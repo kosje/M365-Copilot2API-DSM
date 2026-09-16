@@ -584,8 +584,8 @@ func sanitizeImageAlt(s string) string {
 	s = strings.ReplaceAll(s, "]", "")
 	s = strings.ReplaceAll(s, "(", "")
 	s = strings.ReplaceAll(s, ")", "")
-	if len(s) > 60 {
-		s = s[:60]
+	if runes := []rune(s); len(runes) > 60 {
+		s = string(runes[:60])
 	}
 	return s
 }

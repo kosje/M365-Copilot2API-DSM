@@ -146,6 +146,8 @@ FPK 与 SPK 结构高度对应，按 DSM 规范重写：
 
 ## 功能概览
 
+生成图片链接由网关持久化保存，重启后仍可访问。保存上限为 72 小时、128 张或 512 MiB，容量满时清理最旧文件；请及时另存需要长期保留的图片。旧版已失效的内存链接无法恢复。图片链接无需登录，持有链接即可下载。
+
 完整功能文档见上游 [README](https://github.com/my788525/M365-Copilot2API-FNOS#readme) 与 [FORK_GUIDE](https://github.com/my788525/M365-Copilot2API-FNOS/blob/main/docs/FORK_GUIDE.md)，此处仅列要点：
 
 - **OpenAI / Anthropic 双兼容**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/images/generations`

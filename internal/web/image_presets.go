@@ -77,14 +77,46 @@ func normalizeImageSize(size string) string {
 var systemReminderRe = regexp.MustCompile(`(?is)<system-reminder[\s\S]*?</system-reminder>`)
 var htmlTagRe = regexp.MustCompile(`(?is)<[^>]+>`)
 
+// Agent clients sometimes send this bookkeeping as a separate user message.
+var imageModelNoticeRE = regexp.MustCompile(`(?im)\bYou are powered by (?:the )?model\s+[a-z0-9_.:/-]+\.?\s*(?:[0-9,]+\s+tokens?\s+left\.?)?`)
+var imageTokenNoticeRE = regexp.MustCompile(`(?im)^\s*[0-9,]+\s+tokens?\s+left\.?\s*$`)
+
 // cleanImagePrompt removes agent-context blocks and any HTML-like markup from a
 // user message, then collapses all whitespace (including newlines) into single
 // spaces. The result is safe to use as an image-generation prompt, a markdown
 // alt text, and a displayed description.
 func cleanImagePrompt(s string) string {
 	s = systemReminderRe.ReplaceAllString(s, " ")
+	s = imageModelNoticeRE.ReplaceAllString(s, " ")
+	s = imageTokenNoticeRE.ReplaceAllString(s, " ")
 	s = htmlTagRe.ReplaceAllString(s, " ")
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// Only inspect the current trailing user turn. Never replay an older image
+// request across an assistant reply or tool result when bookkeeping is empty.
+func chatImagePrompt(messages []oaiMsg) string {
+	var parts []string
+	for i := len(messages) - 1; i >= 0 && messages[i].Role == "user"; i-- {
+		var texts []string
+		switch c := messages[i].Content.(type) {
+		case string:
+			texts = append(texts, c)
+		case []any:
+			for _, raw := range c {
+				p, _ := raw.(map[string]any)
+				if p["type"] == "text" || p["type"] == "input_text" {
+					if v, ok := p["text"].(string); ok {
+						texts = append(texts, v)
+					}
+				}
+			}
+		}
+		if clean := cleanImagePrompt(strings.Join(texts, "\n")); clean != "" {
+			parts = append([]string{clean}, parts...)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // imageGenOptions carries the full set of image-generation parameters that can
