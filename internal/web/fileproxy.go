@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -82,6 +83,49 @@ func decodePathSegment(s string) (string, error) {
 	return b.String(), nil
 }
 
+// fileProxyCtxTTL bounds how long a conversation context - which includes an
+// access token - is kept after it was recorded. Without an eviction policy these
+// maps grow for the lifetime of the process, which on a NAS is months.
+const fileProxyCtxTTL = 6 * time.Hour
+
+// maxFileProxyEntries caps the maps even when every entry is still fresh.
+const maxFileProxyEntries = 512
+
+// pruneFileProxyLocked drops stale contexts and their cached files, and enforces
+// a hard cap. Callers must hold fileProxyMu.
+func (s *Server) pruneFileProxyLocked() {
+	now := time.Now()
+	// Collect and sort the survivors so the cap evicts the oldest, not an
+	// arbitrary subset.
+	type entry struct {
+		key string
+		at  time.Time
+	}
+	live := make([]entry, 0, len(s.fileProxyCtx))
+	for k, v := range s.fileProxyCtx {
+		if now.Sub(v.At) > fileProxyCtxTTL {
+			delete(s.fileProxyCtx, k)
+			continue
+		}
+		live = append(live, entry{key: k, at: v.At})
+	}
+	if len(live) > maxFileProxyEntries {
+		sort.Slice(live, func(i, j int) bool { return live[i].at.After(live[j].at) })
+		for _, e := range live[maxFileProxyEntries:] {
+			delete(s.fileProxyCtx, e.key)
+		}
+	}
+	// A cached file whose conversation context is gone can never be re-derived
+	// and would otherwise pin the bytes on disk.
+	for k := range s.fileProxyCache {
+		if i := strings.IndexByte(k, '|'); i > 0 {
+			if _, ok := s.fileProxyCtx[k[:i]]; !ok {
+				delete(s.fileProxyCache, k)
+			}
+		}
+	}
+}
+
 // recordConvCtx stores the M365 conversation context keyed by the internal
 // chat conversation id so generated-file retrieval can continue that session.
 func (s *Server) recordConvCtx(internalConv, accountID, accessToken, oid, tid, convID, sessID string) {
@@ -92,6 +136,7 @@ func (s *Server) recordConvCtx(internalConv, accountID, accessToken, oid, tid, c
 	if s.fileProxyCtx == nil {
 		s.fileProxyCtx = map[string]m365ConvCtx{}
 	}
+	s.pruneFileProxyLocked()
 	s.fileProxyCtx[internalConv] = m365ConvCtx{
 		AccountID:   accountID,
 		AccessToken: accessToken,
@@ -407,6 +452,14 @@ func (s *Server) chatFileProxy(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	if conv == "" || name == "" {
 		http.Error(w, "missing conv/name", http.StatusBadRequest)
+		return
+	}
+	// The conversation must belong to the caller. Without this, any logged-in
+	// chat user who learned another user's conversation id could re-emit and
+	// download that user's generated files - and each attempt drives an upstream
+	// M365 call, so it is also the cheapest way to make the gateway work.
+	if s.chatUI.loadConv(u.ID, conv) == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
 	path, err := s.fetchGeneratedFile(conv, name)

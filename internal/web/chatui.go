@@ -1355,6 +1355,16 @@ func (s *Server) chatReport(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]any{"status": "ok", "id": id, "url": "/api/chatui/file/" + id})
 }
 
+// chatFile serves a cached image, or a generated HTML report.
+//
+// Access is by unguessable identifier only: image and report ids are UUIDs
+// (saveImage/saveReport) and there is no owner index, so any logged-in chat user
+// who obtains an id can fetch the bytes. That is a deliberate capability model,
+// not an oversight - building a per-file owner index would mean threading a user
+// id through every save site. Treat these ids as secrets: they must not be
+// logged, put in an outbound URL as a query parameter, or shown in a screenshot.
+// Anything that does need an ownership check should follow chatFileProxy, which
+// verifies the conversation belongs to the caller.
 func (s *Server) chatFile(w http.ResponseWriter, r *http.Request) {
 	u := s.chatAuth(r)
 	if u == nil {

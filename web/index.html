@@ -1287,12 +1287,12 @@ async function importAccountsFile(){
     const r=await fetch('/api/admin/accounts/import',{method:'POST',body:fd});
     const t=await r.text();
     let d;try{d=JSON.parse(t)}catch{d={error:{message:t}}}
-    if(!r.ok){status.innerHTML='<span style="color:var(--red)">导入失败：'+(d&&d.error&&d.error.message?d.error.message:t)+'</span>';return;}
+    if(!r.ok){status.innerHTML='<span style="color:var(--red)">导入失败：'+esc(d&&d.error&&d.error.message?d.error.message:t)+'</span>';return;}
     const lines=['收到 '+d.received+' 个，新增 '+d.imported+'，更新 '+d.updated];
     if(d.errors&&d.errors.length)lines.push('错误 '+d.errors.length+'：'+d.errors.join('； '));
-    status.innerHTML='<span style="color:var(--green)">'+lines.join('<br>')+'</span>';
+    status.innerHTML='<span style="color:var(--green)">'+lines.map(esc).join('<br>')+'</span>';
     loadAccounts();
-  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+e.message+'</span>';}
+  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+esc(e.message)+'</span>';}
   finally{btn.disabled=false;btn.innerHTML='<i data-lucide="upload" style="width:14px;height:14px"></i> Import';inp.value='';}
 }
 
@@ -1306,7 +1306,7 @@ async function exportAccountsFile(){
     const r=await fetch('/api/admin/accounts/export');
     if(!r.ok){
       const t=await r.text();let m=t;try{m=JSON.parse(t).error.message}catch(e){}
-      status.innerHTML='<span style="color:var(--red)">导出失败：'+m+'</span>';return;
+      status.innerHTML='<span style="color:var(--red)">导出失败：'+esc(m)+'</span>';return;
     }
     const blob=await r.blob();
     const m=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/);
@@ -1317,7 +1317,7 @@ async function exportAccountsFile(){
     setTimeout(()=>URL.revokeObjectURL(a.href),3000);
     const n=(_accountsCache||[]).length;
     status.innerHTML='<span style="color:var(--green)">已导出 '+n+' 个账号 → '+name+'（含明文令牌，请妥善保管）</span>';
-  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+e.message+'</span>';}
+  }catch(e){status.innerHTML='<span style="color:var(--red)">请求出错：'+esc(e.message)+'</span>';}
   finally{btn.disabled=false;}
 }
 
@@ -1956,12 +1956,23 @@ async function loadCbImages(){
     if(!imgs.length){$('cbBody').innerHTML='<div class="empty">No images stored</div>';return;}
     $('cbBody').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px">`+imgs.map(i=>`
       <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-        <img src="${i.url}" loading="lazy" style="width:100%;height:120px;object-fit:cover;cursor:zoom-in" onclick="window.open('${i.url}','_blank')">
+        <img src="${esc(i.url)}" data-open-url="${esc(i.url)}" loading="lazy" style="width:100%;height:120px;object-fit:cover;cursor:zoom-in">
         <div style="padding:6px;font-size:10.5px;color:var(--muted)">${fmtBytes(i.size)} · ${new Date(i.modifiedAt).toLocaleString()}<br>${i.refs&&i.refs.length?esc(i.refs.map(r=>`${r.username}：${r.conv}`).join('；')):'未被对话引用'}</div>
         <div style="padding:0 6px 6px"><button class="btn-sm btn danger" onclick="cbDelImage('${i.id}')">🗑 删除</button></div>
       </div>`).join('')+`</div>`;
   }catch(e){$('cbBody').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
+// One delegated listener for the whole grid: the img elements are re-created
+// on every refresh, and the URL must never travel through an inline handler.
+document.addEventListener('DOMContentLoaded',()=>{
+  const body=$('cbBody');
+  if(!body)return;
+  body.addEventListener('click',e=>{
+    const img=e.target.closest('img[data-open-url]');
+    if(!img)return;
+    window.open(img.getAttribute('data-open-url'),'_blank','noopener');
+  });
+});
 async function cbDelImage(id){
   if(!confirm('删除该图片？将同时从所有对话记录中移除其引用。'))return;
   try{await api('/api/chatui/admin/image/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});showNotice('图片已删除','success');loadCbImages();loadChatAdmin();}
