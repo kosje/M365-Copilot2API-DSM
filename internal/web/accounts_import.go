@@ -155,7 +155,22 @@ func accountsFromArchive(raw []byte) ([]byte, error) {
 			return nil, fmt.Errorf("读取归档失败: %w", err)
 		}
 		if hdr.Typeflag == tar.TypeReg && strings.HasSuffix(hdr.Name, "accounts.json") {
-			return io.ReadAll(tr)
+			// Cap the *decompressed* size. maxImportBytes only bounds the
+			// uploaded bytes, and gzip expands by orders of magnitude, so
+			// without this limit a 16 MiB upload can allocate until the process
+			// is killed. Check the declared size first (cheap) and then enforce
+			// it while reading (the header is attacker-controlled).
+			if hdr.Size > maxImportBytes {
+				return nil, fmt.Errorf("归档中的 accounts.json 解压后过大（%d 字节，上限 %d 字节）", hdr.Size, maxImportBytes)
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, maxImportBytes+1))
+			if err != nil {
+				return nil, fmt.Errorf("读取归档中的 accounts.json 失败: %w", err)
+			}
+			if int64(len(data)) > maxImportBytes {
+				return nil, fmt.Errorf("归档中的 accounts.json 解压后超过 %d 字节上限", maxImportBytes)
+			}
+			return data, nil
 		}
 	}
 	return nil, fmt.Errorf("归档中未找到 accounts.json")
