@@ -19,8 +19,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-BASE = "http://127.0.0.1:4142"
-API_KEY = "m365_9b7a656d5c03921308cafc946db8a760f475b33e715824e7d4021b5b7ba2dbf0"
+BASE = os.environ.get("M365_TEST_BASE", "http://127.0.0.1:4142")
+# Credentials come from the environment - see tests/_env.py and
+# tests/.env.example. Never hard-code a secret here.
+from _env import API_KEY
 MODEL = "gpt-5-codex"
 TIMEOUT = 120
 

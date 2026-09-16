@@ -1,11 +1,37 @@
-# M365 Copilot2API 测试记录器
+﻿# M365 Copilot2API 测试记录器
 # 用途：自动化测试各端点，记录请求/响应/延迟/错误，便于回归测试
 
 param(
     [string]$BaseUrl = "http://127.0.0.1:4141",
-    [string]$LogFile = "D:\M365-Copilot2API\test-results.jsonl",
-    [string]$AdminPassword = $env:ADMIN_PASSWORD
+    [string]$LogFile = "test-results.jsonl",
+    [string]$AdminPassword = $env:ADMIN_PASSWORD,
+    # New administrator password used by the change-password cases. There is
+    # deliberately NO built-in default: this value is written to the target.
+    [string]$NewAdminPassword = $env:M365_TEST_NEW_ADMIN_PW,
+    # Required to run against anything other than loopback.
+    [switch]$AllowRemoteMutations
 )
+
+# ---------------------------------------------------------------------------
+# 安全护栏：本脚本会改动目标实例的状态（修改管理员口令、新建/删除 API Key 等）。
+# 因此：
+#   1) 目标默认为回环地址；指向非回环地址必须显式加 -AllowRemoteMutations；
+#   2) 管理员新口令没有内置默认值，必须由调用方提供。
+# 历史版本在此内置了一个固定口令，等于把目标口令改成一个人人皆知的值。
+# ---------------------------------------------------------------------------
+$isLoopbackTarget = $BaseUrl -match '^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/.*)?$'
+if (-not $isLoopbackTarget -and -not $AllowRemoteMutations) {
+    Write-Host "[ABORT] 目标 $BaseUrl 不是回环地址，而本脚本会改动目标数据。" -ForegroundColor Red
+    Write-Host "        确认该目标可以随意改动后，加 -AllowRemoteMutations 重新运行。" -ForegroundColor Red
+    exit 1
+}
+$newPassword = $NewAdminPassword
+if ([string]::IsNullOrWhiteSpace($newPassword)) {
+    Write-Host "[ABORT] 未提供管理员新口令。" -ForegroundColor Red
+    Write-Host "        请设置 `$env:M365_TEST_NEW_ADMIN_PW（或传 -NewAdminPassword），" -ForegroundColor Red
+    Write-Host "        口令需 >=12 位且至少包含大小写字母、数字、符号中的三类。" -ForegroundColor Red
+    exit 1
+}
 
 $results = [System.Collections.ArrayList]::new()
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -88,7 +114,7 @@ Invoke-Test "POST /v1/chat/completions (无API Key)" {
 
 # === 6. 管理员认证（自动处理密码修改）===
 $adminToken = $null
-$newPassword = "Test@123456"
+# $newPassword is validated by the guard at the top of this script.
 function Invoke-AdminLogin {
     param([string]$pwd)
     $body = @{ password = $pwd } | ConvertTo-Json

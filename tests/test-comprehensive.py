@@ -4,8 +4,9 @@
 import sys, json, time, os, requests
 
 BASE = os.environ.get("M365_TEST_BASE", "http://127.0.0.1:4142")
-ADMIN_PW = "LNBuuAsbrS47XUM"
-API_KEY = "m365_9b7a656d5c03921308cafc946db8a760f475b33e715824e7d4021b5b7ba2dbf0"
+# Credentials come from the environment - see tests/_env.py and
+# tests/.env.example. Never hard-code a secret here.
+from _env import ADMIN_PW, API_KEY
 
 passed = failed = skipped = 0
 results = []
