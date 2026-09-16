@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkBuddy × M365 网关 — AI Coding 极致体验落地手册</title>
+<style>
+  :root{
+    --bg:#0f1117; --card:#171a23; --card2:#1d212c; --line:#2a2f3a;
+    --txt:#e6e8ee; --mut:#9aa3b2; --accent:#6366f1; --good:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.7;padding:32px 20px 60px}
+  .wrap{max-width:920px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 26px;font-size:14px}
+  h2{font-size:18px;margin:34px 0 14px;padding-left:10px;border-left:3px solid var(--accent)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:14px 0}
+  .card.good{border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.06)}
+  .card.warn{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.06)}
+  .card.bad{border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.06)}
+  .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;background:var(--card2);color:var(--mut);border:1px solid var(--line);margin:2px 4px 2px 0}
+  .pill.a{color:#c7d2fe;border-color:rgba(99,102,241,.4)}
+  .pill.g{color:#bbf7d0;border-color:rgba(34,197,94,.4)}
+  .pill.w{color:#fde68a;border-color:rgba(245,158,11,.4)}
+  .pill.b{color:#fecaca;border-color:rgba(239,68,68,.4)}
+  code{background:#0b0d13;color:#a5b4fc;padding:2px 6px;border-radius:6px;font-size:13px;font-family:"SFMono-Regular",Consolas,monospace}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto;font-size:13px;line-height:1.55}
+  pre code{background:none;color:#cbd5e1;padding:0}
+  ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+  .k{color:var(--accent);font-weight:600}
+  .muted{color:var(--mut);font-size:13px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}
+  .mini{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .mini b{display:block;margin-bottom:4px;color:#c7d2fe}
+  .foot{margin-top:40px;color:var(--mut);font-size:12px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WorkBuddy × M365 网关 — AI Coding 极致体验落地手册</h1>
+  <p class="sub">自动续跑 / 断点恢复 / diff 上下文的正确归属与可操作方案 · 配合网关 v1.6.0</p>
+
+  <div class="card warn">
+    <b>核心边界（先读这段，避免走弯路）</b>
+    <p style="margin:8px 0 0">M365-Copilot2API 是<strong>无状态代理</strong>：每次 HTTP 请求独立，工具由 <span class="k">WorkBuddy</span> 执行、WorkBuddy 持有 Agent 循环与文件读取，网关只做 prompt 拼装 + OpenAI 协议适配。</p>
+    <p class="muted" style="margin:10px 0 0">因此：</p>
+    <span class="pill b">网关做不了</span> 自动续跑硬循环 · 计划持久化 · 读文件做 diff
+    <span class="pill g">网关已做到位</span> autonomyBoost 自主指令注入 · toolResultMode 智能压缩 · failover 放宽 · SSE 心跳 · hideReasoning
+    <p style="margin:10px 0 0">下面三项的正确实现位置是 <strong>WorkBuddy 客户端层</strong>，与网关 v1.6.0 的能力互补。</p>
+  </div>
+
+  <h2>① 自动续跑（Auto Continue）</h2>
+  <div class="card">
+    <p><b>机制真相：</b>WorkBuddy 的 agent loop 收到模型的 <code>tool_calls</code> 会<strong>持续执行</strong>；模型返回"完成"（无 tool_calls）则 loop 结束。"做一半就停"本质是<strong>上游模型过早判定完成</strong>，不是 WorkBuddy 没续。</p>
+  </div>
+  <div class="card good">
+    <b>✅ 网关已替你解决大半（v1.6.0 <span class="pill a">autonomyBoost</span>）</b>
+    <p style="margin:8px 0 0">网关在 prompt 注入「自主编码代理」指令：<em>实现全部改动、自行跑 build/test 验证、未完成不得提前结束</em>。效果是上游模型在回包里就把客户端循环一次性跑完，不再把"续跑"甩给你。</p>
+  </div>
+  <div class="card">
+    <b>WorkBuddy 侧你还能做的（锦上添花）</b>
+    <ul>
+      <li><b>任务指令写明确：</b>给任务时加一句「如果还有未完成的 TODO / 未生成的文件 / 未跑的测试，不要说完成，继续直到全部完成」。可固化进用户级 <code>MEMORY.md</code> 作为全局约定。</li>
+      <li><b>利用自带 agent loop：</b>你给一个完整任务，WorkBuddy 会连续执行到完成或遇真实阻塞；不要在中间手动打断。</li>
+      <li><b>跨"以为停了"：</b>WorkBuddy 不会自动补发"继续"，但 autonomyBoost 已大幅压低假完成率。若仍停，回一句"继续"即可（模型已带上下文）。</li>
+    </ul>
+  </div>
+
+  <h2>② 断点恢复（Plan Persistence）</h2>
+  <div class="card bad">
+    <b>❌ 网关无状态</b>——不能持久化计划 / 进度，每次请求都是新上下文。
+  </div>
+  <div class="card good">
+    <b>✅ WorkBuddy 已有机制</b>：三层 memory 系统
+    <div class="grid">
+      <div class="mini"><b>项目级 MEMORY.md</b>长期项目约定、架构事实</div>
+      <div class="mini"><b>每日日志 YYYY-MM-DD.md</b>当日进度、done/remaining</div>
+      <div class="mini"><b>conversation_search</b>跨会话检索历史讨论与决策</div>
+    </div>
+  </div>
+  <div class="card">
+    <b>落地做法（就是把 plan 写进 memory）</b>
+    <ul>
+      <li><b>任务前：</b>动手前先把计划写入项目 memory（<code>.workbuddy/memory/YYYY-MM-DD.md</code>），结构化为 <code>done:[] / remaining:[]</code>。</li>
+      <li><b>任务中：</b>每完成一项，把该项从 remaining 划到 done；遇阻塞记下卡点。</li>
+      <li><b>下次会话：</b>开头读 memory，即可知道"做到哪、还剩什么"，无缝续上——这就是轻量 Plan Persistence。</li>
+    </ul>
+    <p class="muted" style="margin:8px 0 0">这正是我维护 <code>2026-09-15.md</code> 的模式，可直接固化为"编码任务前先写 plan 到 memory"的项目约定。</p>
+  </div>
+
+  <h2>③ Diff 上下文（Diff-Driven Context）</h2>
+  <div class="card bad">
+    <b>❌ 网关读不到文件</b>——无法做 diff，也不可能"只给变化部分"。
+  </div>
+  <div class="card good">
+    <b>✅ WorkBuddy 的天然来源：<code>git diff</code></b>
+    <ul>
+      <li>改完文件后 <code>git diff</code> 就是高质量"变了什么"上下文，比重发整文件省几个数量级 token。</li>
+      <li>要让上游模型只看变化：<strong>在调 API 前</strong>把 <code>git diff</code> 摘要注入 messages，而非把整文件再发一遍。</li>
+      <li>网关配合：v1.6.0 <span class="pill a">toolResultMode=smart</span> 已压缩工具输出（build/test 日志）；但"diff 注入"是 WorkBuddy 调 API 前拼 messages 的事，归客户端。</li>
+    </ul>
+  </div>
+
+  <h2>接入清单（照着做）</h2>
+  <div class="card">
+    <ol>
+      <li>NAS 应用中心手动上传 <code>m365-copilot2api-1.6.0.fpk</code>（端口固定 4141）。</li>
+      <li>后台 <span class="k">Advanced</span> 页 → 选 <b>WorkBuddy 预设</b>：hideReasoning 开 + reasoning low + toolResultMode smart + autonomyBoost 开。保存即生效。</li>
+      <li>WorkBuddy 里把 M365 网关设为 OpenAI 兼容 endpoint：<code>http://nas.lianu.com:4141/v1</code>，model <code>auto</code>。</li>
+      <li>任务指令带「跑完 build/test 再结束」「还有 TODO 就继续」。</li>
+      <li>编码任务前先写 plan 到项目 memory（断点恢复）。</li>
+    </ol>
+  </div>
+
+  <h2>验证清单</h2>
+  <div class="grid">
+    <div class="mini"><b>压缩生效？</b>大 build 日志是否变成几十行（toolResultMode smart）</div>
+    <div class="mini"><b>自主跑完？</b>上游是否自己跑 build/test 才结束（autonomyBoost）</div>
+    <div class="mini"><b>断点恢复？</b>新会话读 memory 能否续上 plan</div>
+    <div class="mini"><b>diff 上下文？</b>改文件后是否用 git diff 而非整文件重发</div>
+  </div>
+
+  <div class="foot">
+    网关侧能力交付于 v1.6.0（Release：github.com/my788525/M365-Copilot2API-FNOS/releases/tag/v1.6.0）。
+    自动续跑 / 断点恢复 / diff 上下文属 WorkBuddy 客户端层，用 memory + git diff + 明确指令即可落地，无需改网关。
+  </div>
+</div>
+</body>
+</html>
