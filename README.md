@@ -88,7 +88,7 @@
 
 ## 与上游 fnOS 版的差异
 
-本分支同步至 [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) `v1.6.5`，改动如下（依 AGPL-3.0 第 5(a) 条标注）：
+本分支同步至 [my788525/M365-Copilot2API-FNOS](https://github.com/my788525/M365-Copilot2API-FNOS) `v1.6.29`，改动如下（依 AGPL-3.0 第 5(a) 条标注）：
 
 ### 1. 群晖 SPK 打包（新增）
 
@@ -96,7 +96,7 @@ FPK 与 SPK 结构高度对应，按 DSM 规范重写：
 
 | 文件 | 作用 |
 |---|---|
-| `INFO` | 套件元数据（`arch=noarch`、`adminport=4141`、`dsmuidir`、`dsmappname`） |
+| `INFO` | 套件元数据（`arch=x86_64`、`adminport=4141`、`dsmuidir`、`dsmappname`） |
 | `scripts/start-stop-status` | 启停与状态。用 **PID 文件 + `/proc/<pid>/exe` 校验**判断存活，避免 PID 复用误判；`stop` 先 TERM 等 20 秒再 KILL |
 | `scripts/postinst` | 建数据目录、落盘向导密码、回填卸载留存数据 |
 | `scripts/preuninst` | 卸载前保留账号数据 |
@@ -133,6 +133,16 @@ FPK 与 SPK 结构高度对应，按 DSM 规范重写：
 - 该密钥**没配** → 回落到上游智能路由（`modelTone` 的 `magic`），与原行为一致
 
 相应调整了两处测试：`public_identity_test.go` 的模型数量守卫 14 → 15；`codex_catalog_test.go` 原先用硬编码下标定位 `gpt-5.5`，改为按 ID 查找（该测试的本意是验证「映射内置模型时原地替换而非追加」，与位置无关）。
+
+### 5. 外部 Agent 客户端的普通模型生图加固
+
+在上游 v1.6.29 的提示词清洗基础上，保留并增强 DSM 分支的自动生图管线：
+
+- Claude Code / WorkBuddy 注入的 `<system-reminder>` 不再污染生图意图判断、提示词和 Markdown alt；选择 `gpt-5.6-sol` 等普通模型也会直接路由到 GPT Image 2，不再先派生通用子任务。
+- `empty completion`、429、单账号超时及可重试网络错误会自动轮换到尚未尝试的账号；整个请求共用一个总超时，避免按账号叠加成数十分钟。
+- 图片必须下载、验证并在网关本地托管成功后才算成功；按内容去重并剥离 C2PA/EXIF 元数据，不向客户端返回不可达的上游临时地址。
+- 生图失败直接返回结构化错误，不再退回普通聊天让文本模型“声称已生成”；OpenAI/Anthropic 流式与非流式响应统一通过标准文本内容返回 Markdown 图片。
+- `cite call_<uuid>` 等内部调用标记在所有外部响应中无条件清理，即使未启用身份重写策略也不会泄露。
 
 ## 功能概览
 
