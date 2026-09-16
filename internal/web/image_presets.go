@@ -91,11 +91,11 @@ func cleanImagePrompt(s string) string {
 // be supplied either via the OpenAI-compatible chat request body
 // (`image_options`) or parsed from the natural-language prompt text.
 type imageGenOptions struct {
-	Size     string `json:"size"`
-	Count    int    `json:"count"`
-	Style    string `json:"style"`
-	Negative string `json:"negative"`
-	Quality  string `json:"quality"`
+	Size      string `json:"size"`
+	Count     int    `json:"count"`
+	Style     string `json:"style"`
+	Negative  string `json:"negative"`
+	Quality   string `json:"quality"`
 	EditImage string `json:"editImage"` // data URI of a base image for 图生图 (edit) mode
 }
 

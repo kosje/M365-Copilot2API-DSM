@@ -281,6 +281,7 @@ func reasoningTone(model, effort string) (string, error) {
 		return "Gpt_5_5_Reasoning", nil
 	}
 }
+
 // catalogEntry builds the OpenAI-compatible model descriptor for a single
 // model spec. Capability fields are duplicated at both the top level and under
 // "capabilities" because different OpenAI-compatible clients inspect different
