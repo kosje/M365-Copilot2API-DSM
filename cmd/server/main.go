@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"m365-copilot2api/internal/outbound"
 	"m365-copilot2api/internal/web"
@@ -22,6 +23,15 @@ func main() {
 			os.Chdir(dir)
 		}
 	}
+	// Self-update handoff (Windows only): when spawned by an older instance
+	// during an online update, copy this (new) executable over the canonical
+	// path now that the old process has exited and freed the file lock.
+	if target := os.Getenv("M365_SELF_UPDATE_REPLACE"); target != "" {
+		os.Unsetenv("M365_SELF_UPDATE_REPLACE")
+		if err := replaceRunningExecutable(target); err != nil {
+			log.Printf("[self-update] replace canonical exe failed: %v", err)
+		}
+	}
 	web.ApplyStartupSettingsEnv()
 	if err := outbound.ConfigureFromEnv(); err != nil {
 		log.Fatalf("configure outbound proxy: %v", err)
@@ -36,6 +46,7 @@ func main() {
 	s.StartChatJanitor()
 	s.RefreshExpiredTokens()
 	s.StartQuotaRefresh()
+	s.StartAutoModelsRefresh()
 	s.StartTokenRefresh()
 	s.StartAlertMonitor()
 	s.StartUpdateChecker()
@@ -63,6 +74,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		WriteTimeout:      0, // streaming endpoints need an open-ended write window.
 	}
+	s.SetHTTPServer(server)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -96,4 +108,43 @@ func isLoopbackListen(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// replaceRunningExecutable copies the currently running executable over
+// target (backing up the previous target to target+".bak"). Used on Windows
+// self-update, where the OS locks the running .exe and the new copy therefore
+// takes over the canonical path after the old process has exited.
+func replaceRunningExecutable(target string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(self) == filepath.Clean(target) {
+		return nil // already in place
+	}
+	bak := target + ".bak"
+	_ = os.Remove(bak)
+	_ = copyFile(target, bak) // best-effort backup of the replaced binary
+	return copyFile(self, target)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

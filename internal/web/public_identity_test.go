@@ -48,8 +48,10 @@ func TestPublicIdentityPolicyCanBeDisabledForRawUpstreamResponses(t *testing.T) 
 		t.Fatalf("reasoning text was sanitized while disabled: %q", got)
 	}
 	fragment := "<cite>turn4search6</cite>"
-	if got := (&publicIdentityStreamFilter{}).Push(fragment); got != fragment {
-		t.Fatalf("stream fragment was changed while disabled: %q", got)
+	filter := &publicIdentityStreamFilter{}
+	got := filter.Push(fragment) + filter.Flush()
+	if got != "" {
+		t.Fatalf("internal citation metadata must be removed even when identity rewriting is disabled: %q", got)
 	}
 }
 
@@ -186,6 +188,35 @@ func TestSanitizePublicAssistantTextRemovesInternalCitationMarkers(t *testing.T)
 	}
 	if !strings.Contains(got, "答案是 42") || !strings.Contains(got, "更多内容") {
 		t.Fatalf("visible answer was damaged: %q", got)
+	}
+}
+
+func TestInternalCallMarkerIsAlwaysRemoved(t *testing.T) {
+	t.Setenv("M365_PUBLIC_IDENTITY_POLICY", "false")
+	input := "已按提示词生成电影级海报。cite call_58ee6a1e-cfaf-42be-b059-750c3e1c92a7"
+	got := sanitizePublicAssistantTextForModel(input, "gpt-5.6-sol")
+	if strings.Contains(strings.ToLower(got), "cite call_") || strings.Contains(got, "58ee6a1e") {
+		t.Fatalf("internal call marker leaked with identity policy disabled: %q", got)
+	}
+	if !strings.Contains(got, "已按提示词生成电影级海报") {
+		t.Fatalf("visible answer was damaged: %q", got)
+	}
+}
+
+func TestInternalCallMarkerSplitAcrossStreamChunks(t *testing.T) {
+	t.Setenv("M365_PUBLIC_IDENTITY_POLICY", "false")
+	filter := newPublicIdentityStreamFilter("gpt-5.6-sol")
+	chunks := []string{"已生成。ci", "te call_58ee6a1e-cfaf-", "42be-b059-750c3e1c92a7 完成。"}
+	var got strings.Builder
+	for _, chunk := range chunks {
+		got.WriteString(filter.Push(chunk))
+	}
+	got.WriteString(filter.Flush())
+	if strings.Contains(strings.ToLower(got.String()), "call_") || strings.Contains(got.String(), "58ee6a1e") {
+		t.Fatalf("split internal marker leaked: %q", got.String())
+	}
+	if !strings.Contains(got.String(), "已生成") || !strings.Contains(got.String(), "完成") {
+		t.Fatalf("visible streamed answer was damaged: %q", got.String())
 	}
 }
 

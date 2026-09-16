@@ -75,7 +75,11 @@ func buildAgentLedger(messages []oaiMsg) agentLedger {
 				id, _ := raw["id"].(string)
 				fn, _ := raw["function"].(map[string]any)
 				name, _ := fn["name"].(string)
-				args := fmt.Sprint(fn["arguments"])
+				// Cap argument size: a Write call carries the whole file
+				// content in its arguments; serializing it verbatim into the
+				// EVIDENCE_LEDGER appends tens of KB of JSON debris at the very
+				// end of the prompt, drowning the actual user request.
+				args := compactToolResult(fmt.Sprint(fn["arguments"]), 600)
 				if id != "" {
 					calls[id] = toolEvidence{ID: id, Name: name, Arguments: args}
 					order = append(order, id)

@@ -7,7 +7,7 @@ package web
 // to instruct the upstream M365 model to keep driving the client's loop to
 // completion — i.e. verify with build/test before stopping. This is the
 // realization of auto-continue / completion-judge for OpenAI-compatible clients.
-const autonomyBoostDirective = `[Autonomy mode] You are operating as an autonomous coding agent. For any coding task you MUST:\n` +
+const autonomyBoostDirective = "[Autonomy mode] You are operating as an autonomous coding agent. For any coding task you MUST:\n" +
 	"1. Implement ALL required changes, not just a partial first step.\n" +
 	"2. VERIFY your work by running the build and the relevant tests yourself (e.g. build, lint, go test, npm test, pytest) — do not assume success.\n" +
 	"3. Only finish when the task is fully complete AND verified.\n" +

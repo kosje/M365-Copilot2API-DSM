@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"m365-copilot2api/internal/chathub"
 	"m365-copilot2api/internal/outbound"
 )
 
@@ -42,12 +43,16 @@ var configurableCodexModels = []string{
 }
 
 type runtimeSettings struct {
-	MaxToolCallsPerTurn         int            `json:"maxToolCallsPerTurn"`
-	MaxToolRounds               int            `json:"maxToolRounds"`
-	ContextWindow               int            `json:"contextWindow"`
-	MaxOutputTokens             int            `json:"maxOutputTokens"`
-	ChatTimeoutSeconds          int            `json:"chatTimeoutSeconds"`
-	ImageTimeoutSeconds         int            `json:"imageTimeoutSeconds"`
+	MaxToolCallsPerTurn int `json:"maxToolCallsPerTurn"`
+	MaxToolRounds       int `json:"maxToolRounds"`
+	ContextWindow       int `json:"contextWindow"`
+	MaxOutputTokens     int `json:"maxOutputTokens"`
+	ChatTimeoutSeconds  int `json:"chatTimeoutSeconds"`
+	ImageTimeoutSeconds int `json:"imageTimeoutSeconds"`
+	// DailyImageLimit caps how many images the chat-endpoint image router may
+	// generate per day per API key (0 = unlimited). The used count is shown to
+	// the caller after each generation and enforced as a 429 when exceeded.
+	DailyImageLimit             int            `json:"dailyImageLimit"`
 	LogLevel                    string         `json:"logLevel"`
 	DebugLogPath                string         `json:"debugLogPath"`
 	ListenAddress               string         `json:"listenAddress"`
@@ -124,6 +129,20 @@ type runtimeSettings struct {
 	// does not specify one. Empty = use the model's configured default.
 	// Values: none, minimal, low, medium, high, xhigh.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// SystemPrompt is an OPTIONAL global system prompt prepended to every
+	// upstream request (tool-bearing or not). Leave empty to use the built-in
+	// default. Operators use this to tune agent identity / behavior without a
+	// recompile — e.g. paste the stock author's concise execution-agent wording
+	// or any custom instruction. It is passed verbatim; keep it short.
+	SystemPrompt string `json:"systemPrompt,omitempty"`
+	// ToolProtocolPrompt is an OPTIONAL template that REPLACES the built-in
+	// tool-state instruction for tool-bearing requests. It must contain the
+	// placeholders {tools} (the <tools>…</tools> definitions block) and
+	// {request} (the user's request text); {text} is accepted as an alias for
+	// {request}. Leave empty to use the built-in default. This lets operators
+	// rewrite how the model is told to call tools (e.g. restore the original
+	// author prompt, or add project-specific guidance) without recompiling.
+	ToolProtocolPrompt string `json:"toolProtocolPrompt,omitempty"`
 	// MaxHistoryMessages proactively caps the message count sent upstream
 	// (system/developer messages are always kept). 0 = unlimited (rely on
 	// auto-compact's token budget). Lower values cut upstream cost/latency.
@@ -191,7 +210,8 @@ func defaultRuntimeSettings() runtimeSettings {
 		MaxToolCallsPerTurn: envInt("M365_MAX_TOOL_CALLS_PER_TURN", 32), MaxToolRounds: envInt("M365_MAX_TOOL_ROUNDS", 512),
 		ContextWindow: envInt("M365_CONTEXT_WINDOW", 128000), MaxOutputTokens: envInt("M365_MAX_OUTPUT_TOKENS", 16384),
 		ChatTimeoutSeconds: envInt("M365_CHAT_TIMEOUT_SECONDS", 120), ImageTimeoutSeconds: envInt("M365_IMAGE_TIMEOUT_SECONDS", 300), LogLevel: firstNonEmptySetting(os.Getenv("M365_LOG_LEVEL"), "info"),
-		DebugLogPath: os.Getenv("M365_DEBUG_LOG"), ListenAddress: os.Getenv("M365_LISTEN"), ConfigPath: os.Getenv("M365_CONFIG"),
+		DailyImageLimit: envInt("M365_DAILY_IMAGE_LIMIT", 100),
+		DebugLogPath:    os.Getenv("M365_DEBUG_LOG"), ListenAddress: os.Getenv("M365_LISTEN"), ConfigPath: os.Getenv("M365_CONFIG"),
 		TokenCachePath: os.Getenv("M365_TOKEN_CACHE"), SessionCachePath: os.Getenv("M365_SESSION_CACHE"), OutboundProxy: os.Getenv(outbound.EnvProxy), ClientID: os.Getenv("M365_CLIENT_ID"),
 		Authority: os.Getenv("M365_AUTHORITY"), RedirectURI: os.Getenv("M365_REDIRECT_URI"), Scope: os.Getenv("M365_SCOPE"),
 		ModelMappings:               append([]modelMapping(nil), defaultModelMappings...),
@@ -261,6 +281,9 @@ func firstNonEmptySetting(values ...string) string {
 func validateSettings(v runtimeSettings) error {
 	if v.MaxToolCallsPerTurn < 1 || v.MaxToolCallsPerTurn > 64 {
 		return fmt.Errorf("每轮工具调用数必须为 1-64")
+	}
+	if v.DailyImageLimit < 0 || v.DailyImageLimit > 10000 {
+		return fmt.Errorf("每日生图额度(dailyImageLimit)必须为 0-10000（0=不限）")
 	}
 	if v.MaxToolRounds < 1 || v.MaxToolRounds > 512 {
 		return fmt.Errorf("最大工具轮次必须为 1-512")
@@ -395,6 +418,11 @@ func validateSettings(v runtimeSettings) error {
 }
 func (s *settingsStore) get() runtimeSettings { s.mu.RLock(); defer s.mu.RUnlock(); return s.v }
 func (s *settingsStore) save(v runtimeSettings) error {
+	// Hardening: never persist the regression-causing configuration so it cannot
+	// be toggled back on via the admin API or a stale settings.json.
+	v.ToolPlanningMode = "native"
+	v.AutonomyBoost = false
+	v.CodingProfile = ""
 	if e := validateSettings(v); e != nil {
 		return e
 	}
@@ -451,6 +479,25 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
 	}
+}
+
+// adminPromptDefaults exposes the stock built-in prompt templates so the admin
+// UI can preview the "original" prompts and offer one-click restore. These are
+// static built-ins (chathub.ToolProtocolPromptDefault / SystemPromptDefault),
+// so no auth/state is needed beyond the admin session.
+func (s *Server) adminPromptDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, 405, "invalid_request_error", "method not allowed")
+		return
+	}
+	if !s.validAdminSession(r) {
+		writeOpenAIError(w, 401, "auth_error", "unauthorized")
+		return
+	}
+	jsonOut(w, map[string]any{
+		"systemPrompt":       chathub.SystemPromptDefault,
+		"toolProtocolPrompt": chathub.ToolProtocolPromptDefault,
+	})
 }
 func configuredToolCallLimit(s *settingsStore) int {
 	if raw, ok := os.LookupEnv("M365_MAX_TOOL_CALLS_PER_TURN"); ok {

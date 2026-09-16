@@ -36,12 +36,6 @@ type apiKeyRecord struct {
 	// (entries may be exact IPs or CIDR ranges; empty = all IPs).
 	ModelWhitelist []string `json:"modelWhitelist,omitempty"`
 	IPWhitelist    []string `json:"ipWhitelist,omitempty"`
-	// AutoModels is the per-key "auto" (smart routing) model pool, ordered
-	// from highest to lowest priority. When a request with model="auto"
-	// arrives under this key, the gateway deterministically routes it to the
-	// first entry instead of delegating to the upstream magic tone. Empty =
-	// legacy behaviour (upstream smart routing).
-	AutoModels []string `json:"autoModels,omitempty"`
 }
 
 // keyRateWindow tracks per-minute request counts for rate-limited keys.
@@ -277,7 +271,6 @@ type keyUpdateOpts struct {
 	ExpiresAt      **time.Time // nil = leave; *nil = clear; non-nil = set
 	ModelWhitelist *[]string
 	IPWhitelist    *[]string
-	AutoModels     *[]string
 }
 
 func (s *apiKeyStore) update(id string, o keyUpdateOpts) (bool, error) {
@@ -287,7 +280,7 @@ func (s *apiKeyStore) update(id string, o keyUpdateOpts) (bool, error) {
 	var oldRevoked bool
 	var oldDaily, oldTotal, oldRate int64
 	var oldExpires *time.Time
-	var oldModels, oldIPs, oldAuto []string
+	var oldModels, oldIPs []string
 	for i := range s.Keys {
 		if s.Keys[i].ID != id {
 			continue
@@ -300,7 +293,6 @@ func (s *apiKeyStore) update(id string, o keyUpdateOpts) (bool, error) {
 		oldExpires = s.Keys[i].ExpiresAt
 		oldModels = s.Keys[i].ModelWhitelist
 		oldIPs = s.Keys[i].IPWhitelist
-		oldAuto = s.Keys[i].AutoModels
 		if o.Name != nil && *o.Name != "" {
 			s.Keys[i].Name = *o.Name
 		}
@@ -334,9 +326,6 @@ func (s *apiKeyStore) update(id string, o keyUpdateOpts) (bool, error) {
 		if o.IPWhitelist != nil {
 			s.Keys[i].IPWhitelist = normalizeStringList(*o.IPWhitelist)
 		}
-		if o.AutoModels != nil {
-			s.Keys[i].AutoModels = normalizeStringList(*o.AutoModels)
-		}
 		found = true
 		break
 	}
@@ -356,7 +345,6 @@ func (s *apiKeyStore) update(id string, o keyUpdateOpts) (bool, error) {
 				s.Keys[i].ExpiresAt = oldExpires
 				s.Keys[i].ModelWhitelist = oldModels
 				s.Keys[i].IPWhitelist = oldIPs
-				s.Keys[i].AutoModels = oldAuto
 				break
 			}
 		}

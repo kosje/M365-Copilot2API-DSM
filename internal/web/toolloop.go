@@ -188,6 +188,55 @@ func isToolRefusal(text string) bool {
 	return false
 }
 
+// safetyRefusalPatterns flags an upstream content-policy refusal where the
+// model declined to create a file / script / command at the user's explicit
+// request even though caller tools were available to do the work. We match
+// only the narrow "I can't help you create/provide this" phrasing (never every
+// generic "I can't"), so a genuine refusal of truly harmful content still
+// stands. When tools are attached and no tool call was emitted, the gateway
+// retries with a fresh conversation plus an execution-agent correction
+// (see the [safety-eject] block in server.go).
+var safetyRefusalPatterns = []string{
+	"我不能帮助创建",
+	"我不能帮助提供",
+	"我无法帮助创建",
+	"我无法提供",
+	"我不能协助",
+	"我无法协助",
+	"抱歉，我不能",
+	"抱歉,我不能",
+	"无法为你创建",
+	"无法为你生成",
+	"不该创建",
+	"不应该创建",
+	"cannot help you create",
+	"can't help you create",
+	"cannot help you write",
+	"can't help you write",
+	"cannot help you with",
+	"can't help you with",
+	"i cannot help with",
+	"i can't help with",
+	"unable to help with",
+	"i'm unable to help",
+	"i am unable to help",
+	"i won't be able to help",
+}
+
+func isSafetyRefusal(text string) bool {
+	if len(text) >= 1500 {
+		// Long, substantive answers must never be misread as a refusal.
+		return false
+	}
+	low := strings.ToLower(text)
+	for _, p := range safetyRefusalPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
 func isContentPolicyBlock(text string) bool {
 	return chathub.IsContentPolicyBlock(text)
 }
@@ -240,6 +289,19 @@ var sandboxHallucinationPatterns = []string{
 	"I don't have SSH access tools",
 	"I don't have any tools",
 	"none of which can reach",
+	// Chinese phrasings observed from upstream models claiming the caller's
+	// workspace is not mounted into their (imagined) container workspace.
+	"没有实际挂载",
+	"并没有实际挂载",
+	"没有挂载",
+	"未挂载",
+	"工作区为空",
+	"工作区是空的",
+	"工作目录为空",
+	"可访问的工作目录",
+	"空的 /mnt",
+	"只有空的",
+	"检查了当前可访问文件",
 }
 
 // windowsPathRe matches absolute Windows paths (drive letter + backslash tree).
@@ -278,7 +340,7 @@ func workspaceGrounding(text string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local Windows machine. Your Read/Write/Edit/Bash tools operate on them DIRECTLY — there is no separate sandbox, no Linux container, and no /mnt/data. Do NOT claim you cannot access them or can only see container directories. Use the exact paths with your tools.\n")
+	b.WriteString("WORKSPACE GROUNDING: The paths below were provided by the caller and exist on the caller's local machine. Your tools operate on them DIRECTLY with the exact paths as given — there is no separate workspace or mounted directory to look for. Act through your tools with these exact paths now; do not describe or audit your runtime environment.\n")
 	for i, r := range roots {
 		if i >= 6 {
 			break
@@ -286,6 +348,57 @@ func workspaceGrounding(text string) string {
 		b.WriteString("- " + r + "\n")
 	}
 	return b.String()
+}
+
+// workspaceGroundingFor returns the grounding paragraph for the caller's real
+// workspace. With tools attached the model is told to act through them; without
+// tools it is told the truth — it has no execution environment of its own and
+// the caller's agent performs file operations — so it never hallucinates a
+// /mnt/data sandbox in tool-less utility turns.
+func workspaceGroundingFor(text string, hasTools bool) string {
+	g := workspaceGrounding(text)
+	if g == "" {
+		return ""
+	}
+	if hasTools {
+		return g
+	}
+	return strings.Replace(g,
+		"Your tools operate on them DIRECTLY with the exact paths as given — there is no separate workspace or mounted directory to look for. Act through your tools with these exact paths now; do not describe or audit your runtime environment.",
+		"No tools are attached to this conversation turn, so you cannot touch them yourself: you have no code interpreter, no file system, and no sandbox of your own. File and command operations are performed by the caller's agent through its tools. If the request requires touching these files, state plainly that tool access is required and name the exact tool and path to use. Never probe, test, or report your own runtime environment, never present a container or sandbox directory as the caller's workspace, and never claim you can only see an empty working directory or a mounted volume — you have no view of any filesystem at all.",
+		1)
+}
+
+// fileOpIntentPatterns: phrases that signal the user wants a file created,
+// written or modified. Matched on tool-less requests where the prompt carries
+// no absolute path, so the honest grounding variant would not fire.
+var fileOpIntentPatterns = []string{
+	"创建文件", "新建文件", "写入文件", "生成文件", "保存文件", "创建个", "新建个",
+	"建一个文件", "写一个文件", "生成一个文件", "建个文件", "写个文件", "生成个文件",
+	"创建脚本", "写脚本", "生成脚本", "清理windows", "清理垃圾",
+	".bat", ".sh", ".ps1", ".py", ".js", ".ts", ".txt", ".md", ".csv", ".json",
+	"create a file", "create file", "write a file", "generate a file",
+	"make a file", "save a file", "create a script", "write a script",
+}
+
+// fileOpIntent reports whether the text asks for a file to be created,
+// written or modified even though it may not contain an absolute path.
+func fileOpIntent(text string) bool {
+	low := strings.ToLower(text)
+	for _, p := range fileOpIntentPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// toollessFileOpNote is injected into tool-less requests that ask for file
+// operations. It keeps the model honest: it cannot write any file itself and
+// must not substitute downloadable artifacts; it should say tool access is
+// required and provide the content for the caller to save.
+func toollessFileOpNote() string {
+	return "NO FILE TOOLS ARE ATTACHED to this conversation turn. You cannot create, modify, or save any file anywhere - not on the caller's machine and not in any working directory of your own. Do NOT generate downloadable files, artifacts, or upload links as a substitute, and do NOT say the file was saved somewhere. If the request asks for file operations, reply briefly that the caller's client must attach its file tools (agent mode with full access granted) so files can be written directly, then provide the exact file content in a fenced code block for the caller to save manually."
 }
 
 // toolNames returns the function names declared in the caller's tool list.
@@ -307,15 +420,15 @@ func toolNames(tools []chathub.Tool) []string {
 // caller does not need a separate image endpoint.
 var imageGenIntentPatterns = []string{
 	"生成图片", "生成图像", "生成一张图", "生成一幅图", "生成插画", "生成海报", "生成头像", "生成封面",
-	"生成logo", "生成 logo",
+	"生成logo", "生成 logo", "生成一张图片", "图片生成",
 	"画一张", "画一幅", "画个图", "画一张图", "画个", "画 logo", "画个logo", "画图",
 	"帮我画", "给我画", "请画", "帮我生图", "给我生图", "请生图", "生图：", "生图:", "直接生图", "开始生图",
 	"帮我出图", "给我出图", "请出图", "直接出图", "帮我配图", "请配图", "配图：", "配图:", "配张图",
 	"创作一张图", "设计一张图", "设计一个logo", "设计一个 logo", "文生图：", "文生图:", "文字生成图片",
-	"做个图", "来张图", "ai绘画：", "ai 绘画：",
+	"做个图", "来张图", "来一张", "给我一张", "画一只", "画一朵", "画一个", "ai绘画：", "ai 绘画：",
 	"generate an image", "generate image", "draw an image", "create an image",
-	"make an image", "text to image", "generate a picture", "draw a picture",
-	"paint a picture", "generate me an image", "create me an image", "make me an image",
+	"make an image", "text to image", "generate a picture", "draw a picture", "an image of",
+	"paint a picture", "generate me an image", "create me an image", "make me an image", "ai image", "image of",
 }
 
 var imageGenActionPatterns = []string{
@@ -467,8 +580,7 @@ func lastMessageRole(messages []oaiMsg) string {
 
 // sanitizeImageAlt makes text safe to embed inside a markdown image alt.
 func sanitizeImageAlt(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
+	s = cleanImagePrompt(s)
 	s = strings.ReplaceAll(s, "]", "")
 	s = strings.ReplaceAll(s, "(", "")
 	s = strings.ReplaceAll(s, ")", "")
@@ -486,4 +598,54 @@ func isSandboxHallucination(text string) bool {
 		}
 	}
 	return false
+}
+
+// artifactFallbackPatterns: the upstream model sometimes refuses the caller's
+// tools and instead "generates a downloadable file" via its built-in artifact
+// channel (e.g. a teams.microsoft.com / asyncgw download link). That is the
+// same class of failure as a sandbox hallucination: the model did not act
+// through the tools it was given. Detect it so the positive retry can force a
+// real tool call.
+var artifactFallbackPatterns = []string{
+	"teams.microsoft.com",
+	"asyncgw",
+	"提供给你下载",
+	"可下载文件",
+	"保存到当前运行环境",
+	"只能保存到",
+	"生成了一个可下载",
+	"已生成文件",
+	"下载链接",
+	"download link",
+	"i produced a downloadable",
+	"i created a file you can download",
+}
+
+// artifactReplyRe catches natural-language "file generated" claim variants
+// that the fixed pattern list above misses. Real-world failing replies like
+// "已生成 BAT 文件：" or "已创建 222.bat" interleave a filename between the
+// verb and 文件, so a plain "已生成文件" substring never matches and the
+// artifact-eject retry never fires.
+var artifactReplyRe = regexp.MustCompile(`(?i)(已生成|已创建|已保存|已写入|已将)[^.\n，。：；！？]{0,24}(文件|脚本|文档|链接)|(已生成|已创建|已保存|已写入)[^.\n]{0,20}\.(bat|txt|md|py|js|ts|sh|ps1|csv|json|log|zip|pdf|docx|xlsx|yml|yaml|html|css|ini)|文件[^.\n]{0,10}(已生成|已保存|已创建)|(下载|保存)[^.\n]{0,10}(链接|地址|到本地)|(click|点击)[^.\n]{0,12}(download|下载)|(file|script|document)[^.\n]{0,16}(has been|was)?[^.\n]{0,8}(generated|created|saved)`)
+
+func isArtifactFallback(text string) bool {
+	low := strings.ToLower(text)
+	for _, p := range artifactFallbackPatterns {
+		if strings.Contains(low, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return artifactReplyRe.MatchString(text)
+}
+
+// stripArtifactLinks removes Microsoft asyncgw / teams.microsoft.com generated-file
+// links (and their markdown link wrappers) from a reply so a tool-less caller never
+// sees a fake "file created" plus an unreachable download URL. Used as a backstop for
+// tool-less file-intent requests after the artifact-eject retries have been exhausted.
+func stripArtifactLinks(text string) string {
+	// [label](asyncgw-url) markdown links -> empty
+	text = regexp.MustCompile(`\[[^\]]*\]\((https?://[a-z0-9-]+\.asyncgw\.teams\.microsoft\.com[^)]*)\)`).ReplaceAllString(text, "")
+	// bare asyncgw/teams file urls -> empty
+	text = asyncgwURLRe.ReplaceAllString(text, "")
+	return strings.TrimSpace(text)
 }

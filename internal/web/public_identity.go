@@ -215,6 +215,10 @@ func sanitizePublicAssistantText(text string) string {
 }
 
 func sanitizePublicAssistantTextForModel(text, model string) string {
+	// Internal ChatHub call/citation identifiers are protocol metadata, never
+	// user-visible answer text. Strip them regardless of whether the optional
+	// public identity policy is enabled.
+	text = cleanInternalMarkers(text)
 	if !publicIdentityPolicyEnabled() {
 		return text
 	}
@@ -247,7 +251,7 @@ func sanitizePublicAssistantTextWithStateForModel(text string, identityWritten *
 	if text == "" {
 		return ""
 	}
-	text = publicInternalCitationPattern.ReplaceAllString(text, "")
+	text = cleanInternalMarkers(text)
 	var out strings.Builder
 	written := identityWritten != nil && *identityWritten
 	start := 0
@@ -389,6 +393,7 @@ func sanitizePublicJSONValue(value any) any {
 }
 
 type publicIdentityStreamFilter struct {
+	markerPending   string
 	pending         string
 	identityWritten bool
 	model           string
@@ -406,10 +411,11 @@ func (f *publicIdentityStreamFilter) Push(fragment string) string {
 	if f == nil {
 		return sanitizePublicAssistantText(fragment)
 	}
+	cleaned := f.pushInternalMarkers(fragment, false)
 	if !publicIdentityPolicyEnabled() {
-		return fragment
+		return cleaned
 	}
-	f.pending += fragment
+	f.pending += cleaned
 	return f.consume(false)
 }
 
@@ -417,13 +423,45 @@ func (f *publicIdentityStreamFilter) Flush() string {
 	if f == nil {
 		return ""
 	}
+	cleaned := f.pushInternalMarkers("", true)
 	if !publicIdentityPolicyEnabled() {
-		out := f.pending
-		f.pending = ""
-		return out
+		return cleaned
 	}
+	f.pending += cleaned
 	out := f.consume(true)
 	f.pending = ""
+	return out
+}
+
+// pushInternalMarkers keeps a short tail so markers split across SSE chunks
+// (for example "cite call_58ee..." arriving in three deltas) are removed as a
+// unit. Ordinary streaming stays incremental; at most 96 bytes are delayed.
+func (f *publicIdentityStreamFilter) pushInternalMarkers(fragment string, final bool) string {
+	f.markerPending += fragment
+	if final {
+		out := cleanInternalMarkers(f.markerPending)
+		f.markerPending = ""
+		return out
+	}
+	const tailBytes = 96
+	if len(f.markerPending) <= tailBytes {
+		return ""
+	}
+	cut := len(f.markerPending) - tailBytes
+	for cut > 0 && !utf8.RuneStart(f.markerPending[cut]) {
+		cut--
+	}
+	// If a possible marker starts in the retained tail, keep it intact until
+	// enough following bytes arrive for the regular expression to decide.
+	tailStart := cut
+	lower := strings.ToLower(f.markerPending)
+	for _, prefix := range []string{"cite", "call_", "[cite", "<cite", "cite"} {
+		if idx := strings.LastIndex(lower, prefix); idx >= 0 && idx < tailStart && len(lower)-idx <= tailBytes {
+			tailStart = idx
+		}
+	}
+	out := cleanInternalMarkers(f.markerPending[:tailStart])
+	f.markerPending = f.markerPending[tailStart:]
 	return out
 }
 

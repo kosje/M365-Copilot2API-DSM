@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"regexp"
@@ -280,53 +281,190 @@ func reasoningTone(model, effort string) (string, error) {
 		return "Gpt_5_5_Reasoning", nil
 	}
 }
+// catalogEntry builds the OpenAI-compatible model descriptor for a single
+// model spec. Capability fields are duplicated at both the top level and under
+// "capabilities" because different OpenAI-compatible clients inspect different
+// locations.
+func catalogEntry(m modelSpec, l modelLimits) map[string]any {
+	features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
+	modalities := []string{"text", "image"}
+	caps := map[string]any{
+		"chat_completions": true, "responses": true, "streaming": true,
+		"tools": true, "reasoning": true,
+		"reasoning_efforts": advertisedReasoningEfforts, "supported_reasoning_levels": advertisedReasoningEfforts,
+		"reasoning_mode": "gateway_tone_routing", "supports_tools": true, "tool_calls": true,
+		"function_calling": true, "supports_function_calling": true, "supports_vision": true,
+		"vision": true, "modalities": modalities, "input_modalities": modalities,
+		"output_modalities": []string{"text"}, "supported_features": features,
+	}
+	displayName := m.DisplayName
+	if displayName == "" {
+		displayName = m.ID
+	}
+	defaultReasoningLevel := m.DefaultReasoningLevel
+	if defaultReasoningLevel == "" {
+		defaultReasoningLevel = "medium"
+	}
+	return map[string]any{
+		"id": m.ID, "slug": m.ID, "display_name": displayName, "description": "Public model endpoint.",
+		"base_instructions": gatewayCodexBaseInstructions, "model_messages": codexModelMessages(),
+		"default_reasoning_level": defaultReasoningLevel, "object": "model", "owned_by": "gateway",
+		"shell_type": "shell_command", "visibility": "list", "supported_in_api": true, "priority": 1,
+		"additional_speed_tiers": []string{}, "service_tiers": []any{},
+		"availability_nux": nil, "upgrade": nil, "include_skills_usage_instructions": false,
+		"supports_reasoning_summaries": true, "default_reasoning_summary": "none",
+		"support_verbosity": true, "default_verbosity": "low", "apply_patch_tool_type": "freeform",
+		"web_search_tool_type": "text_and_image", "truncation_policy": map[string]any{"mode": "tokens", "limit": 10000},
+		"supports_parallel_tool_calls": true, "supports_image_detail_original": true,
+		"max_context_window": l.ContextWindow, "effective_context_window_percent": 95,
+		"experimental_supported_tools": []any{}, "supports_search_tool": true, "use_responses_lite": false,
+		"tool_mode": "code_mode_only", "multi_agent_version": "v2",
+		"context_window": l.ContextWindow, "max_input_tokens": l.MaxInputTokens, "max_output_tokens": l.MaxOutputTokens,
+		"capabilities": caps, "supports_tools": true, "tool_calls": true,
+		"supported_reasoning_levels": advertisedReasoningEfforts,
+		"function_calling":           true, "supports_function_calling": true, "supports_vision": true,
+		"vision": true, "modalities": modalities, "input_modalities": modalities,
+		"output_modalities": []string{"text"}, "supported_features": features,
+	}
+}
+
+// autoSmartModels are advertised as first-class, tool-capable models so that
+// OpenAI-compatible clients (WorkBuddy/Trae/…) recognize "auto" / "auto-2" as
+// valid models and attach their file tools. Without this, a client configured
+// with a custom model name like "auto-2" never sees it in /v1/models and may
+// withhold tools, leaving the gateway unable to create or modify files.
+var autoSmartModels = []modelSpec{
+	{ID: "auto", Owner: "microsoft-365", Tools: true, DisplayName: "智能路由（推荐）", DefaultReasoningLevel: "medium"},
+	{ID: "auto-2", Owner: "microsoft-365", Tools: true, DisplayName: "智能路由 2", DefaultReasoningLevel: "medium"},
+}
+
 func modelCatalog() []map[string]any {
 	l := configuredModelLimits()
 	models := configuredModelSpecs(currentSettings().ModelMappings)
-	out := make([]map[string]any, 0, len(models))
+	out := make([]map[string]any, 0, len(models)+len(autoSmartModels))
 	for _, m := range models {
-		// Keep capability fields both at the top level and under capabilities:
-		// different OpenAI-compatible clients inspect different locations.
-		features := []string{"tools", "function_calling", "streaming", "reasoning", "vision"}
-		modalities := []string{"text", "image"}
-		caps := map[string]any{
-			"chat_completions": true, "responses": true, "streaming": true,
-			"tools": true, "reasoning": true,
-			"reasoning_efforts": advertisedReasoningEfforts, "supported_reasoning_levels": advertisedReasoningEfforts,
-			"reasoning_mode": "gateway_tone_routing", "supports_tools": true, "tool_calls": true,
-			"function_calling": true, "supports_function_calling": true, "supports_vision": true,
-			"vision": true, "modalities": modalities, "input_modalities": modalities,
-			"output_modalities": []string{"text"}, "supported_features": features,
-		}
-		displayName := m.DisplayName
-		if displayName == "" {
-			displayName = m.ID
-		}
-		defaultReasoningLevel := m.DefaultReasoningLevel
-		if defaultReasoningLevel == "" {
-			defaultReasoningLevel = "medium"
-		}
-		out = append(out, map[string]any{
-			"id": m.ID, "slug": m.ID, "display_name": displayName, "description": "Public model endpoint.",
-			"base_instructions": gatewayCodexBaseInstructions, "model_messages": codexModelMessages(),
-			"default_reasoning_level": defaultReasoningLevel, "object": "model", "owned_by": "gateway",
-			"shell_type": "shell_command", "visibility": "list", "supported_in_api": true, "priority": 1,
-			"additional_speed_tiers": []string{}, "service_tiers": []any{},
-			"availability_nux": nil, "upgrade": nil, "include_skills_usage_instructions": false,
-			"supports_reasoning_summaries": true, "default_reasoning_summary": "none",
-			"support_verbosity": true, "default_verbosity": "low", "apply_patch_tool_type": "freeform",
-			"web_search_tool_type": "text_and_image", "truncation_policy": map[string]any{"mode": "tokens", "limit": 10000},
-			"supports_parallel_tool_calls": true, "supports_image_detail_original": true,
-			"max_context_window": l.ContextWindow, "effective_context_window_percent": 95,
-			"experimental_supported_tools": []any{}, "supports_search_tool": true, "use_responses_lite": false,
-			"tool_mode": "code_mode_only", "multi_agent_version": "v2",
-			"context_window": l.ContextWindow, "max_input_tokens": l.MaxInputTokens, "max_output_tokens": l.MaxOutputTokens,
-			"capabilities": caps, "supports_tools": true, "tool_calls": true,
-			"supported_reasoning_levels": advertisedReasoningEfforts,
-			"function_calling":           true, "supports_function_calling": true, "supports_vision": true,
-			"vision": true, "modalities": modalities, "input_modalities": modalities,
-			"output_modalities": []string{"text"}, "supported_features": features,
-		})
+		out = append(out, catalogEntry(m, l))
 	}
 	return out
+}
+
+// openaiModelsCatalog returns the full catalog including the smart-routing
+// "auto"/"auto-2" aliases advertised only on the OpenAI-compatible endpoint.
+func openaiModelsCatalog() []map[string]any {
+	l := configuredModelLimits()
+	out := modelCatalog()
+	for _, m := range autoSmartModels {
+		out = append(out, catalogEntry(m, l))
+	}
+	return out
+}
+
+// ---- auto routing: random selection from the live model catalog ----
+// "auto"/"auto-2"/"intelligent"/… requests are pinned to a random concrete
+// model from the current catalog. Unknown model names are rejected outright so
+// they can never silently fall back to the conservative "magic" tone.
+
+var (
+	autoMu         sync.RWMutex
+	autoChatPool   []string
+	autoKnownSet   map[string]bool
+	autoListAt     time.Time
+	autoListTTL    = 5 * time.Minute
+	autoRandSource = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
+// refreshAutoModels rebuilds the cached model lists from the current settings
+// and static catalog. Safe for concurrent use.
+func refreshAutoModels() {
+	specs := configuredModelSpecs(currentSettings().ModelMappings)
+	chat := make([]string, 0, len(specs))
+	known := make(map[string]bool, len(specs)+len(autoSmartModels))
+	for _, s := range specs {
+		known[strings.ToLower(s.ID)] = true
+		if s.Tools {
+			chat = append(chat, s.ID)
+		}
+	}
+	for _, s := range autoSmartModels {
+		known[strings.ToLower(s.ID)] = true
+	}
+	autoMu.Lock()
+	autoChatPool = chat
+	autoKnownSet = known
+	autoListAt = time.Now()
+	autoMu.Unlock()
+}
+
+// getAutoModels returns the cached chat pool and known-model set, refreshing
+// them if the cache is stale or empty.
+func getAutoModels() ([]string, map[string]bool) {
+	autoMu.RLock()
+	stale := autoListAt.IsZero() || time.Since(autoListAt) > autoListTTL || len(autoChatPool) == 0
+	autoMu.RUnlock()
+	if stale {
+		refreshAutoModels()
+	}
+	autoMu.RLock()
+	defer autoMu.RUnlock()
+	return autoChatPool, autoKnownSet
+}
+
+// isAutoModel reports whether the name is an "auto" / smart-routing alias.
+func isAutoModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch m {
+	case "auto", "auto-1", "auto-2", "auto-3", "automatic", "intelligent", "smart":
+		return true
+	}
+	return strings.HasPrefix(m, "auto-")
+}
+
+// pickAutoModelRandom returns a random chat-capable model for an "auto"
+// request, constrained to the provided allow-list (per-key whitelist) when
+// non-empty. Returns "" when no eligible model exists.
+func pickAutoModelRandom(allowed []string) string {
+	pool, _ := getAutoModels()
+	if len(pool) == 0 {
+		return ""
+	}
+	if len(allowed) > 0 {
+		set := make(map[string]bool, len(allowed))
+		for _, a := range allowed {
+			if v := strings.TrimSpace(a); v != "" {
+				set[strings.ToLower(v)] = true
+			}
+		}
+		filtered := make([]string, 0, len(pool))
+		for _, m := range pool {
+			if set[strings.ToLower(m)] {
+				filtered = append(filtered, m)
+			}
+		}
+		if len(filtered) == 0 {
+			return ""
+		}
+		pool = filtered
+	}
+	return pool[autoRandSource.Intn(len(pool))]
+}
+
+// isKnownModel reports whether the gateway accepts this model name: catalog
+// models, custom mappings, and the advertised auto aliases. Anything else is
+// rejected by the caller instead of being downgraded to "magic".
+func isKnownModel(model string) bool {
+	_, known := getAutoModels()
+	return known[strings.ToLower(strings.TrimSpace(model))]
+}
+
+// StartAutoModelsRefresh launches a background ticker that periodically
+// re-reads the model catalog so the auto pool stays current.
+func (s *Server) StartAutoModelsRefresh() {
+	refreshAutoModels()
+	go func() {
+		ticker := time.NewTicker(autoListTTL)
+		defer ticker.Stop()
+		for range ticker.C {
+			refreshAutoModels()
+		}
+	}()
 }

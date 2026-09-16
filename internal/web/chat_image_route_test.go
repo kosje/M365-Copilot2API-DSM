@@ -56,6 +56,36 @@ func TestChatImagesReachExternalClientProtocols(t *testing.T) {
 	}
 }
 
+func TestAnthropicImagePromptWithSystemReminderRoutesOnOrdinaryModel(t *testing.T) {
+	req := anthropicRequest{
+		Model: "gpt-5.6-sol",
+		Messages: []anthropicMessage{{
+			Role: "user",
+			Content: []any{map[string]any{
+				"type": "text",
+				"text": "按以下提示词生成图片：东方仙侠男主电影级海报，8K，竖版。" +
+					"<system-reminder>You are a coding agent. Use tools and save the PNG under /mnt/data.</system-reminder>",
+			}},
+		}},
+	}
+	o, err := req.openAI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lastMessageRole(o.Messages); got != "user" {
+		t.Fatalf("last role=%q want user", got)
+	}
+	clean := cleanImagePrompt(lastUserContent(o.Messages))
+	if !shouldUseChatImageRoute(o.Model, clean, o.Attachments) {
+		t.Fatalf("Anthropic/Claude Code request missed image route after conversion: %q", clean)
+	}
+	for _, forbidden := range []string{"system-reminder", "coding agent", "/mnt/data"} {
+		if strings.Contains(clean, forbidden) {
+			t.Fatalf("converted prompt still contains injected context %q: %q", forbidden, clean)
+		}
+	}
+}
+
 func TestChatImagesRejectFalseSuccess(t *testing.T) {
 	s := &Server{}
 	r := httptest.NewRequest("POST", "http://nas/v1/chat/completions", nil)

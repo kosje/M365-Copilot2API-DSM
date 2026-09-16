@@ -15,8 +15,11 @@ import (
 	"m365-copilot2api/internal/outbound"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -502,6 +505,7 @@ func (s *Server) storeGeneratedImage(data []byte, contentType string) string {
 			delete(s.generatedImages, oldestID)
 		}
 	}
+	data, contentType = stripImageMetadata(data, contentType)
 	s.generatedImages[id] = generatedImage{Data: append([]byte(nil), data...), ContentType: contentType, ExpiresAt: now.Add(generatedImageTTL)}
 	return id
 }
@@ -753,6 +757,7 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		data, ct = stripImageMetadata(data, ct)
 		hash := sha256.Sum256(data)
 		if seen[hash] {
 			continue
@@ -766,26 +771,54 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 	return urls, nil
 }
 
-// generateChatImages runs the image-generation pipeline (account rotation,
-// upstream GPT Image 2 call, download/store) and returns served image URLs
-// suitable for inline embedding in a chat completion. Used by the chat-endpoint
-// image-intent router so callers do not need a separate image endpoint.
-func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, size string, attachments []chathub.Attachment, accountID string) ([]string, string, error) {
-	if n <= 0 {
-		n = 1
-	}
-	if size == "" {
-		size = "1024x1024"
-	}
-	prompt := fmt.Sprintf("Generate an image with GPT Image 2. Size: %s. Description: %s. Return the image URL directly.", size, userPrompt)
-	// ImageTimeoutSeconds is a request-level budget, not a per-account budget.
-	// Applying it independently inside the failover loop multiplies a 300s
-	// setting by every account (12 accounts => up to an hour) while SSE
-	// keepalives make the client appear stuck forever.
+// generateChatImages runs the image-generation pipeline for the chat-endpoint
+// image router. It supports the full option set (size / count / style / negative
+// / quality) and loops once per requested image so callers get exactly `count`
+// results. Structured image_options win; the natural-language prompt is parsed as
+// a fallback by the caller before reaching here.
+func (s *Server) generateChatImages(r *http.Request, userPrompt string, opts imageGenOptions, attachments []chathub.Attachment, accountID string) ([]string, string, error) {
+	size, count := opts.normalize()
+	opts.Size = size
+	prompt := opts.buildPrompt(userPrompt)
+	// ImageTimeoutSeconds is one request-level budget shared by account
+	// failover, multiple requested images and local hosting. Applying it once per
+	// account can turn a five-minute setting into an hour-long stuck request.
 	totalTimeout, attemptTimeout := chatImageRouteTimeouts(s.settings.get().ImageTimeoutSeconds)
 	totalCtx, totalCancel := context.WithTimeout(r.Context(), totalTimeout)
 	defer totalCancel()
 	explicit := strings.TrimSpace(accountID) != ""
+	var allURLs []string
+	var lastConv string
+	var lastErr error
+	for produced := 0; produced < count; produced++ {
+		urls, convID, err := s.generateOneImage(totalCtx, totalTimeout, attemptTimeout, r, prompt, attachments, explicit, accountID)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		allURLs = append(allURLs, urls...)
+		lastConv = convID
+	}
+	// Cap to the requested count: a single upstream call can return more than one
+	// image, so without this guard a count=1 request could return several.
+	if len(allURLs) > count {
+		allURLs = allURLs[:count]
+	}
+	if len(allURLs) == 0 {
+		if lastErr != nil {
+			if errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr) {
+				return nil, "", fmt.Errorf("image generation daily limit reached; try again tomorrow")
+			}
+			return nil, "", lastErr
+		}
+		return nil, "", fmt.Errorf("no image returned")
+	}
+	return allURLs, lastConv, nil
+}
+
+// generateOneImage runs the upstream GPT Image 2 pipeline once and returns the
+// served image URLs for that single generation.
+func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemptTimeout time.Duration, r *http.Request, prompt string, attachments []chathub.Attachment, explicit bool, accountID string) ([]string, string, error) {
 	var res chathub.Result
 	found := false
 	var successAcc auth.AccountToken
@@ -889,9 +922,6 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, n int, s
 		return nil, "", fmt.Errorf("no image returned")
 	}
 	images := res.Images
-	if len(images) > n {
-		images = images[:n]
-	}
 	urls, err := s.hostChatImages(totalCtx, r, images, successAcc)
 	if err != nil {
 		return nil, "", err
@@ -919,4 +949,71 @@ func chatImageContextError(err error, timeout time.Duration) error {
 		return fmt.Errorf("image generation timed out after %s: %w", timeout, err)
 	}
 	return fmt.Errorf("image generation canceled: %w", err)
+}
+
+// ----------------------------------------------------------------------------
+// Per-API-key daily image-generation quota
+//
+// The chat-endpoint image router (used by OpenAI-compatible clients such as
+// WorkBuddy) is not bound to a chatui user account, so its quota is tracked by
+// the caller's API key prefix. A daily counter file keyed by date records how
+// many images each key has generated today; the ceiling comes from the
+// DailyImageLimit runtime setting (0 = unlimited).
+// ----------------------------------------------------------------------------
+
+var imageQuotaMu sync.Mutex
+
+func imageQuotaPath(t time.Time) string {
+	return filepath.Join(chatDataDir(), "image-quota-"+t.Format("2006-01-02")+".json")
+}
+
+func readImageQuota(t time.Time) map[string]int {
+	m := map[string]int{}
+	if b, err := os.ReadFile(imageQuotaPath(t)); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+// getAPIKeyImageQuota returns today's used image count and the configured
+// (per-day) limit for the given API key prefix.
+func getAPIKeyImageQuota(keyPrefix string) (used, limit int) {
+	limit = currentSettings().DailyImageLimit
+	if limit < 0 {
+		limit = 0
+	}
+	if keyPrefix == "" {
+		return 0, limit
+	}
+	return readImageQuota(time.Now())[keyPrefix], limit
+}
+
+// bumpAPIKeyImageQuota increments the daily counter by n and returns the updated
+// used/total values. The counter is persisted atomically so concurrent requests
+// from the same key stay accurate.
+func bumpAPIKeyImageQuota(keyPrefix string, n int) (used, limit int) {
+	limit = currentSettings().DailyImageLimit
+	if limit < 0 {
+		limit = 0
+	}
+	if keyPrefix == "" {
+		return 0, limit
+	}
+	imageQuotaMu.Lock()
+	defer imageQuotaMu.Unlock()
+	m := readImageQuota(time.Now())
+	m[keyPrefix] += n
+	if b, err := json.MarshalIndent(m, "", "  "); err == nil {
+		_ = writeFileAtomic(imageQuotaPath(time.Now()), b, 0600)
+	}
+	return m[keyPrefix], limit
+}
+
+// imageQuotaLine renders the "今日图片已用 X / 总额度 Y" line shown after each
+// generation. When the limit is 0 (unlimited) it displays "不限".
+func imageQuotaLine(used, limit int) string {
+	if limit <= 0 {
+		return fmt.Sprintf("📊 今日图片额度：已用 %d / 总额度 不限", used)
+	}
+	return fmt.Sprintf("📊 今日图片额度：已用 %d / 总额度 %d", used, limit)
 }
