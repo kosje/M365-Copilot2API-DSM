@@ -15,7 +15,13 @@ VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
 LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-postupgrade.log}"
 
-log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+: > "$LOGFILE" 2>/dev/null || true
+
+log_info() { logger -t "$PKG" "$*" >/dev/null 2>&1 || true; }
+log_error() {
+    echo "$*" >> "$LOGFILE" 2>/dev/null || true
+    logger -t "$PKG" "$*" >/dev/null 2>&1 || true
+}
 
 # Must match preupgrade's retain_base().
 retain_base() {
@@ -47,15 +53,15 @@ restore_from() {
     # copy. (A snapshot with nothing in it at all is a legitimately empty
     # install and is cleaned up normally.)
     if [ ! -s "$src/accounts.json" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
-        log "postupgrade: snapshot at $src has no accounts.json; keeping it"
+        log_error "postupgrade: snapshot at $src has no accounts.json; keeping it"
         return 1
     fi
     if ! cp -an "$src/." "$DATA_DIR/"; then
-        log "postupgrade: restore from $src failed; keeping it for manual recovery"
+        log_error "postupgrade: restore from $src failed; keeping it for manual recovery"
         return 1
     fi
     if [ -s "$src/accounts.json" ] && [ ! -s "$DATA_DIR/accounts.json" ]; then
-        log "postupgrade: $DATA_DIR/accounts.json is still missing after restoring from $src"
+        log_error "postupgrade: $DATA_DIR/accounts.json is still missing after restoring from $src"
         return 1
     fi
     return 0
@@ -66,24 +72,24 @@ if [ -d "$BACKUP" ]; then
     if restore_from "$BACKUP"; then
         rm -rf "$BACKUP" "$PREVIOUS" 2>/dev/null || true
         restored=1
-        log "postupgrade: restored $DATA_DIR from $BACKUP"
+        log_info "postupgrade: restored $DATA_DIR from $BACKUP"
     else
-        log "postupgrade: keeping $BACKUP (and $PREVIOUS) for manual recovery"
+        log_error "postupgrade: keeping $BACKUP (and $PREVIOUS) for manual recovery"
     fi
 elif [ -d "$LEGACY_BACKUP" ]; then
     if restore_from "$LEGACY_BACKUP"; then
         rm -rf "$LEGACY_BACKUP" 2>/dev/null || true
         restored=1
-        log "postupgrade: restored $DATA_DIR from the pre-1.6.6 snapshot at $LEGACY_BACKUP"
+        log_info "postupgrade: restored $DATA_DIR from the pre-1.6.6 snapshot at $LEGACY_BACKUP"
     else
-        log "postupgrade: keeping $LEGACY_BACKUP for manual recovery"
+        log_error "postupgrade: keeping $LEGACY_BACKUP for manual recovery"
     fi
 fi
 
 if [ "$restored" = 0 ] && [ ! -s "$DATA_DIR/accounts.json" ] && [ -d "$PREVIOUS" ]; then
-    log "postupgrade: $DATA_DIR has no accounts.json; trying the previous snapshot at $PREVIOUS"
+    log_info "postupgrade: $DATA_DIR has no accounts.json; trying the previous snapshot at $PREVIOUS"
     if restore_from "$PREVIOUS"; then
-        log "postupgrade: recovered from $PREVIOUS"
+        log_info "postupgrade: recovered from $PREVIOUS"
     fi
 fi
 

@@ -76,10 +76,18 @@ fi
 echo
 echo "=== 2. postupgrade restores after DSM wipes the package directory ==="
 rm -rf "$PKGVAR"                      # the pessimistic case: var/ is gone
+# Reproduce an upgrade from v1.6.30, whose preupgrade hook wrote a successful
+# progress line into DSM's user-facing error file.
+printf 'preupgrade: snapshot written successfully\n' > "$SYNOPKG_TEMP_LOGFILE"
 sh "$SCRIPTS/postupgrade"; rc=$?
 check "exit status" 0 "$rc"
 check_file "accounts.json restored" "$DATA/accounts.json"
 check_absent "snapshot removed once the restore is verified" "$RETAIN/preupgrade-snapshot"
+if [ ! -s "$SYNOPKG_TEMP_LOGFILE" ]; then
+    ok "successful upgrade leaves DSM's user-facing error log empty"
+else
+    bad "successful upgrade wrote a misleading installer message: $(cat "$SYNOPKG_TEMP_LOGFILE")"
+fi
 
 echo
 echo "=== 3. postupgrade keeps the snapshot when the restore cannot be trusted ==="

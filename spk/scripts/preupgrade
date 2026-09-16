@@ -25,7 +25,13 @@ VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
 LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-preupgrade.log}"
 
-log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+: > "$LOGFILE" 2>/dev/null || true
+
+log_info() { logger -t "$PKG" "$*" >/dev/null 2>&1 || true; }
+log_error() {
+    echo "$*" >> "$LOGFILE" 2>/dev/null || true
+    logger -t "$PKG" "$*" >/dev/null 2>&1 || true
+}
 
 # retain_base prints a directory outside the package tree. DSM's persistent
 # per-package data lives under <volume>/@appdata, so prefer that and only fall
@@ -45,7 +51,7 @@ BACKUP="$RETAIN/preupgrade-snapshot"
 PREVIOUS="$BACKUP.previous"
 
 if [ ! -d "$DATA_DIR" ]; then
-    log "preupgrade: no data directory at $DATA_DIR; nothing to snapshot"
+    log_info "preupgrade: no data directory at $DATA_DIR; nothing to snapshot"
     exit 0
 fi
 
@@ -54,18 +60,18 @@ fi
 if [ -d "$BACKUP" ]; then
     rm -rf "$PREVIOUS" 2>/dev/null || true
     if ! mv "$BACKUP" "$PREVIOUS"; then
-        log "preupgrade: cannot rotate $BACKUP out of the way; aborting"
+        log_error "preupgrade: cannot rotate $BACKUP out of the way; aborting"
         exit 1
     fi
 fi
 
 if ! mkdir -p "$RETAIN"; then
-    log "preupgrade: cannot create $RETAIN; aborting"
+    log_error "preupgrade: cannot create $RETAIN; aborting"
     exit 1
 fi
 
 if ! cp -a "$DATA_DIR" "$BACKUP"; then
-    log "preupgrade: snapshot copy failed - aborting the upgrade rather than risking the data"
+    log_error "preupgrade: snapshot copy failed - aborting the upgrade rather than risking the data"
     if [ ! -d "$BACKUP" ] && [ -d "$PREVIOUS" ]; then
         mv "$PREVIOUS" "$BACKUP" 2>/dev/null || true
     fi
@@ -75,10 +81,10 @@ fi
 # An accounts.json that exists in the source but not in the snapshot means the
 # snapshot is not usable; fail here rather than discovering it during restore.
 if [ -s "$DATA_DIR/accounts.json" ] && [ ! -s "$BACKUP/accounts.json" ]; then
-    log "preupgrade: snapshot at $BACKUP is missing accounts.json; aborting"
+    log_error "preupgrade: snapshot at $BACKUP is missing accounts.json; aborting"
     exit 1
 fi
 
 SIZE="$(du -sk "$BACKUP" 2>/dev/null | awk '{print $1}')"
-log "preupgrade: snapshot of $DATA_DIR written to $BACKUP (${SIZE:-?} KiB); previous copy kept at $PREVIOUS"
+log_info "preupgrade: snapshot of $DATA_DIR written to $BACKUP (${SIZE:-?} KiB); previous copy kept at $PREVIOUS"
 exit 0

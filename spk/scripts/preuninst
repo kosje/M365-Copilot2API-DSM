@@ -21,7 +21,13 @@ VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/$PKG/var}"
 DATA_DIR="$VAR_DIR/data"
 LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-preuninst.log}"
 
-log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+: > "$LOGFILE" 2>/dev/null || true
+
+log_info() { logger -t "$PKG" "$*" >/dev/null 2>&1 || true; }
+log_error() {
+    echo "$*" >> "$LOGFILE" 2>/dev/null || true
+    logger -t "$PKG" "$*" >/dev/null 2>&1 || true
+}
 
 # Must match preupgrade's retain_base().
 retain_base() {
@@ -49,27 +55,27 @@ fi
 # uses when the operator ticks "delete data".
 if [ "${pkgwizard_delete_data:-}" = "true" ] || [ "${SYNOPKG_PKG_STATUS:-}" = "UNINSTALL_DELDATA" ]; then
     rm -rf "$KEEP_DIR" "$LEGACY_KEEP_DIR" 2>/dev/null || true
-    log "preuninst: data deletion requested; removed $KEEP_DIR"
+    log_info "preuninst: data deletion requested; removed $KEEP_DIR"
     exit 0
 fi
 
 if [ ! -f "$DATA_DIR/accounts.json" ]; then
-    log "preuninst: no accounts.json at $DATA_DIR; nothing to retain"
+    log_info "preuninst: no accounts.json at $DATA_DIR; nothing to retain"
     exit 0
 fi
 
 if ! mkdir -p "$KEEP_DIR"; then
-    log "preuninst: cannot create $KEEP_DIR; data will not be retained"
+    log_error "preuninst: cannot create $KEEP_DIR; data will not be retained"
     exit 1
 fi
 
 if ! cp -a "$DATA_DIR/." "$KEEP_DIR/"; then
-    log "preuninst: retaining $DATA_DIR at $KEEP_DIR failed"
+    log_error "preuninst: retaining $DATA_DIR at $KEEP_DIR failed"
     exit 1
 fi
 
 if [ ! -s "$KEEP_DIR/accounts.json" ]; then
-    log "preuninst: retained copy at $KEEP_DIR is missing accounts.json"
+    log_error "preuninst: retained copy at $KEEP_DIR is missing accounts.json"
     exit 1
 fi
 
@@ -78,5 +84,5 @@ chmod 700 "$KEEP_DIR" 2>/dev/null || true
 # ahead of this one, so drop it now that the new location holds a newer copy.
 rm -rf "$LEGACY_KEEP_DIR" 2>/dev/null || true
 
-log "preuninst: retained $DATA_DIR at $KEEP_DIR (delete it by hand to erase the accounts and tokens)"
+log_info "preuninst: retained $DATA_DIR at $KEEP_DIR (delete it by hand to erase the accounts and tokens)"
 exit 0

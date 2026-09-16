@@ -14,7 +14,18 @@ RESET_PW="$VAR_DIR/admin-password-reset"
 LOGFILE="${SYNOPKG_TEMP_LOGFILE:-/tmp/$PKG-postinst.log}"
 MIN_PASSWORD_LEN=12
 
-log() { echo "$*" >> "$LOGFILE" 2>/dev/null || true; }
+# Each hook owns the user-facing temporary log while it runs. Reaching this
+# hook means earlier phases did not abort, so discard stale success text left
+# by older package revisions before recording any real error from this phase.
+: > "$LOGFILE" 2>/dev/null || true
+
+# DSM displays SYNOPKG_TEMP_LOGFILE in an installer dialog. Keep routine
+# progress in syslog and reserve the temporary file for actionable failures.
+log_info() { logger -t "$PKG" "$*" >/dev/null 2>&1 || true; }
+log_error() {
+    echo "$*" >> "$LOGFILE" 2>/dev/null || true
+    logger -t "$PKG" "$*" >/dev/null 2>&1 || true
+}
 
 # Must match preupgrade's retain_base().
 retain_base() {
@@ -45,19 +56,19 @@ restore_keep() {
     src="$1"
     [ -d "$src" ] && [ -f "$src/accounts.json" ] || return 1
     if ! cp -an "$src/." "$DATA_DIR/"; then
-        log "postinst: restoring from $src failed"
+        log_error "postinst: restoring from $src failed"
         return 1
     fi
     printf 'restored retained data from %s on %s\n' "$src" "$(date)" >> "$DATA_DIR/restore.log" 2>/dev/null || true
-    log "postinst: restored retained data from $src"
+    log_info "postinst: restored retained data from $src"
 }
 
 if [ -s "$DATA_DIR/accounts.json" ]; then
-    log "postinst: $DATA_DIR already holds accounts.json; not merging retained data"
+    log_info "postinst: $DATA_DIR already holds accounts.json; not merging retained data"
 elif restore_keep "$KEEP_DIR" || restore_keep "$LEGACY_KEEP_DIR"; then
     :
 else
-    log "postinst: no retained data to restore"
+    log_info "postinst: no retained data to restore"
 fi
 
 # Hand the wizard password to the service through a file it consumes on the next
@@ -70,15 +81,15 @@ if [ -n "${pkgwizard_admin_password:-}" ]; then
     if [ "${#pkgwizard_admin_password}" -lt "$MIN_PASSWORD_LEN" ]; then
         # The wizard enforces the same rule in the UI; check it here too,
         # because the installer can be driven non-interactively.
-        log "postinst: wizard password is shorter than $MIN_PASSWORD_LEN characters; not applying it"
+        log_error "postinst: wizard password is shorter than $MIN_PASSWORD_LEN characters; not applying it"
         rm -f "$RESET_PW" 2>/dev/null || true
     else
         umask 077
         if printf '%s' "$pkgwizard_admin_password" > "$RESET_PW"; then
             chmod 600 "$RESET_PW" 2>/dev/null || true
-            log "postinst: staged the install wizard password for the next service start"
+            log_info "postinst: staged the install wizard password for the next service start"
         else
-            log "postinst: could not stage the install wizard password"
+            log_error "postinst: could not stage the install wizard password"
         fi
     fi
 fi
