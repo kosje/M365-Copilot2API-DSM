@@ -172,12 +172,12 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		if err != nil {
 			lastErr = err
-			if errors.Is(err, chathub.ErrImageLimit) {
+			if isImageQuotaError(err) {
 				// 标记该账号画图配额耗尽（冷却到 UTC 明日零点），
 				// 后续画图请求选号时直接跳过它。
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
 			}
-			retryable := errors.Is(err, chathub.ErrImageLimit) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
+			retryable := isImageQuotaError(err) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
 			if explicit || !retryable {
 				writeUpstreamError(w, err)
 				return
@@ -210,7 +210,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "no image returned")
 			return
 		}
-		if errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr) {
+		if isImageQuotaError(lastErr) || IsRateLimited(lastErr) {
 			w.Header().Set("Retry-After", "86400")
 			writeOpenAIError(w, http.StatusTooManyRequests, "image_limit_error", "image generation daily limit reached; try again tomorrow")
 			return
@@ -535,6 +535,25 @@ func isImageQuotaRefusal(text string) bool {
 	return false
 }
 
+// isImageQuotaError covers both the typed error and the human-readable
+// structured metering errors returned by different ChatHub deployments. The
+// latter used to be classified as UPSTREAM_STRUCTURED, which caused the same
+// exhausted account to be selected repeatedly until the five-minute request
+// timeout expired.
+func isImageQuotaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, chathub.ErrImageLimit) {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "image generation daily limit") ||
+		strings.Contains(low, "image generation quota") ||
+		strings.Contains(low, "daily image limit") ||
+		strings.Contains(low, "generate any more images")
+}
+
 // extractImageURLs finds image URLs in a raw JSON string by searching for URL patterns.
 func extractImageURLs(raw string) []string {
 	if raw == "" {
@@ -857,10 +876,10 @@ func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemp
 				log.Printf("[image-route] account=%s timed out after %s; rotating", acc.ID, thisAttempt)
 				continue
 			}
-			if errors.Is(err, chathub.ErrImageLimit) {
+			if isImageQuotaError(err) {
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
 			}
-			retryable := errors.Is(err, chathub.ErrImageLimit) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
+			retryable := isImageQuotaError(err) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
 			if explicit || !retryable {
 				return nil, "", err
 			}
@@ -886,7 +905,7 @@ func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemp
 		break
 	}
 	if !found {
-		if lastErr != nil && (errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr)) {
+		if lastErr != nil && (isImageQuotaError(lastErr) || IsRateLimited(lastErr)) {
 			return nil, "", fmt.Errorf("image generation daily limit reached; try again tomorrow")
 		}
 		if lastErr != nil {

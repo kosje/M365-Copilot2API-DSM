@@ -1,6 +1,10 @@
 package web
 
-import "testing"
+import (
+	"fmt"
+	"m365-copilot2api/internal/chathub"
+	"testing"
+)
 
 func TestImageQuotaRefusal(t *testing.T) {
 	for _, text := range []string{
@@ -14,5 +18,20 @@ func TestImageQuotaRefusal(t *testing.T) {
 	}
 	if isImageQuotaRefusal("Here is your generated image.") {
 		t.Fatal("ordinary image response misclassified")
+	}
+}
+
+func TestImageQuotaErrorRecognizesStructuredMessages(t *testing.T) {
+	for _, err := range []error{
+		chathub.ErrImageLimit,
+		fmt.Errorf("upstream image generation daily limit reached"),
+		fmt.Errorf("image generation quota exhausted"),
+	} {
+		if !isImageQuotaError(err) {
+			t.Fatalf("isImageQuotaError(%v) = false", err)
+		}
+	}
+	if isImageQuotaError(fmt.Errorf("image generation system capacity temporarily unavailable")) {
+		t.Fatal("system capacity error must not be classified as a daily image quota error")
 	}
 }

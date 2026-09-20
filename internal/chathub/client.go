@@ -49,6 +49,17 @@ func checkMeteringError(mi any) error {
 		meterErr, _ := m["meterError"].(string)
 		hasAccess, _ := m["hasAccess"].(bool)
 		if meterErr != "" && !hasAccess {
+			// Microsoft has returned several names for the same image quota
+			// condition over time. Keep all image-generation quota variants on
+			// the image-specific path so the web layer can cool down this account
+			// and rotate to another one instead of retrying it until timeout.
+			lowMeterErr := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(meterErr), "_", ""))
+			if strings.Contains(lowMeterErr, "imagegen") || strings.Contains(lowMeterErr, "imagegeneration") {
+				if strings.Contains(lowMeterErr, "systemcapacity") || strings.Contains(lowMeterErr, "capacity") {
+					return ErrMeteringThrottled
+				}
+				return ErrImageLimit
+			}
 			switch meterErr {
 			case "ImageGenInsufficientTokensThrottled":
 				return ErrImageLimit
