@@ -176,6 +176,12 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 				// 标记该账号画图配额耗尽（冷却到 UTC 明日零点），
 				// 后续画图请求选号时直接跳过它。
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			} else if errors.Is(err, chathub.ErrMeteringThrottled) {
+				// Temporary Designer capacity throttles are not a daily quota
+				// exhaustion, but retrying the same account immediately causes a
+				// long sequence of image timeouts. Keep it out of image rotation
+				// for a short period and allow another account to serve the request.
+				s.accountPool.MarkImageGenSystemThrottled(acc.ID)
 			}
 			retryable := isImageQuotaError(err) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
 			if explicit || !retryable {
@@ -878,6 +884,8 @@ func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemp
 			}
 			if isImageQuotaError(err) {
 				s.accountPool.MarkImageGenTokensThrottled(acc.ID)
+			} else if errors.Is(err, chathub.ErrMeteringThrottled) {
+				s.accountPool.MarkImageGenSystemThrottled(acc.ID)
 			}
 			retryable := isImageQuotaError(err) || IsEmptyCompletion(err) || IsRateLimited(err) || upstreamStatus(err) == http.StatusTooManyRequests || IsRetryable(err)
 			if explicit || !retryable {
