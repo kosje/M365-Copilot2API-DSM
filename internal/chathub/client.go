@@ -53,8 +53,10 @@ func checkMeteringError(mi any) error {
 			// condition over time. Keep all image-generation quota variants on
 			// the image-specific path so the web layer can cool down this account
 			// and rotate to another one instead of retrying it until timeout.
-			lowMeterErr := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(meterErr), "_", ""))
-			if strings.Contains(lowMeterErr, "imagegen") || strings.Contains(lowMeterErr, "imagegeneration") {
+			lowMeterErr := strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(meterErr)))
+			imageQuotaText := strings.Contains(lowMeterErr, "imagegeneration") &&
+				(strings.Contains(lowMeterErr, "limit") || strings.Contains(lowMeterErr, "quota") || strings.Contains(lowMeterErr, "tomorrow") || strings.Contains(lowMeterErr, "daily"))
+			if strings.Contains(lowMeterErr, "imagegen") || imageQuotaText {
 				if strings.Contains(lowMeterErr, "systemcapacity") || strings.Contains(lowMeterErr, "capacity") {
 					return ErrMeteringThrottled
 				}

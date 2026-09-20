@@ -10,6 +10,7 @@ func TestCheckMeteringErrorRecognizesImageQuotaVariants(t *testing.T) {
 	}{
 		{name: "legacy token throttle", code: "ImageGenInsufficientTokensThrottled", want: ErrImageLimit},
 		{name: "daily limit variant", code: "ImageGenerationDailyLimitReached", want: ErrImageLimit},
+		{name: "human readable daily limit", code: "upstream image generation daily limit reached", want: ErrImageLimit},
 		{name: "system capacity remains temporary", code: "ImageGenSystemCapacityThrottled", want: ErrMeteringThrottled},
 	}
 	for _, tt := range tests {
