@@ -85,3 +85,4 @@ fnos_*.py
 /.spkbin/
 /*.spk
 /checksums.txt
+/m365-copilot2api-linux-*

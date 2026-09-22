@@ -313,7 +313,7 @@ func (s *Server) imageGenerations(w http.ResponseWriter, r *http.Request) {
 			writeOpenAIError(w, http.StatusInternalServerError, "image_storage_error", "generated image could not be saved")
 			return
 		}
-		data = append(data, map[string]string{"url": generatedImageURL(r, id)})
+		data = append(data, map[string]string{"url": s.generatedImageURL(r, id)})
 	}
 
 	s.usage.record(UsageRecord{
@@ -490,12 +490,16 @@ func downloadDesignerImage(ctx context.Context, rawURL, accessToken string) ([]b
 	return body, contentType, nil
 }
 
-func generatedImageURL(r *http.Request, id string) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
+// generatedImageURL builds the public link to a hosted image. The base is
+// resolved through publicBaseURL so the link stays reachable behind a reverse
+// proxy; a relative path is returned only if no host could be determined at
+// all, which still works for same-origin callers.
+func (s *Server) generatedImageURL(r *http.Request, id string) string {
+	path := "/v1/images/files/" + id
+	if base := s.publicBaseURL(r); base != "" {
+		return base + path
 	}
-	return fmt.Sprintf("%s://%s/v1/images/files/%s", scheme, r.Host, id)
+	return path
 }
 
 func (s *Server) generatedImageFile(w http.ResponseWriter, r *http.Request) {
@@ -761,7 +765,7 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 		if err != nil {
 			return nil, fmt.Errorf("generated image could not be saved: %w", err)
 		}
-		urls = append(urls, generatedImageURL(r, id))
+		urls = append(urls, s.generatedImageURL(r, id))
 	}
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("upstream returned no image resource")
