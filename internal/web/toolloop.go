@@ -521,6 +521,32 @@ func shouldUseChatImageRoute(model, text string, attachments []chathub.Attachmen
 	return shouldRouteChatImage(text) || (hasImageAttachment(attachments) && isImageEditIntent(text))
 }
 
+// isImageModelConnectivityProbe identifies the short health-check prompts
+// emitted by OpenAI-compatible clients when a model is added. They are not
+// image requests; sending them through the 30-180 second Designer generation
+// path makes a healthy gpt-image-2 endpoint look offline to clients with a
+// 30-second probe timeout. Real image prompts continue through the direct
+// GPT Image 2 path.
+func isImageModelConnectivityProbe(model, text string) bool {
+	if !strings.EqualFold(strings.TrimSpace(model), "gpt-image-2") {
+		return false
+	}
+	t := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	if t == "" || isImageGenIntent(t) || shouldRouteChatImage(t) {
+		return false
+	}
+	for _, p := range []string{
+		"say ok", "say hello", "respond with ok", "reply with ok",
+		"reply in one word", "test connection", "connectivity test",
+		"ping", "hello", "hi",
+	} {
+		if t == p || strings.HasPrefix(t, p+" ") {
+			return true
+		}
+	}
+	return false
+}
+
 func isImageEditIntent(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
 	for _, p := range imageGenNonActionPatterns {

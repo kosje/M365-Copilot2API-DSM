@@ -76,7 +76,9 @@ var gatewayModels = []modelSpec{
 	{ID: "gpt-5.5", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.5-reasoning", Owner: "microsoft-365", Tools: true},
 	{ID: "gpt-5.6-reasoning", Owner: "microsoft-365", Tools: true},
-	{ID: "gpt-image-2", Owner: "microsoft-365", DisplayName: "GPT Image 2"},
+	// Keep the public label identical to the API identifier. Several clients
+	// use the displayed label when constructing their connectivity probe.
+	{ID: "gpt-image-2", Owner: "microsoft-365", DisplayName: "gpt-image-2"},
 	{ID: "claude-sonnet", Owner: "anthropic-via-microsoft-365", Tools: true},
 	{ID: "claude-sonnet-reasoning", Owner: "anthropic-via-microsoft-365", Tools: true},
 }
@@ -342,22 +344,19 @@ var autoSmartModels = []modelSpec{
 func modelCatalog() []map[string]any {
 	l := configuredModelLimits()
 	models := configuredModelSpecs(currentSettings().ModelMappings)
-	out := make([]map[string]any, 0, len(models)+len(autoSmartModels))
+	out := make([]map[string]any, 0, len(models))
 	for _, m := range models {
 		out = append(out, catalogEntry(m, l))
 	}
 	return out
 }
 
-// openaiModelsCatalog returns the full catalog including the smart-routing
-// "auto"/"auto-2" aliases advertised only on the OpenAI-compatible endpoint.
+// openaiModelsCatalog returns the same unique catalog used by the admin and
+// built-in chat pages. "auto" is already a gateway model; appending the
+// autoSmartModels aliases here used to expose duplicate "auto" plus "auto-2",
+// which confused clients into showing 17 models instead of 15.
 func openaiModelsCatalog() []map[string]any {
-	l := configuredModelLimits()
-	out := modelCatalog()
-	for _, m := range autoSmartModels {
-		out = append(out, catalogEntry(m, l))
-	}
-	return out
+	return modelCatalog()
 }
 
 // ---- auto routing: random selection from the live model catalog ----

@@ -2478,6 +2478,14 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image prompt is empty after removing client metadata; send the image description in the current user turn")
 				return
 			}
+			if isImageModelConnectivityProbe(body.Model, clean) && body.ImageOptions == nil && len(body.Attachments) == 0 {
+				// Model-add dialogs probe every model with a tiny text prompt.
+				// A real image generation cannot finish within many clients'
+				// fixed 30-second probe timeout, so answer the probe locally;
+				// actual image descriptions still take the direct image path.
+				s.writeChatCompletionText(w, r, "gpt-image-2", "OK", body.Stream, body.shouldSendStreamUsage(), EstimateTokens(clean))
+				return
+			}
 			imageIntent := clean != "" && (body.ImageOptions != nil || shouldUseChatImageRoute(body.Model, clean, body.Attachments))
 			if imageIntent {
 				log.Printf("[image-route] id=%s model=%s selected=true explicit=%t", requestID, body.Model, forceImageModel)

@@ -172,6 +172,22 @@ func TestChatModelCatalogIsCompleteAndUnique(t *testing.T) {
 	}
 }
 
+func TestImageModelConnectivityProbeDoesNotStartGeneration(t *testing.T) {
+	for _, prompt := range []string{"Say OK in one word.", "hello", "test connection"} {
+		if !isImageModelConnectivityProbe("gpt-image-2", prompt) {
+			t.Fatalf("probe not recognized: %q", prompt)
+		}
+	}
+	for _, prompt := range []string{"生成一张仙侠海报", "draw a mountain", "生成图片"} {
+		if isImageModelConnectivityProbe("gpt-image-2", prompt) {
+			t.Fatalf("real image prompt classified as probe: %q", prompt)
+		}
+	}
+	if isImageModelConnectivityProbe("gpt-5.6-sol", "hello") {
+		t.Fatal("ordinary model probe must not be treated as image-model probe")
+	}
+}
+
 func TestChatImageStreamingWrapperEmitsSSEForAuthenticatedRequest(t *testing.T) {
 	// The wrapper must not commit a silent JSON response before the long image
 	// generation finishes. This test uses the unauthenticated branch to verify

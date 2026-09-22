@@ -142,13 +142,34 @@ func TestModelsAdvertiseContextAndReasoning(t *testing.T) {
 func TestModelCatalogAdvertisesGPTImage2(t *testing.T) {
 	for _, model := range modelCatalog() {
 		if model["id"] == "gpt-image-2" {
-			if model["display_name"] != "GPT Image 2" {
+			if model["display_name"] != "gpt-image-2" {
 				t.Fatalf("display_name=%#v", model["display_name"])
 			}
 			return
 		}
 	}
 	t.Fatal("gpt-image-2 missing from model catalog")
+}
+
+func TestOpenAIModelCatalogHasExactlyFifteenUniqueModels(t *testing.T) {
+	models := openaiModelsCatalog()
+	if len(models) != 15 {
+		t.Fatalf("model count=%d, want 15", len(models))
+	}
+	seen := map[string]bool{}
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		if seen[id] {
+			t.Fatalf("duplicate model %q", id)
+		}
+		seen[id] = true
+	}
+	if !seen["auto"] || !seen["gpt-image-2"] {
+		t.Fatalf("required models missing: %#v", seen)
+	}
+	if seen["auto-2"] {
+		t.Fatal("auto-2 must not be advertised in the 15-model catalog")
+	}
 }
 
 func TestConfiguredModelMappingsDriveCatalogAndRouting(t *testing.T) {
