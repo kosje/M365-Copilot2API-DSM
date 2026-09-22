@@ -116,6 +116,19 @@ func TestPublicBaseURLRejectsMalformedForwardedHost(t *testing.T) {
 	}
 }
 
+func TestPublicBaseURLRejectsPlaceholderHost(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	for _, placeholder := range []string{"example.com", "example.com:52325", "placeholder.invalid"} {
+		r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+		r.Host = "10.0.0.3:4141"
+		r.Header.Set("X-Forwarded-Host", placeholder)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		if got := (&Server{}).publicBaseURL(r); got != "https://10.0.0.3:4141" {
+			t.Fatalf("placeholder %q produced %q", placeholder, got)
+		}
+	}
+}
+
 func TestGeneratedImageURLUsesPublicBase(t *testing.T) {
 	t.Setenv("M365_PUBLIC_BASE_URL", "")
 	const id = "1fd01574-444a-4f60-a922-fbfd6d72ae9c"

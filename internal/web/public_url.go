@@ -92,6 +92,14 @@ func forwardedScheme(r *http.Request) string {
 			return "https"
 		}
 	}
+	if v := firstForwardedValue(r.Header.Get("X-Forwarded-Scheme")); v != "" {
+		switch strings.ToLower(v) {
+		case "http":
+			return "http"
+		case "https":
+			return "https"
+		}
+	}
 	return "http"
 }
 
@@ -127,7 +135,20 @@ func validForwardedHost(h string) bool {
 	if h == "" || len(h) > 255 {
 		return false
 	}
-	return !strings.ContainsAny(h, "/\\?#@ \t\r\n\"'<>")
+	if strings.ContainsAny(h, "/\\?#@ \t\r\n\"'<>") {
+		return false
+	}
+	// Never publish documentation/test placeholders as an image URL. They
+	// commonly leak from an NPM default proxy host or an old example setting;
+	// returning a relative URL is safer than handing the client a dead link.
+	if u, err := url.Parse("//" + h); err == nil {
+		switch strings.ToLower(u.Hostname()) {
+		case "example.com", "example.net", "example.org", "example.invalid",
+			"placeholder.invalid", "unregistered.example":
+			return false
+		}
+	}
+	return true
 }
 
 // hasPort reports whether host already carries a :port suffix, tolerating

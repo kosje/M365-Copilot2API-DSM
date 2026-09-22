@@ -697,6 +697,12 @@ func (s *Server) chatModels(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = g.ID
 		}
+		// The image model is an API identifier, not a translated marketing
+		// label. Clients use this exact value when selecting the direct image
+		// path, so keep the dropdown consistent with /v1/models.
+		if g.ID == "gpt-image-2" {
+			name = g.ID
+		}
 		out = append(out, chatModel{ID: g.ID, Name: name})
 	}
 	jsonOut(w, map[string]any{"models": out})
@@ -1116,12 +1122,24 @@ func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
 		s.chatImageGenJSON(w, r)
 		return
 	}
+	// Read and replace the body before starting the keepalive writer. This
+	// makes the long-lived wrapper independent of the proxy's transfer mode
+	// (Content-Length vs chunked) and prevents the captured inner request from
+	// ever seeing an already-consumed body.
+	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxImageEditRequestBytes))
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "read image request")
+		return
+	}
+	inner := r.Clone(r.Context())
+	inner.Body = io.NopCloser(bytes.NewReader(rawBody))
+	inner.ContentLength = int64(len(rawBody))
 	stopKeepalive, ok := startChatImageKeepalive(w, r)
 	if !ok {
 		return
 	}
 	cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
-	s.chatImageGenJSON(cw, r)
+	s.chatImageGenJSON(cw, inner)
 	stopKeepalive()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
