@@ -71,9 +71,15 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -trimpath \
 # 也不是这条命令生成的。）
 ( cd "$ROOT" \
   && sha256sum "$(basename "$SPK")" > checksums.txt \
-  && sha256sum -b "$BIN" | sed "s| \*.*|  $PKG-linux-amd64|" >> checksums.txt ) || true
-# 生成即校验，别让坏文件流到用户手里。
-( cd "$ROOT" && sha256sum -c checksums.txt ) || { echo "checksums.txt 校验失败"; exit 1; }
+  && sha256sum -b "$BIN" | sed "s| \*.*|  $PKG-linux-amd64|" >> checksums.txt )
+# checksums.txt names the uploaded release assets. Its binary entry cannot be
+# checked from the repository root because the build copy lives under .spkbin.
+SPK_HASH="$(sha256sum "$SPK" | awk '{print $1}')"
+BIN_HASH="$(sha256sum "$BIN" | awk '{print $1}')"
+[ "$(printf '%s  %s\n' "$SPK_HASH" "$SPK" | sha256sum -c - 2>/dev/null)" = "$SPK: OK" ] \
+  || { echo "SPK checksum verification failed"; exit 1; }
+[ "$(printf '%s  %s\n' "$BIN_HASH" "$BIN" | sha256sum -c - 2>/dev/null)" = "$BIN: OK" ] \
+  || { echo "binary checksum verification failed"; exit 1; }
 sha256sum "$SPK" "$BIN"
 
 step "发布 Release $TAG"
