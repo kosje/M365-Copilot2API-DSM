@@ -1,5 +1,5 @@
 package="m365-copilot2api"
-version="1.6.33-0008"
+version="1.6.33-0009"
 os_min_ver="7.0-40000"
 # x86_64, not noarch: the package ships a single linux/amd64 binary. Claiming
 # noarch let Package Center install it on ARM models (DS223 and friends), where
