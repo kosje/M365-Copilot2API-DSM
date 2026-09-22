@@ -678,7 +678,9 @@ func (s *Server) chatConvs(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]any{"status": "deleted"})
 }
 
-// chatModels returns the model list available to the chat UI ("auto" first).
+// chatModels returns the same complete model catalog used by the API. Keeping
+// this derived from configuredModelSpecs avoids the chat page drifting from
+// /v1/models (and avoids advertising "auto" twice).
 func (s *Server) chatModels(w http.ResponseWriter, r *http.Request) {
 	u := s.chatAuth(r)
 	if u == nil {
@@ -689,11 +691,8 @@ func (s *Server) chatModels(w http.ResponseWriter, r *http.Request) {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	out := []chatModel{{ID: "auto", Name: "智能路由（推荐）"}}
-	for _, g := range gatewayModels {
-		if g.ID == "gpt-image-2" {
-			continue
-		}
+	out := make([]chatModel, 0)
+	for _, g := range configuredModelSpecs(currentSettings().ModelMappings) {
 		name := g.DisplayName
 		if name == "" {
 			name = g.ID
@@ -1101,7 +1100,50 @@ func extractUpstreamText(b []byte, stream bool) string {
 
 // ---------- image generation ----------
 
+// chatImageGen keeps the built-in chat image button alive through reverse
+// proxies.  The JSON endpoint used to stay silent for the whole Designer
+// generation, so a proxy read timeout could terminate an otherwise healthy
+// request.  The browser asks for stream=true and receives keepalive comments;
+// the final event is still the original JSON payload.
 func (s *Server) chatImageGen(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("stream") != "true" {
+		s.chatImageGenJSON(w, r)
+		return
+	}
+	// Preserve normal HTTP status codes for unauthenticated callers. Only an
+	// authenticated, long-running generation needs the SSE keepalive wrapper.
+	if s.chatAuth(r) == nil {
+		s.chatImageGenJSON(w, r)
+		return
+	}
+	stopKeepalive, ok := startChatImageKeepalive(w, r)
+	if !ok {
+		return
+	}
+	cw := &chatCaptureWriter{header: http.Header{}, buf: bytes.Buffer{}, code: http.StatusOK}
+	s.chatImageGenJSON(cw, r)
+	stopKeepalive()
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+	sw := newSSEWriter(w, flusher)
+	payload := strings.TrimSpace(cw.buf.String())
+	if payload == "" {
+		payload = mustJSON(map[string]any{"error": map[string]any{
+			"message": "image generation returned an empty response",
+			"type":    "image_generation_error",
+			"code":    "image_generation_error",
+		}})
+	}
+	_ = sw.data(payload)
+	_ = sw.data("[DONE]")
+}
+
+// chatImageGenJSON is the original non-streaming implementation.  It is also
+// used internally by the SSE wrapper so existing JSON clients keep their
+// response contract unchanged.
+func (s *Server) chatImageGenJSON(w http.ResponseWriter, r *http.Request) {
 	u := s.chatAuth(r)
 	if u == nil {
 		writeOpenAIError(w, http.StatusUnauthorized, "auth_error", "chat login required")

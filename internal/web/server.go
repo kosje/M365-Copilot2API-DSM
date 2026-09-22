@@ -971,6 +971,10 @@ func startChatImageKeepalive(w http.ResponseWriter, r *http.Request) (func(), bo
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Do not let nginx/Synology reverse-proxy buffering hide the keepalive
+	// comments from the client. Without this, the proxy can still hit its
+	// upstream read timeout while Designer is generating the image.
+	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "stream unsupported")

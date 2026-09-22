@@ -1160,6 +1160,31 @@ function imgRegenLast(){
 }
 let lastImgPrompt='';
 
+async function imageGenAPI(body){
+  const r=await fetch('/api/chatui/images?stream=true',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},body:JSON.stringify(body)});
+  const reader=r.body&&r.body.getReader();
+  if(!reader){
+    const d=await r.json().catch(()=>({}));
+    throw new Error((d.error&&(d.error.message||d.error))||('HTTP '+r.status));
+  }
+  const dec=new TextDecoder();let buf='',result=null,done=false;
+  while(!done){
+    const part=await reader.read();
+    buf+=dec.decode(part.value||new Uint8Array(),{stream:!part.done});
+    const lines=buf.split('\n');buf=lines.pop()||'';
+    for(const line of lines){
+      const t=line.trim();if(!t.startsWith('data:'))continue;
+      const payload=t.slice(5).trim();if(!payload)continue;
+      if(payload==='[DONE]'){done=true;break;}
+      try{result=JSON.parse(payload);}catch(e){continue;}
+    }
+    if(part.done)break;
+  }
+  if(!result)throw new Error('image generation returned an empty response');
+  if(result.error)throw new Error(result.error.message||result.error.type||'image generation failed');
+  return result;
+}
+
 async function genImage(prompt){
   busy=true;setBusyUI(true);lastImgPrompt=prompt;
   pickNegative();
@@ -1177,7 +1202,7 @@ async function genImage(prompt){
   const imgTick=setInterval(()=>{const el=ph.querySelector('.ptext');if(el)el.textContent=`正在生成图片… ${Math.floor((Date.now()-imgT0)/1000)}s`+(nImg>1?` · 共 ${nImg} 张，逐张生成`:'');},500);
   jumpBottom(true);
   try{
-    const d=await api('/api/chatui/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:curConv,prompt,size:imgOpts.size,count:imgOpts.count,style:imgOpts.style,quality:imgOpts.quality,negative:imgOpts.negative,editImage})});
+    const d=await imageGenAPI({conversationId:curConv,prompt,size:imgOpts.size,count:imgOpts.count,style:imgOpts.style,quality:imgOpts.quality,negative:imgOpts.negative,editImage});
     curConv=d.conversationId;
     const urls=d.urls&&d.urls.length?d.urls:[d.url];
     body.innerHTML='';

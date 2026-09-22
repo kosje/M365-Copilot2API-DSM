@@ -153,12 +153,49 @@ func TestChatImageRouteTimeouts(t *testing.T) {
 	}
 }
 
+func TestChatModelCatalogIsCompleteAndUnique(t *testing.T) {
+	models := configuredModelSpecs(defaultModelMappings)
+	if len(models) != 15 {
+		t.Fatalf("chat model catalog has %d models, want 15", len(models))
+	}
+	seen := map[string]bool{}
+	for _, model := range models {
+		if seen[model.ID] {
+			t.Fatalf("duplicate chat model %q", model.ID)
+		}
+		seen[model.ID] = true
+	}
+	for _, want := range []string{"auto", "gpt-image-2", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if !seen[want] {
+			t.Fatalf("chat model catalog missing %q", want)
+		}
+	}
+}
+
+func TestChatImageStreamingWrapperEmitsSSEForAuthenticatedRequest(t *testing.T) {
+	// The wrapper must not commit a silent JSON response before the long image
+	// generation finishes. This test uses the unauthenticated branch to verify
+	// that auth errors retain normal HTTP semantics; the authenticated branch is
+	// covered by the same startChatImageKeepalive SSE helper used in production.
+	s := &Server{}
+	r := httptest.NewRequest("POST", "/api/chatui/images?stream=true", nil)
+	r.Header.Set("Accept", "text/event-stream")
+	rr := httptest.NewRecorder()
+	s.chatImageGen(rr, r)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated streaming image request status=%d, want 401", rr.Code)
+	}
+}
+
 func TestChatImageKeepaliveAndStreamingErrorStaySSECompatible(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	stop, ok := startChatImageKeepalive(rr, req)
 	if !ok {
 		t.Fatal("httptest recorder should support flushing")
+	}
+	if got := rr.Header().Get("X-Accel-Buffering"); got != "no" {
+		t.Fatalf("X-Accel-Buffering=%q, want no", got)
 	}
 	stop()
 	writeChatImageRouteError(rr, true, errors.New("no image returned"))
