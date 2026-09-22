@@ -63,6 +63,11 @@ cp -f "$ROOT/spk/ui/images/icon_256.png" "$OUTDIR/icon_256.png"
 
 CHANGELOG="${CHANGELOG:-详见 $MAINT_URL/releases}"
 
+command -v jq >/dev/null 2>&1 || {
+    echo "jq is required to generate the feed; no file was written" >&2
+    exit 1
+}
+
 jq -n \
   --arg package "$PKG" --arg version "$VER" --arg dname "$DNAME" \
   --arg desc "$DESC" --arg link "$LINK" --arg md5 "$MD5" \
