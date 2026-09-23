@@ -661,11 +661,17 @@ func lastMessageRole(messages []oaiMsg) string {
 }
 
 // sanitizeImageAlt makes text safe to embed inside a markdown image alt.
+//
+// The alt sits between "![" and "](", so an unescaped "!", "[" or "]" left in the
+// prompt can open a second image or a nested link and break the markup around the
+// generated picture - which would hide the picture the caller just asked for.
+// Newlines are collapsed for the same reason: the URL has to stay on the line.
 func sanitizeImageAlt(s string) string {
 	s = cleanImagePrompt(s)
-	s = strings.ReplaceAll(s, "]", "")
-	s = strings.ReplaceAll(s, "(", "")
-	s = strings.ReplaceAll(s, ")", "")
+	for _, ch := range []string{"!", "[", "]", "(", ")"} {
+		s = strings.ReplaceAll(s, ch, "")
+	}
+	s = strings.Join(strings.Fields(s), " ")
 	if runes := []rune(s); len(runes) > 60 {
 		s = string(runes[:60])
 	}

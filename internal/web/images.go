@@ -694,6 +694,39 @@ func normalizeImageContentType(raw string, body []byte) string {
 	return ct
 }
 
+// hostedChatImage is one generated image in both of the forms a caller needs:
+// the bytes the gateway downloaded and re-encoded, carried inline as a data URL,
+// and the URL of the gateway's own stored copy.
+//
+// The inline form is what clients are given. A client handed only a URL has to
+// fetch the image back from the gateway, which fails whenever the derived public
+// address is wrong (a reverse proxy that rewrites Host, a dropped public port) or
+// when the client simply cannot reach the NAS address - and the user then sees a
+// link instead of a picture. The URL is kept alongside it so the stored copy can
+// still be opened, downloaded at full size, or re-sent.
+type hostedChatImage struct {
+	DataURL string
+	URL     string
+}
+
+// chatImageBlocks renders generated images for a client: each picture inline,
+// followed by a link to the gateway's stored copy.
+//
+// This is the one place the client-facing shape is decided, so the chat
+// completion route and the text-model route cannot drift apart. The other
+// client-facing surface, the web chat page, keeps its own transport on purpose:
+// it renders from the same origin through /api/chatui/file/<id>, and inlining
+// the bytes there would multiply the size of every stored conversation.
+func chatImageBlocks(altText string, imgs []hostedChatImage) string {
+	var b strings.Builder
+	alt := sanitizeImageAlt(altText)
+	for _, im := range imgs {
+		b.WriteString("![" + alt + "](" + im.DataURL + ")\n")
+		b.WriteString("[下载图片](" + im.URL + ")\n\n")
+	}
+	return b.String()
+}
+
 // upstreamImagesToMarkdown delivers images in the standard content field.
 // External clients cannot consume chat UI session-protected URLs.
 func (s *Server) upstreamImagesToMarkdown(r *http.Request, sources []string, acc auth.AccountToken) string {
@@ -702,22 +735,19 @@ func (s *Server) upstreamImagesToMarkdown(r *http.Request, sources []string, acc
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	urls, err := s.hostChatImages(ctx, r, sources, acc)
+	imgs, err := s.hostChatImages(ctx, r, sources, acc)
 	if err != nil {
 		log.Printf("[chat-image-download] failed: %v", err)
 		return "\n\n图片下载失败，未能提供可查看的图片。请稍后重试。"
 	}
-	var b strings.Builder
-	for _, u := range urls {
-		b.WriteString("\n\n![生成图片](" + u + ")\n[下载图片](" + u + ")")
-	}
-	return b.String()
+	return "\n\n" + chatImageBlocks("生成图片", imgs)
 }
 
-// hostChatImages verifies bytes before publishing a public, short-lived URL.
+// hostChatImages verifies bytes, stores a copy, and returns each image both
+// inline and as a URL.
 // Never forward an account token to arbitrary URLs returned by the model.
-func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []string, acc auth.AccountToken) ([]string, error) {
-	var urls []string
+func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []string, acc auth.AccountToken) ([]hostedChatImage, error) {
+	var out []hostedChatImage
 	seen := map[[32]byte]bool{}
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
@@ -765,12 +795,17 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 		if err != nil {
 			return nil, fmt.Errorf("generated image could not be saved: %w", err)
 		}
-		urls = append(urls, s.generatedImageURL(r, id))
+		// Both forms come from the same bytes, so the inline image and the hosted
+		// copy can never disagree.
+		out = append(out, hostedChatImage{
+			DataURL: "data:" + ct + ";base64," + base64.StdEncoding.EncodeToString(data),
+			URL:     s.generatedImageURL(r, id),
+		})
 	}
-	if len(urls) == 0 {
+	if len(out) == 0 {
 		return nil, fmt.Errorf("upstream returned no image resource")
 	}
-	return urls, nil
+	return out, nil
 }
 
 // generateChatImages runs the image-generation pipeline for the chat-endpoint
@@ -778,7 +813,7 @@ func (s *Server) hostChatImages(ctx context.Context, r *http.Request, sources []
 // / quality) and loops once per requested image so callers get exactly `count`
 // results. Structured image_options win; the natural-language prompt is parsed as
 // a fallback by the caller before reaching here.
-func (s *Server) generateChatImages(r *http.Request, userPrompt string, opts imageGenOptions, attachments []chathub.Attachment, accountID string) ([]string, string, error) {
+func (s *Server) generateChatImages(r *http.Request, userPrompt string, opts imageGenOptions, attachments []chathub.Attachment, accountID string) ([]hostedChatImage, string, error) {
 	size, count := opts.normalize()
 	opts.Size = size
 	prompt := opts.buildPrompt(userPrompt)
@@ -789,24 +824,24 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, opts ima
 	totalCtx, totalCancel := context.WithTimeout(r.Context(), totalTimeout)
 	defer totalCancel()
 	explicit := strings.TrimSpace(accountID) != ""
-	var allURLs []string
+	var all []hostedChatImage
 	var lastConv string
 	var lastErr error
 	for produced := 0; produced < count; produced++ {
-		urls, convID, err := s.generateOneImage(totalCtx, totalTimeout, attemptTimeout, r, prompt, attachments, explicit, accountID)
+		imgs, convID, err := s.generateOneImage(totalCtx, totalTimeout, attemptTimeout, r, prompt, attachments, explicit, accountID)
 		if err != nil {
 			lastErr = err
 			break
 		}
-		allURLs = append(allURLs, urls...)
+		all = append(all, imgs...)
 		lastConv = convID
 	}
 	// Cap to the requested count: a single upstream call can return more than one
 	// image, so without this guard a count=1 request could return several.
-	if len(allURLs) > count {
-		allURLs = allURLs[:count]
+	if len(all) > count {
+		all = all[:count]
 	}
-	if len(allURLs) == 0 {
+	if len(all) == 0 {
 		if lastErr != nil {
 			if errors.Is(lastErr, chathub.ErrImageLimit) || IsRateLimited(lastErr) {
 				return nil, "", fmt.Errorf("image generation daily limit reached; try again tomorrow")
@@ -815,12 +850,12 @@ func (s *Server) generateChatImages(r *http.Request, userPrompt string, opts ima
 		}
 		return nil, "", fmt.Errorf("no image returned")
 	}
-	return allURLs, lastConv, nil
+	return all, lastConv, nil
 }
 
 // generateOneImage runs the upstream GPT Image 2 pipeline once and returns the
 // served image URLs for that single generation.
-func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemptTimeout time.Duration, r *http.Request, prompt string, attachments []chathub.Attachment, explicit bool, accountID string) ([]string, string, error) {
+func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemptTimeout time.Duration, r *http.Request, prompt string, attachments []chathub.Attachment, explicit bool, accountID string) ([]hostedChatImage, string, error) {
 	var res chathub.Result
 	found := false
 	var successAcc auth.AccountToken
@@ -926,11 +961,11 @@ func (s *Server) generateOneImage(totalCtx context.Context, totalTimeout, attemp
 		return nil, "", fmt.Errorf("no image returned")
 	}
 	images := res.Images
-	urls, err := s.hostChatImages(totalCtx, r, images, successAcc)
+	hosted, err := s.hostChatImages(totalCtx, r, images, successAcc)
 	if err != nil {
 		return nil, "", err
 	}
-	return urls, res.ConversationID, nil
+	return hosted, res.ConversationID, nil
 }
 
 func chatImageRouteTimeouts(configuredSeconds int) (total, attempt time.Duration) {

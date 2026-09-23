@@ -2532,10 +2532,10 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 					used, limit = bumpAPIKeyImageQuota(keyPrefix, len(imgs))
 					var sb strings.Builder
 					sb.WriteString("已为你生成图片：\n\n")
-					for _, u := range imgs {
-						sb.WriteString("![" + sanitizeImageAlt(clean) + "](" + u + ")\n\n")
-						sb.WriteString("[下载图片](" + u + ")\n\n")
-					}
+					// The image itself travels in the content: a client given only a
+					// URL has to fetch it back from the gateway, and when that address
+					// is unreachable the user sees a link instead of a picture.
+					sb.WriteString(chatImageBlocks(clean, imgs))
 					sb.WriteString(opts.summary(clean) + "\n\n")
 					sb.WriteString(imageQuotaLine(used, limit) + "\n")
 					log.Printf("[image-route] routed to GPT Image 2 images=%d conv=%s dur_ms=%d size=%s style=%s count=%d negative=%q", len(imgs), convID, time.Since(imgStart).Milliseconds(), opts.Size, opts.Style, opts.Count, opts.Negative)
