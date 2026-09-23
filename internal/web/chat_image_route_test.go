@@ -11,6 +11,7 @@ import (
 	"m365-copilot2api/internal/auth"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -173,18 +174,81 @@ func TestChatModelCatalogIsCompleteAndUnique(t *testing.T) {
 }
 
 func TestImageModelConnectivityProbeDoesNotStartGeneration(t *testing.T) {
-	for _, prompt := range []string{"Say OK in one word.", "hello", "test connection"} {
+	probes := []string{
+		"Say OK in one word.", "hello", "test connection",
+		// The label a client was shown, echoed back as the prompt. d7c9143 stopped
+		// displaying "GPT Image 2" so the echo would be the API id, but the id was
+		// never added here, so these still went to the generation path.
+		"gpt-image-2", "GPT-Image-2", "gpt image 2",
+		// Punctuation and case decoration.
+		"Say OK.", "Hello!", "hi.", "PING", "test.",
+		// Chinese probes: this is a Chinese-facing gateway and none of these were
+		// recognised before.
+		"你好", "你好。", "您好", "在吗", "测试", "测试连接", "连接测试", "请回复",
+		"你好，请回复OK", "你是什么模型",
+		// A bare token of nothing.
+		"1",
+	}
+	for _, prompt := range probes {
 		if !isImageModelConnectivityProbe("gpt-image-2", prompt) {
 			t.Fatalf("probe not recognized: %q", prompt)
 		}
 	}
-	for _, prompt := range []string{"生成一张仙侠海报", "draw a mountain", "生成图片"} {
+
+	// A real image request must never be swallowed as a probe, whether it carries
+	// an explicit image verb or is a terse description.
+	for _, prompt := range []string{
+		"生成一张仙侠海报", "draw a mountain", "生成图片",
+		"一只戴帽子的猫", "a red circle on white",
+		"你好，画一只猫",
+	} {
 		if isImageModelConnectivityProbe("gpt-image-2", prompt) {
 			t.Fatalf("real image prompt classified as probe: %q", prompt)
 		}
 	}
 	if isImageModelConnectivityProbe("gpt-5.6-sol", "hello") {
 		t.Fatal("ordinary model probe must not be treated as image-model probe")
+	}
+}
+
+// A connectivity probe must come back as a normal completion. Anything else -
+// a 400 from the image-only restrictions, or a 30-180 second generation - makes
+// a healthy endpoint look unreachable to the client that sent it.
+func TestImageModelProbeIsAnsweredLocally(t *testing.T) {
+	// The identity policy answers questions such as 你是什么模型 before the image
+	// route; turn it off so every case below exercises the probe path.
+	t.Setenv("M365_PUBLIC_IDENTITY_POLICY", "")
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"model label echo", `{"model":"gpt-image-2","messages":[{"role":"user","content":"gpt-image-2"}]}`},
+		{"chinese greeting", `{"model":"gpt-image-2","messages":[{"role":"user","content":"你好"}]}`},
+		{"punctuated greeting", `{"model":"gpt-image-2","messages":[{"role":"user","content":"Hello!"}]}`},
+		{"test connection", `{"model":"gpt-image-2","messages":[{"role":"user","content":"test connection"}]}`},
+		// Some clients attach response_format to every request. The probe must be
+		// answered, not rejected with "gpt-image-2 does not support
+		// response_format" - which is what happened before the probe check was
+		// moved above that restriction.
+		{"with response_format", `{"model":"gpt-image-2","response_format":{"type":"text"},"messages":[{"role":"user","content":"test connection"}]}`},
+		{"streamed probe", `{"model":"gpt-image-2","stream":true,"messages":[{"role":"user","content":"ping"}]}`},
+		{"probe with system turn", `{"model":"gpt-image-2","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"hi"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &settingsStore{path: filepath.Join(t.TempDir(), "settings.json"), v: defaultRuntimeSettings()}
+			s := &Server{settings: st}
+			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+			s.openaiChat(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "OK") {
+				t.Fatalf("probe was not answered with OK: %s", w.Body.String())
+			}
+		})
 	}
 }
 

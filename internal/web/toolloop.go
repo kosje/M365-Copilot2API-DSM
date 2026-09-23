@@ -521,30 +521,86 @@ func shouldUseChatImageRoute(model, text string, attachments []chathub.Attachmen
 	return shouldRouteChatImage(text) || (hasImageAttachment(attachments) && isImageEditIntent(text))
 }
 
-// isImageModelConnectivityProbe identifies the short health-check prompts
-// emitted by OpenAI-compatible clients when a model is added. They are not
-// image requests; sending them through the 30-180 second Designer generation
-// path makes a healthy gpt-image-2 endpoint look offline to clients with a
-// 30-second probe timeout. Real image prompts continue through the direct
-// GPT Image 2 path.
+// isImageModelConnectivityProbe identifies the short health-check prompts that
+// OpenAI-compatible clients send when a model is added or the connection is
+// tested. They are not image requests, and there are two ways for one to make a
+// healthy endpoint look broken:
+//
+//   - sent through the 30-180 second generation path, it blows past the fixed
+//     probe timeout most clients use; and
+//   - rejected with the "gpt-image-2 does not support response_format" error,
+//     which some clients trigger because they attach response_format to every
+//     request.
+//
+// Callers must therefore check this before the image-only restrictions.
+//
+// The phrase list is a curated set rather than the inverse keyword test on
+// purpose: selecting gpt-image-2 IS an explicit image request, and gating that
+// on natural-language detection is what previously made real image prompts miss
+// the route and fall through to the text model. Anything not recognised here
+// still goes to the image pipeline, which is the safe direction to be wrong in.
 func isImageModelConnectivityProbe(model, text string) bool {
 	if !strings.EqualFold(strings.TrimSpace(model), "gpt-image-2") {
 		return false
 	}
-	t := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	t := normalizeProbeText(text)
 	if t == "" || isImageGenIntent(t) || shouldRouteChatImage(t) {
 		return false
 	}
+
+	// Clients commonly echo the model label they were shown, so the label has to
+	// match even though it is not a greeting. This is the case the display-name
+	// fix left half done: the catalog stopped showing "GPT Image 2", but the
+	// echoed "gpt-image-2" was still not recognised here, so the probe went to
+	// the generation path exactly as before.
+	for _, label := range []string{
+		"gpt-image-2", "gpt image 2", "gptimage2", "gpt-image2", "gpt_image_2",
+	} {
+		if t == label || strings.HasPrefix(t, label+" ") {
+			return true
+		}
+	}
+
 	for _, p := range []string{
-		"say ok", "say hello", "respond with ok", "reply with ok",
-		"reply in one word", "test connection", "connectivity test",
-		"ping", "hello", "hi",
+		// English greetings, acknowledgements and probe phrases.
+		"hi", "hello", "hey", "ping", "pong", "test", "testing", "ok", "okay",
+		"say ok", "say hello", "say hi", "respond with ok", "reply with ok",
+		"reply in one word", "test connection", "connectivity test", "connection test",
+		"are you there", "can you hear me",
+		// Chinese equivalents. This is a Chinese-facing gateway, and a client
+		// probing with 你好 used to be sent into generation like any other text.
+		"你好", "您好", "哈喽", "嗨", "在吗", "在么", "测试", "测试一下", "测试连接",
+		"连接测试", "连通测试", "连通性测试", "检查连接", "收到", "好的", "请回复",
+		"能收到吗", "你能收到吗", "你是什么模型", "你是什么", "你是谁",
 	} {
 		if t == p || strings.HasPrefix(t, p+" ") {
 			return true
 		}
+		// "你好，请回复OK" continues with full-width punctuation instead of a
+		// space, and "hello there" continues with words. Both are still probes;
+		// anything carrying an image verb was already excluded above, and probes
+		// are short, so cap the length to keep a long prompt out.
+		if strings.HasPrefix(t, p) && len([]rune(t)) <= len([]rune(p))+20 {
+			return true
+		}
+	}
+
+	// A bare token of nothing, only ever sent as a liveness check.
+	switch t {
+	case "1", "0", ".", "...", "？", "?":
+		return true
 	}
 	return false
+}
+
+// normalizeProbeText lowercases, collapses whitespace and strips the decoration
+// clients put around a probe, so "Say OK.", "hello!" and "你好。" reach the same
+// entry as "say ok", "hello" and "你好".
+func normalizeProbeText(s string) string {
+	t := strings.ToLower(strings.Join(strings.Fields(s), " "))
+	t = strings.Trim(t, "\"'“”‘’`")
+	t = strings.TrimRight(t, ".!?。！？、,，;；:：~～")
+	return strings.TrimSpace(t)
 }
 
 func isImageEditIntent(text string) bool {

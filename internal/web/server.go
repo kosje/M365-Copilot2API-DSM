@@ -2463,6 +2463,21 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 	// completion — so the caller does not need a separate image endpoint.
 	// A non-user last turn (e.g. mid tool-loop) or coding intent disables it.
 	forceImageModel := strings.EqualFold(strings.TrimSpace(body.Model), "gpt-image-2")
+
+	// A connectivity probe is not an image request, so it is answered before any
+	// of the image-only restrictions below. Checking responseFormat first turned
+	// a probe into a 400 for clients that attach response_format to every
+	// request, and the client reports that as "the model does not connect".
+	if forceImageModel && lastMessageRole(body.Messages) == "user" &&
+		body.ImageOptions == nil && len(body.Attachments) == 0 {
+		if probe := chatImagePrompt(body.Messages); isImageModelConnectivityProbe(body.Model, probe) {
+			// A real generation takes 30-180 seconds, well past the fixed timeout
+			// most clients give a connectivity check, so answer it locally.
+			s.writeChatCompletionText(w, r, "gpt-image-2", "OK", body.Stream, body.shouldSendStreamUsage(), EstimateTokens(probe))
+			return
+		}
+	}
+
 	if forceImageModel && (responseFormat != nil || lastMessageRole(body.Messages) != "user") {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "gpt-image-2 requires a final user image prompt and does not support response_format or tool continuations")
 		return
@@ -2476,14 +2491,6 @@ func (s *Server) openaiChat(w http.ResponseWriter, r *http.Request) {
 			clean := chatImagePrompt(body.Messages)
 			if clean == "" && (forceImageModel || body.ImageOptions != nil) {
 				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image prompt is empty after removing client metadata; send the image description in the current user turn")
-				return
-			}
-			if isImageModelConnectivityProbe(body.Model, clean) && body.ImageOptions == nil && len(body.Attachments) == 0 {
-				// Model-add dialogs probe every model with a tiny text prompt.
-				// A real image generation cannot finish within many clients'
-				// fixed 30-second probe timeout, so answer the probe locally;
-				// actual image descriptions still take the direct image path.
-				s.writeChatCompletionText(w, r, "gpt-image-2", "OK", body.Stream, body.shouldSendStreamUsage(), EstimateTokens(clean))
 				return
 			}
 			imageIntent := clean != "" && (body.ImageOptions != nil || shouldUseChatImageRoute(body.Model, clean, body.Attachments))
