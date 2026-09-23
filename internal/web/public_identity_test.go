@@ -12,6 +12,25 @@ import (
 
 func TestMain(m *testing.M) {
 	_ = os.Setenv("M365_PUBLIC_IDENTITY_POLICY", "true")
+
+	// Stop the package-level persist loop for the whole test binary.
+	//
+	// persistLoop flushes every registered store on a ticker (5s by default), and
+	// stores stay registered for the life of the binary. Tests point each store at
+	// its own t.TempDir() through the M365_*_CACHE style env vars, so a tick that
+	// lands while a test's TempDir is being removed races with that cleanup. On
+	// Windows the removal then fails with "TempDir RemoveAll: The directory is not
+	// empty", and which test reports it varies from run to run - the suite failed
+	// about three runs in four before this.
+	//
+	// Nothing here waits for the ticker: no test references the persist API, and
+	// none sleeps and then inspects the disk. The paths that do need durability
+	// (creating or deleting an API key, for instance) call flushNowBlocking
+	// directly, and FlushAllPersist is still callable. TestPersistLoopIsNotRunning
+	// asserts this invariant so removing the call fails loudly instead of
+	// reintroducing an intermittent failure.
+	StopPersistLoop()
+
 	os.Exit(m.Run())
 }
 
