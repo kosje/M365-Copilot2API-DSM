@@ -169,6 +169,15 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" --notes-file release-notes.md $ASSETS
           fi
+          # Assert the assets are really attached. A release published without
+          # them is broken for every user while the job still reads as success -
+          # the one failure this step must never report as green.
+          for name in $ASSETS; do
+            if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx "$name"; then
+              echo "::error::$TAG is missing the $name asset"
+              exit 1
+            fi
+          done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[] | "  \(.name)  \(.size) bytes"'
 
