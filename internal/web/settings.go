@@ -52,17 +52,17 @@ type runtimeSettings struct {
 	// DailyImageLimit caps how many images the chat-endpoint image router may
 	// generate per day per API key (0 = unlimited). The used count is shown to
 	// the caller after each generation and enforced as a 429 when exceeded.
-	DailyImageLimit             int            `json:"dailyImageLimit"`
-	LogLevel                    string         `json:"logLevel"`
-	DebugLogPath                string         `json:"debugLogPath"`
-	ListenAddress               string         `json:"listenAddress"`
+	DailyImageLimit int    `json:"dailyImageLimit"`
+	LogLevel        string `json:"logLevel"`
+	DebugLogPath    string `json:"debugLogPath"`
+	ListenAddress   string `json:"listenAddress"`
 	// PublicBaseURL is the externally reachable address of this gateway, e.g.
 	// "https://api.example.net:52325". Absolute links returned to clients
 	// (hosted images) are built from it. Leave empty to derive the base from
 	// the request's forwarding headers / Host; set it when the reverse proxy
 	// rewrites Host or drops the public port, which otherwise yields links the
 	// client cannot open. A path suffix is honoured for sub-path mounts.
-	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
+	PublicBaseURL               string         `json:"publicBaseUrl,omitempty"`
 	ConfigPath                  string         `json:"configPath"`
 	TokenCachePath              string         `json:"tokenCachePath"`
 	SessionCachePath            string         `json:"sessionCachePath"`
@@ -219,7 +219,7 @@ func defaultRuntimeSettings() runtimeSettings {
 		ChatTimeoutSeconds: envInt("M365_CHAT_TIMEOUT_SECONDS", 120), ImageTimeoutSeconds: envInt("M365_IMAGE_TIMEOUT_SECONDS", 300), LogLevel: firstNonEmptySetting(os.Getenv("M365_LOG_LEVEL"), "info"),
 		DailyImageLimit: envInt("M365_DAILY_IMAGE_LIMIT", 100),
 		DebugLogPath:    os.Getenv("M365_DEBUG_LOG"), ListenAddress: os.Getenv("M365_LISTEN"), ConfigPath: os.Getenv("M365_CONFIG"),
-		PublicBaseURL:   os.Getenv("M365_PUBLIC_BASE_URL"),
+		PublicBaseURL:  os.Getenv("M365_PUBLIC_BASE_URL"),
 		TokenCachePath: os.Getenv("M365_TOKEN_CACHE"), SessionCachePath: os.Getenv("M365_SESSION_CACHE"), OutboundProxy: os.Getenv(outbound.EnvProxy), ClientID: os.Getenv("M365_CLIENT_ID"),
 		Authority: os.Getenv("M365_AUTHORITY"), RedirectURI: os.Getenv("M365_REDIRECT_URI"), Scope: os.Getenv("M365_SCOPE"),
 		ModelMappings:               append([]modelMapping(nil), defaultModelMappings...),
