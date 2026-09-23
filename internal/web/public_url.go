@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -103,24 +104,56 @@ func forwardedScheme(r *http.Request) string {
 	return "http"
 }
 
-// forwardedHost prefers X-Forwarded-Host, re-attaching X-Forwarded-Port when
-// the proxy forwarded the hostname without the non-default public port — the
-// common case that turns https://host:52325/... into an unreachable
-// https://host/... link.
+// forwardedHost prefers X-Forwarded-Host as the hostname, re-attaching the
+// public port when the proxy forwarded the host without one — the case that
+// turns https://host:52325/... into an unreachable https://host/... link.
 func forwardedHost(r *http.Request, scheme string) string {
 	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
 	if host != "" && validForwardedHost(host) {
-		if !hasPort(host) {
-			if port := firstForwardedValue(r.Header.Get("X-Forwarded-Port")); isPlainPort(port) && !isDefaultPort(scheme, port) {
-				host += ":" + port
-			}
+		// A host that already carries a port is the proxy's own answer; only a
+		// portless host needs one supplied.
+		if hasPort(host) {
+			return host
 		}
-		return host
+		return host + portSuffixFor(r, scheme)
 	}
 	if validForwardedHost(r.Host) {
 		return r.Host
 	}
 	return ""
+}
+
+// portSuffixFor returns ":port" to append to a forwarded hostname that arrived
+// without one, or "" when no port should be appended.
+//
+// X-Forwarded-Port is the proxy's explicit answer and wins. When the proxy does
+// not send it, the request's own Host header usually still carries the port the
+// client actually connected to, and dropping it hands the caller a link on the
+// default port that nothing is listening on. A plain nginx pair is enough to
+// produce that:
+//
+//	proxy_set_header Host $http_host;           # host:52325, the public port
+//	proxy_set_header X-Forwarded-Host $host;    # host only, no port
+//
+// Only the port is borrowed from there. The hostname from X-Forwarded-Host still
+// wins, because the Host header may name an upstream address rather than the one
+// the caller can reach.
+func portSuffixFor(r *http.Request, scheme string) string {
+	if port := firstForwardedValue(r.Header.Get("X-Forwarded-Port")); isPlainPort(port) {
+		if isDefaultPort(scheme, port) {
+			return ""
+		}
+		return ":" + port
+	}
+	host := firstForwardedValue(r.Host)
+	if !validForwardedHost(host) {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(host)
+	if err != nil || !isPlainPort(port) || isDefaultPort(scheme, port) {
+		return ""
+	}
+	return ":" + port
 }
 
 func firstForwardedValue(raw string) string {

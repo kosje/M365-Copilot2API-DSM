@@ -74,6 +74,95 @@ func TestPublicBaseURLReattachesForwardedPort(t *testing.T) {
 	}
 }
 
+// The port has to survive when the proxy forwards the hostname without it and
+// sends no X-Forwarded-Port, which is what a plain nginx pair produces:
+//
+//	proxy_set_header Host $http_host;         # host:52325, the public port
+//	proxy_set_header X-Forwarded-Host $host;  # host only
+//
+// The hostname from X-Forwarded-Host still wins, but dropping the port hands the
+// client a link on the default port that nothing is listening on.
+func TestPublicBaseURLBorrowsPortFromRequestHost(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "365api.example.net:52325"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if got := (&Server{}).publicBaseURL(r); got != "https://365api.example.net:52325" {
+		t.Fatalf("got %q, want https://365api.example.net:52325", got)
+	}
+}
+
+// Explicit beats inferred: X-Forwarded-Port is the proxy telling us the public
+// port, so it must not be overridden by whatever the Host header happens to be.
+func TestPublicBaseURLPrefersForwardedPortOverHostPort(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "127.0.0.1:4141"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Port", "52325")
+	if got := (&Server{}).publicBaseURL(r); got != "https://365api.example.net:52325" {
+		t.Fatalf("got %q, want https://365api.example.net:52325", got)
+	}
+}
+
+// A host that already carries a port is the proxy's own answer; appending the
+// Host port on top of it would produce host:52325:4141.
+func TestPublicBaseURLDoesNotDoubleAppendPort(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "127.0.0.1:4141"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net:52325")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if got := (&Server{}).publicBaseURL(r); got != "https://365api.example.net:52325" {
+		t.Fatalf("got %q, want https://365api.example.net:52325", got)
+	}
+}
+
+// Nothing to borrow when the request Host carries no port either, and a default
+// port is still left off.
+func TestPublicBaseURLPortBorrowEdgeCases(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	cases := []struct {
+		name   string
+		host   string
+		scheme string
+		want   string
+	}{
+		{"no port anywhere", "365api.example.net", "https", "https://365api.example.net"},
+		{"default port not appended", "365api.example.net:443", "https", "https://365api.example.net"},
+		{"default port on http", "365api.example.net:80", "http", "http://365api.example.net"},
+		{"ipv6 host with port", "[2001:db8::1]:52325", "https", "https://365api.example.net:52325"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+			r.Host = tc.host
+			r.Header.Set("X-Forwarded-Host", "365api.example.net")
+			r.Header.Set("X-Forwarded-Proto", tc.scheme)
+			if got := (&Server{}).publicBaseURL(r); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The port reaching the client matters on the concrete output, not only in
+// publicBaseURL: this is the link a client is handed for a generated image.
+func TestGeneratedImageURLCarriesTheBorrowedPort(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "365api.example.net:52325"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	got := (&Server{}).generatedImageURL(r, "abc.png")
+	want := "https://365api.example.net:52325/v1/images/files/abc.png"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // Default ports must not be appended: https://host:443/... is redundant and
 // breaks certificate/origin matching in some clients.
 func TestPublicBaseURLOmitsDefaultPort(t *testing.T) {
