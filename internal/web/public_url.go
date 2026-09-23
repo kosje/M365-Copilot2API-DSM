@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -85,16 +86,12 @@ func forwardedScheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
 	}
-	if v := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); v != "" {
-		switch strings.ToLower(v) {
-		case "http":
-			return "http"
-		case "https":
-			return "https"
-		}
-	}
-	if v := firstForwardedValue(r.Header.Get("X-Forwarded-Scheme")); v != "" {
-		switch strings.ToLower(v) {
+	for _, raw := range []string{
+		r.Header.Get("X-Forwarded-Proto"),
+		r.Header.Get("X-Forwarded-Scheme"),
+		forwardedHeaderField(r, "proto"),
+	} {
+		switch strings.ToLower(firstForwardedValue(raw)) {
 		case "http":
 			return "http"
 		case "https":
@@ -104,23 +101,103 @@ func forwardedScheme(r *http.Request) string {
 	return "http"
 }
 
+// forwardedHeaderField reads one parameter of the RFC 7239 Forwarded header,
+// which carries the same information as the X-Forwarded-* trio in a single
+// field: `Forwarded: for=1.2.3.4;host=example.net:52325;proto=https`.
+//
+// Elements are scanned left to right and the first one carrying the field wins,
+// which is the outermost proxy's view. Elements are appended as a request passes
+// through proxies, so a nearer one may not repeat every field.
+func forwardedHeaderField(r *http.Request, field string) string {
+	raw := strings.TrimSpace(r.Header.Get("Forwarded"))
+	if raw == "" {
+		return ""
+	}
+	for _, element := range strings.Split(raw, ",") {
+		for _, part := range strings.Split(element, ";") {
+			k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(k), field) {
+				continue
+			}
+			// RFC 7239 allows the value to be quoted.
+			if v = strings.Trim(strings.TrimSpace(v), "\""); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
 // forwardedHost prefers X-Forwarded-Host as the hostname, re-attaching the
 // public port when the proxy forwarded the host without one — the case that
 // turns https://host:52325/... into an unreachable https://host/... link.
 func forwardedHost(r *http.Request, scheme string) string {
-	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
-	if host != "" && validForwardedHost(host) {
-		// A host that already carries a port is the proxy's own answer; only a
-		// portless host needs one supplied.
-		if hasPort(host) {
-			return host
+	candidates := []string{
+		firstForwardedValue(r.Header.Get("X-Forwarded-Host")),
+		forwardedHeaderField(r, "host"),
+	}
+	// A candidate that already states the port is the proxy's own answer, so it
+	// is preferred outright: the others may name a different address.
+	for _, h := range candidates {
+		if h != "" && validForwardedHost(h) && hasPort(h) {
+			return h
 		}
-		return host + portSuffixFor(r, scheme)
+	}
+	for _, h := range candidates {
+		if h != "" && validForwardedHost(h) {
+			return h + portSuffixFor(r, scheme)
+		}
 	}
 	if validForwardedHost(r.Host) {
 		return r.Host
 	}
 	return ""
+}
+
+// publicBaseHasPort reports whether a resolved base URL states a port
+// explicitly. A base without one is legitimate (the proxy really is on the
+// scheme's default port) but it is also what a dropped port looks like, and the
+// two are indistinguishable from here - which is why it is worth saying so in
+// the log rather than letting the operator work it out from a dead link.
+func publicBaseHasPort(base string) bool {
+	u, err := url.Parse(base)
+	return err == nil && u.Port() != ""
+}
+
+// publicBaseDiagnostics renders the inputs a base URL was derived from, for the
+// log line that explains a link the operator cannot open.
+func (s *Server) publicBaseDiagnostics(r *http.Request) string {
+	if r == nil {
+		return "no request"
+	}
+	return fmt.Sprintf("source=%s host=%q x-forwarded-host=%q x-forwarded-port=%q x-forwarded-proto=%q forwarded=%q override=%q",
+		s.publicBaseSource(r), r.Host,
+		r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Port"),
+		r.Header.Get("X-Forwarded-Proto"), r.Header.Get("Forwarded"),
+		strings.TrimSpace(os.Getenv("M365_PUBLIC_BASE_URL")))
+}
+
+// publicBaseSource names the input the resolved base URL came from. The
+// derivation is otherwise invisible: a proxy that drops the public port produces
+// a link that points nowhere, and nothing in the response or the console says
+// which header the gateway actually used, so the only way to tell was to guess.
+func (s *Server) publicBaseSource(r *http.Request) string {
+	if base := normalizePublicBase(s.publicBaseOverride()); base != "" {
+		return "override"
+	}
+	if r == nil {
+		return "none"
+	}
+	if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" && validForwardedHost(h) {
+		return "x-forwarded-host"
+	}
+	if h := forwardedHeaderField(r, "host"); h != "" && validForwardedHost(h) {
+		return "forwarded"
+	}
+	if validForwardedHost(r.Host) {
+		return "request-host"
+	}
+	return "none"
 }
 
 // portSuffixFor returns ":port" to append to a forwarded hostname that arrived

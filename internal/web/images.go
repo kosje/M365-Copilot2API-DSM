@@ -496,11 +496,36 @@ func downloadDesignerImage(ctx context.Context, rawURL, accessToken string) ([]b
 // all, which still works for same-origin callers.
 func (s *Server) generatedImageURL(r *http.Request, id string) string {
 	path := "/v1/images/files/" + id
-	if base := s.publicBaseURL(r); base != "" {
-		return base + path
+	base := s.publicBaseURL(r)
+	if base == "" {
+		// A relative path is usable only by the web console, which resolves it
+		// against the page origin - the browser supplies the port, so the console
+		// looks right even when the derivation produced nothing. A client either
+		// cannot use a relative path or prefixes it with its own base address,
+		// which is how a link ends up on the wrong port with nothing to say why.
+		publicBaseRelativeLogged.Do(func() {
+			log.Printf("[public-url] no absolute base for image links; emitting a relative path. "+
+				"The web console still works because the browser resolves it, clients may not. %s",
+				s.publicBaseDiagnostics(r))
+		})
+		return path
 	}
-	return path
+	if !publicBaseHasPort(base) {
+		publicBasePortlessLogged.Do(func() {
+			log.Printf("[public-url] absolute links use %q, which states no port. If clients cannot "+
+				"open those links, set M365_PUBLIC_BASE_URL to the exact public address including the "+
+				"port. %s", base, s.publicBaseDiagnostics(r))
+		})
+	}
+	return base + path
 }
+
+// Each explanation is logged once per process: the condition holds for every
+// generated image, and repeating it per image would bury the rest of the log.
+var (
+	publicBaseRelativeLogged sync.Once
+	publicBasePortlessLogged sync.Once
+)
 
 func (s *Server) generatedImageFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

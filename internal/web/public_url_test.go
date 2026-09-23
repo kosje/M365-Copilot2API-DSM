@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -160,6 +161,132 @@ func TestGeneratedImageURLCarriesTheBorrowedPort(t *testing.T) {
 	want := "https://365api.example.net:52325/v1/images/files/abc.png"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// RFC 7239 Forwarded carries the same information as the X-Forwarded-* trio in
+// one field. A proxy that sends only this one would otherwise leave the public
+// port unknown, which is the failure this file exists for.
+func TestPublicBaseURLReadsRFC7239Forwarded(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	cases := []struct {
+		name      string
+		host      string
+		forwarded string
+		want      string
+	}{
+		{"host with port", "127.0.0.1:4141",
+			`for=1.2.3.4;host=365api.example.net:52325;proto=https`, "https://365api.example.net:52325"},
+		{"quoted value", "127.0.0.1:4141",
+			`for="1.2.3.4";host="365api.example.net:52325";proto="https"`, "https://365api.example.net:52325"},
+		{"host without port borrows from Host", "365api.example.net:52325",
+			`host=365api.example.net;proto=https`, "https://365api.example.net:52325"},
+		{"host without port and nothing to borrow", "127.0.0.1",
+			`host=365api.example.net;proto=https`, "https://365api.example.net"},
+		{"http proto", "127.0.0.1:8080",
+			`host=365api.example.net:8080;proto=http`, "http://365api.example.net:8080"},
+		{"first element without the field", "365api.example.net:52325",
+			`for=1.2.3.4, host=365api.example.net;proto=https`, "https://365api.example.net:52325"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+			r.Host = tc.host
+			r.Header.Set("Forwarded", tc.forwarded)
+			if got := (&Server{}).publicBaseURL(r); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// X-Forwarded-Host is the more common form and keeps precedence, but a candidate
+// that states the port is preferred over one that does not: the portless value
+// may be the same hostname with the port dropped in transit.
+func TestPublicBaseURLPrefersTheCandidateWithAPort(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "127.0.0.1:4141"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net")
+	r.Header.Set("Forwarded", "host=365api.example.net:52325;proto=https")
+	if got := (&Server{}).publicBaseURL(r); got != "https://365api.example.net:52325" {
+		t.Fatalf("got %q, want https://365api.example.net:52325", got)
+	}
+}
+
+// The source is what turns "the link has the wrong port" into something the
+// operator can act on, so each input has to be named.
+func TestPublicBaseSourceNamesTheInput(t *testing.T) {
+	t.Setenv("M365_PUBLIC_BASE_URL", "")
+	req := func(setup func(*http.Request)) *http.Request {
+		r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+		r.Host = "127.0.0.1:4141"
+		setup(r)
+		return r
+	}
+	cases := []struct {
+		name  string
+		setup func(*http.Request)
+		want  string
+	}{
+		{"nothing usable", func(r *http.Request) { r.Host = "example.com" }, "none"},
+		{"request host", func(r *http.Request) { r.Host = "10.0.0.3:4141" }, "request-host"},
+		{"x-forwarded-host", func(r *http.Request) {
+			r.Header.Set("X-Forwarded-Host", "365api.example.net:52325")
+		}, "x-forwarded-host"},
+		{"forwarded", func(r *http.Request) {
+			r.Header.Set("Forwarded", "host=365api.example.net:52325")
+		}, "forwarded"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (&Server{}).publicBaseSource(req(tc.setup)); got != tc.want {
+				t.Fatalf("source = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Setenv("M365_PUBLIC_BASE_URL", "https://365api.example.net:52325")
+	if got := (&Server{}).publicBaseSource(req(func(*http.Request) {})); got != "override" {
+		t.Fatalf("source = %q, want override", got)
+	}
+}
+
+// The log line is what the operator is asked to send back when a link points
+// nowhere, so the header names in it have to be the real ones.
+func TestPublicBaseDiagnosticsNamesTheInputs(t *testing.T) {
+	r := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	r.Host = "127.0.0.1:4141"
+	r.Header.Set("X-Forwarded-Host", "365api.example.net")
+	r.Header.Set("X-Forwarded-Port", "52325")
+	r.Header.Set("Forwarded", "host=365api.example.net:52325")
+
+	got := (&Server{}).publicBaseDiagnostics(r)
+	for _, want := range []string{
+		"source=x-forwarded-host",
+		`host="127.0.0.1:4141"`,
+		`x-forwarded-host="365api.example.net"`,
+		`x-forwarded-port="52325"`,
+		`forwarded="host=365api.example.net:52325"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostics %q is missing %s", got, want)
+		}
+	}
+}
+
+func TestPublicBaseHasPort(t *testing.T) {
+	cases := map[string]bool{
+		"https://365api.example.net:52325":      true,
+		"https://365api.example.net":            false,
+		"https://365api.example.net:52325/m365": true,
+		"https://365api.example.net/m365":       false,
+		"":                                      false,
+	}
+	for in, want := range cases {
+		if got := publicBaseHasPort(in); got != want {
+			t.Errorf("publicBaseHasPort(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
